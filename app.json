@@ -1,0 +1,56 @@
+{
+  "expo": {
+    "name": "mitsu_frontend",
+    "slug": "mitsu_frontend",
+    "scheme": "mitsuapp",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#FFFFFF"
+    },
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#FFFFFF"
+      },
+      "edgeToEdgeEnabled": true,
+      "config": {
+        "googleMaps": {
+          "apiKey": "xXsfDizxhemYIlweqX7X"
+        }
+      },
+      "permissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS"
+      ],
+      "package": "com.guadalub130.mitsu_frontend"
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-audio",
+      "expo-video",
+      "expo-sqlite",
+      "expo-asset"
+    ],
+    "extra": {
+      "API_BASE_URL": "http://192.168.3.17:5000",
+      "GOOGLE_MAPS_API_KEY": "xXsfDizxhemYIlweqX7X",
+      "router": {},
+      "eas": {
+        "projectId": "d04410ef-8bd9-4b24-b62b-0ba1939c86e6"
+      }
+    },
+    "owner": "guadalub130"
+  }
+}
