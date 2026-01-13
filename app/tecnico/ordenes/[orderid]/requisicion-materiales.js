@@ -12,7 +12,6 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { useLocalSearchParams } from 'expo-router';
 import Header from '../../../../src/components/Header';
-import Footer from '../../../../src/components/Footer';
 
 function LabeledInput({ label, value, onChangeText, placeholder, multiline=false, editable=true, keyboardType="default" }) {
   return (
@@ -354,7 +353,7 @@ export default function RequisicionMaterialesForm() {
           </TouchableOpacity>
         </View>
       </ScrollView>
-      <Footer />
+   
     </View>
   );
 }

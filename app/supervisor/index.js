@@ -11,20 +11,27 @@ import {
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import Header from '../../src/components/Header';
-import Footer from '../../src/components/Footer';
 
 // ====== Datos del menú (tiles) PARA SUPERVISOR ======
 const TILES = [
   {
-    key: 'planes',
-    title: 'Planes de mantenimiento',
+    key: 'reprogramaciones',
+    title: 'Reprogramación de órdenes',
     icon: 'calendar-outline',
-    onPress: () => router.push('/supervisor/planes'),
+    onPress: () => router.push('/supervisor/reprogramacionesPlan'),
+  },
+  {
+    key: 'notificaciones',
+    title: 'Notificaciones',
+    icon: 'notifications-outline',
+    // si en algún momento quieres pasarle el total, aquí se lo pones:
+    // badge: 5,
+    onPress: () => router.push('/notificaciones'),
   },
   {
     key: 'ordenes',
     title: 'Órdenes de servicio',
-    icon: 'document-text-outline',
+    icon: 'receipt-outline',
     onPress: () => router.push('/supervisor/ordenes'),
   },
   {
@@ -34,12 +41,16 @@ const TILES = [
     onPress: () => router.push('/supervisor/averia'),
   },
   {
-    key: 'notificaciones',
-    title: 'Notificaciones',
-    icon: 'notifications-outline',
-    // si en algún momento quieres pasarle el total, aquí se lo pones:
-    // badge: 5,
-    onPress: () => router.push('/notificaciones'),
+    key: 'no mantenimiento',
+    title: 'No mantenimiento',
+    icon: 'trash-bin-outline',
+    onPress: () => router.push('/supervisor/no_mantenimiento'),
+  },
+  {
+    key: 'pendientes',
+    title: 'Reportes de pendientes',
+    icon: 'documents-outline',
+    onPress: () => router.push('/supervisor/monitoreo/monitoreo'),
   },
   {
     key: 'monitoreo',
@@ -99,7 +110,7 @@ export default function SupervisorHome() {
         )}
       />
 
-      <Footer />
+    
     </View>
   );
 }

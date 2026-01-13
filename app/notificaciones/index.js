@@ -2,7 +2,6 @@ import React, { useEffect } from 'react';
 import { View, FlatList, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import Header from '../../src/components/Header';
-import Footer from '../../src/components/Footer';
 import { useAuth } from '../../src/context/AuthContext';
 import { useNotificaciones } from '../../src/context/NotificacionesContext';
 import { router } from 'expo-router';
@@ -86,7 +85,7 @@ export default function NotificacionesScreen() {
           contentContainerStyle={styles.list}
         />
       )}
-      <Footer />
+     
     </View>
   );
 }

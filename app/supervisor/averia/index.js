@@ -9,12 +9,12 @@ import {
   ActivityIndicator,
   Platform,
   TextInput,
+  Alert,
 } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import Header from '../../../src/components/Header';
-import Footer from '../../../src/components/Footer';
 import { useAuth } from '../../../src/context/AuthContext';
 import api from '../../../src/services/api';
 
@@ -37,6 +37,34 @@ const ymd = (d) => {
   return `${y}-${m}-${day}`;
 };
 
+// OData datetime: YYYY-MM-DDTHH:mm:ss (sin Z, tu ejemplo así lo usa)
+const toOdataDateTime = (d, endOfDay = false) => {
+  const date = new Date(d);
+  if (endOfDay) {
+    date.setHours(23, 59, 59, 0);
+  } else {
+    date.setHours(0, 0, 0, 0);
+  }
+  const yyyy = date.getFullYear();
+  const mm = String(date.getMonth() + 1).padStart(2, '0');
+  const dd = String(date.getDate()).padStart(2, '0');
+  const hh = String(date.getHours()).padStart(2, '0');
+  const mi = String(date.getMinutes()).padStart(2, '0');
+  const ss = String(date.getSeconds()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}T${hh}:${mi}:${ss}`;
+};
+
+const sapDateToISO = (val) => {
+  if (!val) return null;
+  if (typeof val === 'string' && val.startsWith('/Date(')) {
+    const ms = parseInt(val.replace('/Date(', '').replace(')/', ''), 10);
+    if (!Number.isNaN(ms)) return new Date(ms).toISOString();
+    return null;
+  }
+  const d = new Date(val);
+  return Number.isNaN(d.getTime()) ? null : d.toISOString();
+};
+
 const formatDate = (value) => {
   if (!value) return '—';
   const d = new Date(value);
@@ -45,37 +73,104 @@ const formatDate = (value) => {
 };
 
 export default function NotificacionesAveriaSupervisor() {
-  const { token } = useAuth();
+  const { token, user } = useAuth(); // user debe traer email/preferred_username
   const [averias, setAverias] = useState([]);
   const [loading, setLoading] = useState(true);
 
   // Filtros de fecha
   const now = new Date();
-  const [startDate, setStartDate] = useState(new Date(now.getFullYear(), 0, 1)); // inicio de año
-  const [endDate, setEndDate] = useState(new Date(now.getFullYear(), 11, 31));  // fin de año
+  const [startDate, setStartDate] = useState(new Date(now.getFullYear(), 0, 1));
+  const [endDate, setEndDate] = useState(new Date(now.getFullYear(), 11, 31));
   const [showStartPicker, setShowStartPicker] = useState(false);
   const [showEndPicker, setShowEndPicker] = useState(false);
 
-  // búsqueda simple por texto
   const [query, setQuery] = useState('');
+
+  const getCorreo = () => {
+    // intenta ser compatible con tus variantes
+    return (
+      user?.email ||
+      user?.correo ||
+      user?.preferred_username ||
+      user?.upn ||
+      user?.username ||
+      ''
+    );
+  };
 
   const fetchAverias = async () => {
     try {
       setLoading(true);
-      const params = new URLSearchParams({
-        start: ymd(startDate),
-        end: ymd(endDate),
-        mode: 'range',
+
+      const correo = getCorreo();
+      if (!correo) {
+        setAverias([]);
+        Alert.alert('Sin correo', 'No se pudo obtener el correo del usuario logueado.');
+        return;
+      }
+
+      const createdFrom = toOdataDateTime(startDate, false);
+      const notifTo = toOdataDateTime(endDate, true);
+
+      // OData filter EXACTO como tu URL ejemplo
+      const filter = `CreatedOn ge datetime'${createdFrom}' and NotifDate le datetime'${notifTo}' and Userstatus eq '${correo}'`;
+
+      const res = await api.get(
+        `/api/odata/ZCS_GET_NOTIFICATION_SRV/NotificationHeaderSet`,
+        {
+          params: {
+            $filter: filter,
+            $format: 'json',
+          },
+          // si tu interceptor ya mete token, esto es redundante, pero no estorba
+          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        }
+      );
+
+      // tu proxy OData puede devolver:
+      // 1) { d: { results: [...] } }  (SAP v2)
+      // 2) { value: [...] }          (v4 style)
+      // 3) { d: [...] }              (si ya mapeaste)
+      const raw = res?.data;
+      const results =
+        raw?.d?.results ??
+        raw?.value ??
+        (Array.isArray(raw?.d) ? raw.d : null) ??
+        (Array.isArray(raw) ? raw : []);
+
+      const mapped = (Array.isArray(results) ? results : []).map((it) => {
+        const notifISO = sapDateToISO(it?.NotifDate);
+        const createdISO = sapDateToISO(it?.CreatedOn);
+
+        // estatus simple (igual que tu backend viejo)
+        let estatus = 'pendiente';
+        const sys = String(it?.SysStatus || '').toUpperCase();
+        if (sys.includes('NOCO') || sys.includes('CERR')) estatus = 'cerrada';
+        else if (sys.includes('PROC') || sys.includes('INPR')) estatus = 'en_proceso';
+
+        return {
+          NotifNo: it?.NotifNo,
+          short_text: it?.ShortText || '',
+          equipment: it?.Equipment || '',
+          priority: it?.Priority || it?.Priotype || '',
+          notif_date: notifISO,
+          created_on: createdISO,
+          cust_no: it?.CustNo || '',
+          funct_loc: it?.FunctLoc || '',
+          estatus,
+        };
       });
 
-      const res = await api.get(`/sap/averias?${params.toString()}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      mapped.sort(
+        (a, b) =>
+          new Date(b.notif_date || 0).getTime() - new Date(a.notif_date || 0).getTime()
+      );
 
-      const data = Array.isArray(res.data) ? res.data : [];
-      setAverias(data);
+      setAverias(mapped);
     } catch (error) {
-      console.error('Error al cargar averías SAP:', error?.response?.data || error);
+      console.error('Error al cargar averías por OData:', error?.response?.data || error);
+      Alert.alert('Error', 'No se pudieron cargar los avisos de avería.');
+      setAverias([]);
     } finally {
       setLoading(false);
     }
@@ -125,12 +220,9 @@ export default function NotificacionesAveriaSupervisor() {
         style={styles.card}
         onPress={() => router.push(`/supervisor/averia/${item.NotifNo}/detalles`)}
       >
-        {/* barra lateral */}
         <View style={[styles.sideBar, { backgroundColor: estatusColor }]} />
 
-        {/* contenido */}
         <View style={styles.cardBody}>
-          {/* fila principal */}
           <View style={styles.topRow}>
             <View style={styles.titleWrap}>
               <View style={styles.avatar}>
@@ -146,7 +238,6 @@ export default function NotificacionesAveriaSupervisor() {
               </View>
             </View>
 
-            {/* pill de estatus */}
             <View
               style={[
                 styles.statusPill,
@@ -168,19 +259,14 @@ export default function NotificacionesAveriaSupervisor() {
             </View>
           </View>
 
-          {/* fila de detalles */}
           <View style={styles.metaRow}>
             <View style={styles.metaItem}>
               <Ionicons name="time-outline" size={14} color="#52616B" />
-              <Text style={styles.metaText}>
-                Notif.: {formatDate(item.notif_date)}
-              </Text>
+              <Text style={styles.metaText}>Notif.: {formatDate(item.notif_date)}</Text>
             </View>
             <View style={styles.metaItem}>
               <Ionicons name="person-outline" size={14} color="#52616B" />
-              <Text style={styles.metaText}>
-                Cliente: {item.cust_no || '—'}
-              </Text>
+              <Text style={styles.metaText}>Cliente: {item.cust_no || '—'}</Text>
             </View>
           </View>
 
@@ -211,18 +297,14 @@ export default function NotificacionesAveriaSupervisor() {
     <View style={styles.container}>
       <Header title="Avisos de avería" />
 
-      {/* Encabezado + filtros */}
       <View style={styles.pageHeader}>
         <View style={{ marginBottom: 8 }}>
           <Text style={styles.pageTitle}>Lista de averías</Text>
           <Text style={styles.pageSubtitle}>
-            {loading
-              ? 'Cargando...'
-              : `${filtered.length} notificaciones de avería encontradas`}
+            {loading ? 'Cargando...' : `${filtered.length} notificaciones de avería encontradas`}
           </Text>
         </View>
 
-        {/* Filtro por texto */}
         <TextInput
           style={styles.searchInput}
           placeholder="Buscar por #, equipo, cliente, ubicación…"
@@ -231,26 +313,15 @@ export default function NotificacionesAveriaSupervisor() {
           onChangeText={setQuery}
         />
 
-        {/* Filtros de fecha */}
         <View style={styles.dateRow}>
-          <TouchableOpacity
-            style={styles.dateBtn}
-            onPress={() => setShowStartPicker(true)}
-          >
+          <TouchableOpacity style={styles.dateBtn} onPress={() => setShowStartPicker(true)}>
             <Ionicons name="calendar-outline" size={16} color={COLORS.text} />
-            <Text style={styles.dateBtnText}>
-              Desde: {startDate.toLocaleDateString()}
-            </Text>
+            <Text style={styles.dateBtnText}>Desde: {startDate.toLocaleDateString()}</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity
-            style={styles.dateBtn}
-            onPress={() => setShowEndPicker(true)}
-          >
+          <TouchableOpacity style={styles.dateBtn} onPress={() => setShowEndPicker(true)}>
             <Ionicons name="calendar-outline" size={16} color={COLORS.text} />
-            <Text style={styles.dateBtnText}>
-              Hasta: {endDate.toLocaleDateString()}
-            </Text>
+            <Text style={styles.dateBtnText}>Hasta: {endDate.toLocaleDateString()}</Text>
           </TouchableOpacity>
 
           <TouchableOpacity style={styles.refreshBtn} onPress={fetchAverias}>
@@ -292,17 +363,12 @@ export default function NotificacionesAveriaSupervisor() {
           }
         />
       )}
-
-      <Footer />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: COLORS.pageBg,
-  },
+  container: { flex: 1, backgroundColor: COLORS.pageBg },
   pageHeader: {
     paddingHorizontal: 16,
     paddingVertical: 10,
@@ -310,16 +376,8 @@ const styles = StyleSheet.create({
     borderBottomColor: COLORS.border,
     borderBottomWidth: 1,
   },
-  pageTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: COLORS.title,
-  },
-  pageSubtitle: {
-    fontSize: 13,
-    color: COLORS.text,
-    marginTop: 3,
-  },
+  pageTitle: { fontSize: 18, fontWeight: '700', color: COLORS.title },
+  pageSubtitle: { fontSize: 13, color: COLORS.text, marginTop: 3 },
   searchInput: {
     marginTop: 8,
     borderRadius: 10,
@@ -331,12 +389,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: COLORS.title,
   },
-  dateRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 10,
-    gap: 8,
-  },
+  dateRow: { flexDirection: 'row', alignItems: 'center', marginTop: 10, gap: 8 },
   dateBtn: {
     flex: 1,
     flexDirection: 'row',
@@ -349,10 +402,7 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     gap: 6,
   },
-  dateBtnText: {
-    fontSize: 12,
-    color: COLORS.text,
-  },
+  dateBtnText: { fontSize: 12, color: COLORS.text },
   refreshBtn: {
     width: 36,
     height: 36,
@@ -361,10 +411,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  listContent: {
-    paddingHorizontal: 12,
-    paddingBottom: 80,
-  },
+  listContent: { paddingHorizontal: 12, paddingBottom: 80 },
   card: {
     flexDirection: 'row',
     backgroundColor: COLORS.cardBg,
@@ -379,28 +426,15 @@ const styles = StyleSheet.create({
     elevation: 1,
     minHeight: 92,
   },
-  sideBar: {
-    width: 5,
-    borderTopLeftRadius: 16,
-    borderBottomLeftRadius: 16,
-  },
-  cardBody: {
-    flex: 1,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-  },
+  sideBar: { width: 5, borderTopLeftRadius: 16, borderBottomLeftRadius: 16 },
+  cardBody: { flex: 1, paddingHorizontal: 14, paddingVertical: 12 },
   topRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     gap: 12,
     alignItems: 'flex-start',
   },
-  titleWrap: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    flex: 1,
-  },
+  titleWrap: { flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 },
   avatar: {
     width: 34,
     height: 34,
@@ -409,16 +443,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  title: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: COLORS.title,
-  },
-  subTitle: {
-    fontSize: 12.5,
-    color: '#7A8794',
-    marginTop: 1,
-  },
+  title: { fontSize: 15, fontWeight: '600', color: COLORS.title },
+  subTitle: { fontSize: 12.5, color: '#7A8794', marginTop: 1 },
   statusPill: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -434,19 +460,7 @@ const styles = StyleSheet.create({
     textTransform: 'capitalize',
     color: COLORS.title,
   },
-  metaRow: {
-    flexDirection: 'row',
-    gap: 16,
-    marginTop: 8,
-  },
-  metaItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    flexShrink: 1,
-  },
-  metaText: {
-    fontSize: 12,
-    color: COLORS.text,
-  },
+  metaRow: { flexDirection: 'row', gap: 16, marginTop: 8 },
+  metaItem: { flexDirection: 'row', alignItems: 'center', gap: 4, flexShrink: 1 },
+  metaText: { fontSize: 12, color: COLORS.text },
 });

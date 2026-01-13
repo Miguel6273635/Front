@@ -9,7 +9,6 @@ import {
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import Header from '../../../../src/components/Header';
-import Footer from '../../../../src/components/Footer';
 import { useLocalSearchParams, router } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import api from '../../../../src/services/api';
@@ -851,8 +850,6 @@ export default function ManttoFrenoEmEhForm() {
 
         <IconButton label={saving ? 'Guardando…' : 'Guardar'} onPress={onGuardar} disabled={saving} />
       </ScrollView>
-
-      <Footer />
     </View>
   );
 }

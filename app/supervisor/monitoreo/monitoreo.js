@@ -13,7 +13,6 @@ import MapView, { Marker, PROVIDER_GOOGLE, UrlTile } from 'react-native-maps';
 import { Ionicons } from '@expo/vector-icons';
 import api from '../../../src/services/api';
 import Header from '../../../src/components/Header';
-import Footer from '../../../src/components/Footer';
 
 const BG = '#F4F6F9';
 const SAP_BLUE = '#0A6ED1';
@@ -273,7 +272,7 @@ export default function Monitoreo() {
         )}
       </View>
 
-      <Footer />
+      
     </View>
   );
 }

@@ -13,7 +13,6 @@ import { useLocalSearchParams } from 'expo-router';
 
 // Ajusta a tu app:
 import Header from '../../../../src/components/Header';
-import Footer from '../../../../src/components/Footer';
 
 const Section = ({ children }) => <Text style={styles.section}>{children}</Text>;
 const Card = ({ children, style }) => <View style={[styles.card, style]}>{children}</View>;
@@ -320,8 +319,6 @@ export default function BitacoraMantenimientoForm() {
           </TouchableOpacity>
         </View>
       </ScrollView>
-
-      <Footer />
     </View>
   );
 }

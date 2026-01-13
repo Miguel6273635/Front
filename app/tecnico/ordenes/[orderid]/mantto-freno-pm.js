@@ -5,7 +5,6 @@ import { useLocalSearchParams, router } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
 import Header from '../../../../src/components/Header';
-import Footer from '../../../../src/components/Footer';
 import api from '../../../../src/services/api';
 
 // —— UI utilitaria ——
@@ -650,7 +649,6 @@ export default function ManttoFrenoPmForm() {
           <Text style={[styles.btnText, { color: '#fff' }]}>{saving ? 'Guardando…' : 'Guardar'}</Text>
         </TouchableOpacity>
       </ScrollView>
-      <Footer />
     </View>
   );
 }

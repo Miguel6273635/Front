@@ -16,7 +16,6 @@ import * as Location from 'expo-location';
 import api from '../../../src/services/api';
 import { useAuth } from '../../../src/context/AuthContext';
 import Header from '../../../src/components/Header';
-import Footer from '../../../src/components/Footer';
 import { Ionicons } from '@expo/vector-icons';
 
 // ===== Paleta Fiori (Horizon) =====
@@ -412,8 +411,6 @@ export default function RutasTecnico() {
           }
         />
       </View>
-
-      <Footer />
     </View>
   );
 }

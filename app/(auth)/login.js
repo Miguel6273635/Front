@@ -1,101 +1,85 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, TextInput, TouchableOpacity, Image, StyleSheet, Platform, StatusBar } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import {
+  View,
+  Text,
+  TouchableOpacity,
+  Image,
+  StyleSheet,
+  Platform,
+  StatusBar,
+} from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../src/context/AuthContext';
 import { router } from 'expo-router';
-import Colors from '../../src/constants/colors';
+
+const FIORI = {
+  pageBg: '#F7F7F7',
+  cardBg: '#FFFFFF',
+  border: '#DDE6F2',
+  text: '#0B1F3B',
+  textMuted: '#63718B',
+  accent: '#0A6ED1',
+  danger: '#EB5757',
+};
+
+function pickHomeByRole(rol_id) {
+  if (rol_id === 1) return '/admin';
+  if (rol_id === 2) return '/supervisor';
+  return '/tecnico';
+}
 
 export default function LoginScreen() {
-  const { user, login } = useAuth();
-  const [correo, setCorreo] = useState('');
-  const [password, setPassword] = useState('');
-  const [verPassword, setVerPassword] = useState(false);
+  const { user, loginSSO, loading } = useAuth();
   const [error, setError] = useState('');
+  const [sending, setSending] = useState(false);
 
   useEffect(() => {
-    if (user) {
-      const rol = user.rol_id;
-      if (rol === 1) router.replace('/admin');
-      else if (rol === 2) router.replace('/supervisor');
-      else if (rol === 3) router.replace('/tecnico');
-    }
+    if (user) router.replace(pickHomeByRole(user.rol_id));
   }, [user]);
 
-  const handleLogin = async () => {
+  const handleLoginSSO = async () => {
+    setError('');
+    setSending(true);
     try {
-      await login(correo, password);
-    } catch {
-      setError('Correo o contraseña incorrectos');
+      await loginSSO(); // callback /auth termina
+    } catch (e) {
+      console.log('SSO error:', e?.message || e);
+      setError(e?.message ? String(e.message) : 'No se pudo iniciar sesión con Microsoft');
+    } finally {
+      setSending(false);
     }
   };
+
+  const disabled = sending || loading;
 
   return (
     <View style={styles.container}>
       <StatusBar barStyle="dark-content" />
-      {/* Logo: lo dejamos igual */}
       <Image source={require('../../assets/logo.png')} style={styles.logo} />
 
-      {/* Tarjeta / Panel tipo Fiori */}
       <View style={styles.card}>
         <Text style={styles.title}>Iniciar sesión</Text>
 
-        {/* Campo correo */}
-        <View style={styles.fieldGroup}>
-          <Text style={styles.label}>Correo</Text>
-          <View style={styles.inputRow}>
-            <Ionicons name="mail-outline" size={20} style={styles.leadingIcon} />
-            <TextInput
-              placeholder="tu@correo.com"
-              value={correo}
-              onChangeText={setCorreo}
-              autoCapitalize="none"
-              keyboardType="email-address"
-              style={styles.input}
-              placeholderTextColor={FIORI.textMuted}
-            />
-          </View>
-        </View>
+        {error ? (
+          <Text style={styles.error}>{error}</Text>
+        ) : (
+          <Text style={styles.helper}>Continúa con tu cuenta corporativa Microsoft</Text>
+        )}
 
-        {/* Campo contraseña */}
-        <View style={styles.fieldGroup}>
-          <Text style={styles.label}>Contraseña</Text>
-          <View style={styles.inputRow}>
-            <Ionicons name="lock-closed-outline" size={20} style={styles.leadingIcon} />
-            <TextInput
-              placeholder="••••••••"
-              value={password}
-              onChangeText={setPassword}
-              secureTextEntry={!verPassword}
-              style={styles.input}
-              placeholderTextColor={FIORI.textMuted}
-            />
-            <TouchableOpacity onPress={() => setVerPassword(!verPassword)} style={styles.trailingIconBtn}>
-              <Ionicons name={verPassword ? 'eye-off-outline' : 'eye-outline'} size={20} color={FIORI.accent} />
-            </TouchableOpacity>
-          </View>
-        </View>
-
-        {error ? <Text style={styles.error}>{error}</Text> : <Text style={styles.helper}>Ingresa tus credenciales para continuar</Text>}
-
-        <TouchableOpacity onPress={handleLogin} style={styles.button}>
-          <Text style={styles.buttonText}>Ingresar</Text>
+        <TouchableOpacity
+          onPress={handleLoginSSO}
+          style={[styles.msButton, disabled && { opacity: 0.7 }]}
+          disabled={disabled}
+        >
+          <Ionicons name="logo-microsoft" size={18} color={FIORI.text} />
+          <Text style={styles.msButtonText}>
+            {sending ? 'Abriendo Microsoft...' : 'Continuar con Microsoft'}
+          </Text>
         </TouchableOpacity>
       </View>
     </View>
   );
 }
-
-/** Paleta Fiori Horizon */
-const FIORI = {
-  pageBg: '#F7F7F7',
-  cardBg: '#FFFFFF',
-  border: '#DDE6F2',
-  inputBg: '#FDFEFF',
-  text: '#0B1F3B',
-  textMuted: '#63718B',
-  accent: '#0A6ED1',   // Azul SAP
-  danger: '#EB5757',
-};
 
 const styles = StyleSheet.create({
   container: {
@@ -105,12 +89,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingHorizontal: 24,
   },
-  logo: {
-    width: 160,
-    height: 90,
-    resizeMode: 'contain',
-    marginBottom: 18,
-  },
+  logo: { width: 160, height: 90, resizeMode: 'contain', marginBottom: 18 },
   card: {
     width: '100%',
     maxWidth: 420,
@@ -124,68 +103,19 @@ const styles = StyleSheet.create({
       android: { elevation: 3 },
     }),
   },
-  title: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: FIORI.text,
-    marginBottom: 14,
-    textAlign: 'center',
-  },
-  fieldGroup: {
-    marginBottom: 12,
-  },
-  label: {
-    fontSize: 13,
-    color: FIORI.textMuted,
-    marginBottom: 6,
-  },
-  inputRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: FIORI.inputBg,
+  title: { fontSize: 20, fontWeight: '700', color: FIORI.text, marginBottom: 10, textAlign: 'center' },
+  helper: { marginBottom: 12, fontSize: 12, color: FIORI.textMuted, textAlign: 'center' },
+  error: { color: FIORI.danger, marginBottom: 12, textAlign: 'center', fontWeight: '600' },
+  msButton: {
     borderWidth: 1,
     borderColor: FIORI.border,
     borderRadius: 12,
-    minHeight: 48,
-    paddingHorizontal: 10,
-  },
-  leadingIcon: {
-    color: FIORI.textMuted,
-    marginRight: 6,
-  },
-  input: {
-    flex: 1,
-    fontSize: 16,
-    color: FIORI.text,
-    paddingVertical: 10,
-  },
-  trailingIconBtn: {
-    padding: 6,
-    marginLeft: 4,
-  },
-  helper: {
-    marginTop: 4,
-    marginBottom: 12,
-    fontSize: 12,
-    color: FIORI.textMuted,
-    textAlign: 'center',
-  },
-  error: {
-    color: FIORI.danger,
-    marginTop: 2,
-    marginBottom: 12,
-    textAlign: 'center',
-    fontWeight: '600',
-  },
-  button: {
-    backgroundColor: FIORI.accent,
     paddingVertical: 12,
-    borderRadius: 12,
     alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 8,
+    backgroundColor: '#FFF',
   },
-  buttonText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '700',
-  },
+  msButtonText: { color: FIORI.text, fontSize: 15, fontWeight: '700' },
 });

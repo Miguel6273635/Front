@@ -11,16 +11,14 @@ import {
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import Header from '../../src/components/Header';
-import Footer from '../../src/components/Footer';
 
 // ====== Datos del menú (tiles) ======
 const TILES = [
   { key: 'ordenes',        title: 'Órdenes de servicio', icon: 'document-text-outline', onPress: () => router.push('/tecnico/ordenes') },
-  { key: 'materiales',     title: 'Materiales asignados', icon: 'construct-outline',     onPress: () => router.push('/tecnico/materiales') },
   { key: 'averias',        title: 'Aviso de avería',      icon: 'warning-outline',       onPress: () => router.push('/tecnico/averias') },
-  { key: 'notificaciones', title: 'Notificaciones',       icon: 'notifications-outline', onPress: () => router.push('/notificaciones'), badge: 3 },
-  { key: 'rutas',          title: 'Ruta asignada',        icon: 'navigate-outline',      onPress: () => router.push('/tecnico/rutas') },
   { key: 'instalaciones',  title: 'Instalaciones',        icon: 'build-outline',         onPress: () => router.push('/tecnico/instalaciones') },
+  { key: 'rutas',          title: 'Ruta asignada',        icon: 'navigate-outline',      onPress: () => router.push('/tecnico/rutas') },
+  
 ];
 
 // ====== Tile (azulejo) estilo Fiori ======
@@ -72,7 +70,7 @@ export default function TecnicoHome() {
         )}
       />
 
-      <Footer />
+     
     </View>
   );
 }

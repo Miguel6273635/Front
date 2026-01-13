@@ -1,11 +1,17 @@
 // src/components/Header.js
 import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Platform } from 'react-native';
+import {
+  View,
+  Text,
+  StyleSheet,
+  TouchableOpacity,
+  Platform,
+  Image,
+} from 'react-native';
 import { useRouter, useNavigation, useSegments } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { useAuth } from '../context/AuthContext';
 import { useNotificaciones } from '../context/NotificacionesContext';
-import Colors from '../constants/colors';
+import { useDrawer } from '../context/DrawerContext';
 
 const FIORI = {
   shellBg: '#FFFFFF',
@@ -19,78 +25,130 @@ export default function Header({ title }) {
   const router = useRouter();
   const navigation = useNavigation();
   const segments = useSegments();
-  const { logout } = useAuth();
   const { noLeidas = [] } = useNotificaciones();
+  const { toggleDrawer } = useDrawer();
 
+  // Detecta si estamos en una pantalla raíz
   const isRoot = ['/admin', '/supervisor', '/tecnico'].includes('/' + segments[1]);
 
   return (
     <View style={styles.header}>
-      {!isRoot && (
-        <TouchableOpacity
-          onPress={() => {
-            if (navigation.canGoBack()) router.back();
-          }}
-          style={styles.iconButton}
-          activeOpacity={0.7}
-        >
-          <Ionicons name="arrow-back" size={22} color={FIORI.ink} />
-        </TouchableOpacity>
-      )}
+      {/* ===== LOGO CENTRADO ===== */}
+      <View style={styles.logoWrapper}>
+        <Image
+          source={require('../../assets/logo.png')}
+          style={styles.logo}
+          resizeMode="contain"
+        />
+      </View>
 
-      <Text style={styles.title}>{title}</Text>
+      {/* ===== FILA: BACK | TITULO | ICONOS ===== */}
+      <View style={styles.row}>
+        {/* Back */}
+        {!isRoot ? (
+          <TouchableOpacity
+            onPress={() => {
+              if (navigation.canGoBack()) router.back();
+            }}
+            style={styles.iconButton}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="arrow-back" size={22} color={FIORI.ink} />
+          </TouchableOpacity>
+        ) : (
+          <View style={{ width: 34 }} /> // espacio para centrar título
+        )}
 
-      <View style={styles.rightIcons}>
-        <TouchableOpacity onPress={() => router.push('/notificaciones')} style={styles.iconButton} activeOpacity={0.7}>
-          <Ionicons name="notifications-outline" size={22} color={FIORI.ink} />
-          {noLeidas.length > 0 && (
-            <View style={styles.badge}>
-              <Text style={styles.badgeText}>{noLeidas.length > 99 ? '99+' : noLeidas.length}</Text>
-            </View>
-          )}
-        </TouchableOpacity>
+        {/* Título */}
+        <Text style={styles.title} numberOfLines={1}>
+          {title}
+        </Text>
 
-        <TouchableOpacity onPress={logout} style={styles.iconButton} activeOpacity={0.7}>
-          <Ionicons name="log-out-outline" size={22} color={FIORI.ink} />
-        </TouchableOpacity>
+        {/* Iconos derecha */}
+        <View style={styles.rightIcons}>
+          {/* Notificaciones */}
+          <TouchableOpacity
+            onPress={() => router.push('')}
+            style={styles.iconButton}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="notifications-outline" size={22} color={FIORI.ink} />
+            {noLeidas.length > 0 && (
+              <View style={styles.badge}>
+                <Text style={styles.badgeText}>
+                  {noLeidas.length > 99 ? '99+' : noLeidas.length}
+                </Text>
+              </View>
+            )}
+          </TouchableOpacity>
+
+          {/* ☰ MENÚ LATERAL */}
+          <TouchableOpacity
+            onPress={toggleDrawer}
+            style={styles.iconButton}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="menu-outline" size={26} color={FIORI.ink} />
+          </TouchableOpacity>
+        </View>
       </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  // Mantengo tus paddings EXACTOS para no alterar la altura ni spacing:
   header: {
     paddingTop: 40,
     paddingBottom: 10,
     paddingHorizontal: 16,
     backgroundColor: FIORI.shellBg,
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderBottomWidth: 1,            // misma línea inferior, pero con color Fiori
+    borderBottomWidth: 1,
     borderColor: FIORI.border,
     ...Platform.select({
-      ios: { shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 6, shadowOffset: { width: 0, height: 3 } },
+      ios: {
+        shadowColor: '#000',
+        shadowOpacity: 0.06,
+        shadowRadius: 6,
+        shadowOffset: { width: 0, height: 3 },
+      },
       android: { elevation: 3 },
     }),
   },
-  iconButton: {
-    padding: 6,                      // igual que el tuyo
-    position: 'relative',
-    borderRadius: 18,                // toque Fiori (suave)
+
+  logoWrapper: {
+    alignItems: 'center',
+    marginBottom: 6,
   },
+
+  logo: {
+    width: 120,
+    height: 32,
+  },
+
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+
+  iconButton: {
+    padding: 6,
+    borderRadius: 18,
+    position: 'relative',
+  },
+
   title: {
     flex: 1,
     fontSize: 18,
     fontWeight: '600',
     textAlign: 'center',
-    color: FIORI.ink,                // tinta Fiori
+    color: FIORI.ink,
   },
+
   rightIcons: {
     flexDirection: 'row',
     alignItems: 'center',
   },
-  // Badge más “pill” y con contraste Fiori
+
   badge: {
     position: 'absolute',
     top: -4,
@@ -103,6 +161,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
+
   badgeText: {
     color: '#fff',
     fontSize: 10,

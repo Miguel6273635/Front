@@ -2,7 +2,6 @@ import React, { useEffect, useState } from 'react';
 import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator } from 'react-native';
 import { useAuth } from '../../../src/context/AuthContext';
 import Header from '../../../src/components/Header';
-import Footer from '../../../src/components/Footer';
 import api from '../../../src/services/api';
 import { router } from 'expo-router';
 
@@ -65,7 +64,7 @@ export default function ListaOrdenesAdmin() {
           contentContainerStyle={{ padding: 20 }}
         />
       )}
-      <Footer />
+      
     </View>
   );
 }

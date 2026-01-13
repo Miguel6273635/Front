@@ -1,13 +1,21 @@
 // app/notificaciones/[id].js
-import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, ActivityIndicator, ScrollView, TouchableOpacity, Platform } from 'react-native';
+import React, { useEffect, useState, useMemo } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  ActivityIndicator,
+  ScrollView,
+  TouchableOpacity,
+  Platform,
+  Alert,
+} from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, router } from 'expo-router';
-import { useNotificaciones } from '../../src/context/NotificacionesContext';
 import Header from '../../src/components/Header';
-import Footer from '../../src/components/Footer';
-import { fetchNotificationDetailSmart } from '../../src/offline/notifications.store';
+import { useNotificaciones } from '../../src/context/NotificacionesContext';
 import { useAuth } from '../../src/context/AuthContext';
+import api from '../../src/services/api'; // 👈 asumo que ya lo usas en tu app
 
 const FIORI = {
   pageBg: '#F7F7F7',
@@ -16,31 +24,77 @@ const FIORI = {
   border: '#DDE6F2',
   ink: '#0B1F3B',
   textMuted: '#63718B',
-  accent: '#0A6ED1',     // azul SAP
+  accent: '#0A6ED1',
   accentSoft: '#E3F2FD',
   danger: '#EB5757',
 };
+
+// 👉 Fetch “online” del detalle (cámbialo a tu endpoint real si difiere)
+async function fetchNotificationDetail(token, id) {
+  if (!id) return null;
+
+  // Si tu api.js ya inyecta token, puedes quitar headers.
+  // Ajusta la ruta según tu backend:
+  // Ejemplos comunes:
+  //   /api/notificaciones/:id
+  //   /api/avisos/:id
+  //   /api/notificaciones/detalle/:id
+  const { data } = await api.get(`/api/notificaciones/${id}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+  });
+
+  // Acepta varias formas de respuesta
+  return data?.data ?? data?.result ?? data ?? null;
+}
 
 export default function NotificacionDetalle() {
   const { id } = useLocalSearchParams();
   const { notificaciones, marcarComoLeida } = useNotificaciones();
   const { token } = useAuth();
+
   const [notificacion, setNotificacion] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  const notifId = useMemo(() => (id ? id.toString() : ''), [id]);
 
   useEffect(() => {
+    let mounted = true;
+
     (async () => {
-      let encontrada = notificaciones.find(n => n.NotifNo?.toString() === id?.toString());
-      if (!encontrada) {
-        encontrada = await fetchNotificationDetailSmart(token, id);
-      }
-      setNotificacion(encontrada);
-      if (encontrada && !encontrada.leida) {
-        await marcarComoLeida(encontrada.NotifNo);
+      try {
+        setLoading(true);
+
+        // 1) intenta desde el contexto (lista ya cargada)
+        let encontrada =
+          notificaciones?.find((n) => n?.NotifNo?.toString() === notifId) ?? null;
+
+        // 2) si no está, pide al backend (online)
+        if (!encontrada) {
+          encontrada = await fetchNotificationDetail(token, notifId);
+        }
+
+        if (!mounted) return;
+
+        setNotificacion(encontrada);
+
+        // 3) marcar como leída (si aplica)
+        if (encontrada?.NotifNo && !encontrada?.leida) {
+          await marcarComoLeida(encontrada.NotifNo);
+        }
+      } catch (e) {
+        console.log('Error detalle notificación:', e?.message || e);
+        Alert.alert('Error', 'No se pudo cargar el detalle de la notificación.');
+      } finally {
+        if (mounted) setLoading(false);
       }
     })();
-  }, [id, notificaciones]);
 
-  if (!notificacion) {
+    return () => {
+      mounted = false;
+    };
+  }, [notifId, notificaciones, token]);
+
+  if (loading) {
     return (
       <View style={styles.centered}>
         <ActivityIndicator size="large" color={FIORI.accent} />
@@ -49,14 +103,36 @@ export default function NotificacionDetalle() {
     );
   }
 
+  if (!notificacion) {
+    return (
+      <View style={styles.centered}>
+        <Ionicons name="alert-circle-outline" size={26} color={FIORI.textMuted} />
+        <Text style={[styles.text, { marginTop: 10 }]}>
+          No se encontró la notificación.
+        </Text>
+        <TouchableOpacity
+          style={[styles.botonOrden, { marginTop: 16 }]}
+          onPress={() => router.back()}
+          activeOpacity={0.85}
+        >
+          <Ionicons name="arrow-back-outline" size={20} color="#fff" />
+          <Text style={styles.botonTexto}>Volver</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
   return (
     <View style={styles.container}>
       <Header title="Detalle de notificación" />
+
       <ScrollView contentContainerStyle={styles.content}>
         {/* Título */}
         <Text style={styles.title}>
           <Ionicons name="document-text-outline" size={20} color={FIORI.accent} />{' '}
-          <Text style={styles.titleText}>{notificacion.ShortText || 'Sin título'}</Text>
+          <Text style={styles.titleText}>
+            {notificacion.ShortText || 'Sin título'}
+          </Text>
         </Text>
 
         {/* Datos principales */}
@@ -68,26 +144,32 @@ export default function NotificacionDetalle() {
             <LabelValue label="Equipo" value={notificacion.Equipment} />
             <LabelValue
               label="Fecha"
-              value={notificacion.NotifDate ? new Date(notificacion.NotifDate).toLocaleString() : 'No disponible'}
+              value={
+                notificacion.NotifDate
+                  ? new Date(notificacion.NotifDate).toLocaleString()
+                  : 'No disponible'
+              }
             />
           </View>
         </View>
 
         {/* Items */}
-        {notificacion.items?.length > 0 && (
+        {Array.isArray(notificacion.items) && notificacion.items.length > 0 && (
           <View style={styles.sectionBox}>
             <View style={styles.leftStripeSoft} />
             <Text style={styles.sectionTitle}>
               <Ionicons name="list-outline" size={18} color={FIORI.ink} /> Items
             </Text>
             {notificacion.items.map((item, idx) => (
-              <Text key={idx} style={styles.value}>• {item.Descript}</Text>
+              <Text key={idx} style={styles.value}>
+                • {item?.Descript || item?.descript || '—'}
+              </Text>
             ))}
           </View>
         )}
 
         {/* Actividades */}
-        {notificacion.activities?.length > 0 && (
+        {Array.isArray(notificacion.activities) && notificacion.activities.length > 0 && (
           <View style={styles.sectionBox}>
             <View style={styles.leftStripeSoft} />
             <Text style={styles.sectionTitle}>
@@ -95,14 +177,15 @@ export default function NotificacionDetalle() {
             </Text>
             {notificacion.activities.map((act, idx) => (
               <Text key={idx} style={styles.value}>
-                • {act.Acttext} ({act.StartDate} a {act.EndDate})
+                • {act?.Acttext || act?.acttext || '—'}{' '}
+                {act?.StartDate || act?.EndDate ? `(${act?.StartDate || '—'} a ${act?.EndDate || '—'})` : ''}
               </Text>
             ))}
           </View>
         )}
 
         {/* Partners */}
-        {notificacion.partners?.length > 0 && (
+        {Array.isArray(notificacion.partners) && notificacion.partners.length > 0 && (
           <View style={styles.sectionBox}>
             <View style={styles.leftStripeSoft} />
             <Text style={styles.sectionTitle}>
@@ -110,13 +193,14 @@ export default function NotificacionDetalle() {
             </Text>
             {notificacion.partners.map((p, idx) => (
               <Text key={idx} style={styles.value}>
-                • {p.PartnRole || p.role}: {p.Partner || p.partner}
+                • {(p?.PartnRole || p?.role || 'Rol')}:{' '}
+                {(p?.Partner || p?.partner || '—')}
               </Text>
             ))}
           </View>
         )}
 
-        {/* CTA Orden (misma funcionalidad) */}
+        {/* CTA Orden */}
         {notificacion.Orderid && (
           <TouchableOpacity
             style={styles.botonOrden}
@@ -128,12 +212,10 @@ export default function NotificacionDetalle() {
           </TouchableOpacity>
         )}
       </ScrollView>
-      <Footer />
     </View>
   );
 }
 
-/** Componente pequeño para etiquetas/valores estilo Fiori */
 function LabelValue({ label, value }) {
   return (
     <View style={{ marginTop: 6 }}>
@@ -144,21 +226,14 @@ function LabelValue({ label, value }) {
 }
 
 const styles = StyleSheet.create({
-  // Mantengo tus espaciamientos base
   container: { flex: 1, backgroundColor: FIORI.pageBg },
-  centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  text: { marginTop: 10, color: FIORI.textMuted },
+  centered: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 },
+  text: { marginTop: 10, color: FIORI.textMuted, textAlign: 'center' },
   content: { padding: 20 },
 
-  // Título
   title: { marginBottom: 12 },
-  titleText: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: FIORI.ink,
-  },
+  titleText: { fontSize: 18, fontWeight: '700', color: FIORI.ink },
 
-  // Caja/Sección tipo “card” Fiori (mantengo padding 14 y radius 10)
   sectionBox: {
     backgroundColor: FIORI.cardBg,
     padding: 14,
@@ -173,7 +248,6 @@ const styles = StyleSheet.create({
     }),
   },
 
-  // Franja izquierda (accent stripe) Fiori
   leftStripe: {
     width: 4,
     backgroundColor: FIORI.accent,
@@ -192,12 +266,10 @@ const styles = StyleSheet.create({
     borderBottomLeftRadius: 10,
   },
 
-  // Tipos de texto
   label: { fontSize: 13, fontWeight: '600', color: FIORI.textMuted },
   value: { fontSize: 14, color: FIORI.ink, marginTop: 2 },
   sectionTitle: { fontSize: 15, fontWeight: '700', color: FIORI.ink, marginBottom: 6, paddingLeft: 8 },
 
-  // Botón CTA (cambiado a azul SAP; si prefieres tu rojo, dime y lo dejamos)
   botonOrden: {
     flexDirection: 'row',
     alignItems: 'center',

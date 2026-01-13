@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, ScrollView, ActivityIndicator, Alert } from 'react-native';
 import Header from '../../../../src/components/Header';
-import Footer from '../../../../src/components/Footer';
 import { useLocalSearchParams, router } from 'expo-router';
 import { fetchDatosReportePendientes, guardarReportePendientes } from '../../../../src/services/reportePendientes';
 
@@ -192,7 +191,7 @@ export default function ReportePendientesForm() {
           <Text style={styles.primaryText}>Guardar reporte</Text>
         </TouchableOpacity>
       </ScrollView>
-      <Footer />
+     
     </View>
   );
 }

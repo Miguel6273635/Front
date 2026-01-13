@@ -13,7 +13,6 @@ import { useLocalSearchParams } from 'expo-router';
 
 // Ajusta a tu proyecto:
 import Header from '../../../../src/components/Header';
-import Footer from '../../../../src/components/Footer';
 
 function LabeledInput({ label, value, onChangeText, placeholder, multiline=false, editable=true, keyboardType="default" }) {
   return (
@@ -368,7 +367,6 @@ export default function TermConformidadForm() {
           </TouchableOpacity>
         </View>
       </ScrollView>
-      <Footer />
     </View>
   );
 }

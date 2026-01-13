@@ -1,7 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, ScrollView, ActivityIndicator, Alert } from 'react-native';
+import {
+  View, Text, TextInput, TouchableOpacity, StyleSheet,
+  ScrollView, ActivityIndicator, Alert
+} from 'react-native';
 import Header from '../../../../src/components/Header';
-import Footer from '../../../../src/components/Footer';
 import { useLocalSearchParams, router } from 'expo-router';
 import { fetchDatosMantenimiento, guardarMantEscaleras } from '../../../../src/services/mantenimiento';
 import FloorSelectModal from '../../../../src/components/FloorSelectModal';
@@ -36,8 +38,8 @@ function CardItem({ title, count, onPress }) {
     </TouchableOpacity>
   );
 }
-function CollapsibleGroup({ title, children, defaultOpen=false }) {
-  const [open, setOpen] = useState(defaultOpen);
+function CollapsibleGroup({ title, children }) {
+  const [open, setOpen] = useState(false);
   return (
     <View style={styles.group}>
       <TouchableOpacity style={styles.groupHeader} onPress={() => setOpen(!open)}>
@@ -50,15 +52,77 @@ function CollapsibleGroup({ title, children, defaultOpen=false }) {
 }
 
 export default function MantEscaleras() {
-  const { orderid } = useLocalSearchParams();
-  const [loading, setLoading] = useState(true);
-  const [datos, setDatos] = useState(null);
+  const params = useLocalSearchParams();
+
+  const orderidRaw = params?.orderid ?? params?.id;
+  const orderid = String(orderidRaw ?? '').trim();
+
+  // ✅ DATOS DESDE PARAMS DESDE EL PRIMER RENDER
+  const [datos, setDatos] = useState(() => ({
+    Orderid: params?.orderid ? String(params.orderid) : (params?.id ? String(params.id) : undefined),
+    equipment: params?.equipment ? String(params.equipment) : undefined,
+    tecnico_nombre: params?.tecnico_nombre ? String(params.tecnico_nombre) : undefined,
+    Name1: params?.Name1 ? String(params.Name1) : undefined,
+    Name2: params?.Name2 ? String(params.Name2) : undefined,
+    cliente: params?.cliente ? String(params.cliente) : undefined,
+    direccion: params?.direccion ? String(params.direccion) : undefined,
+  }));
+
+  const [loading, setLoading] = useState(false);
 
   const [pisos, setPisos] = useState(6);
   const [mA, setMA] = useState({});
   const [mB, setMB] = useState({});
   const [subsel, setSubsel] = useState({});
   const setIn = (setter, map, key, val) => setter({ ...map, [key]: val });
+
+  const fecha = useMemo(() => {
+    const d = new Date();
+    return `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${d.getFullYear()}`;
+  }, []);
+  const horaEntrada = useMemo(() => {
+    const d = new Date();
+    return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+  }, []);
+
+  const [avisoCliente, setAvisoCliente] = useState('');
+  const [detalleTrabajo, setDetalleTrabajo] = useState('');
+  const [notas, setNotas] = useState('');
+  const [refacciones, setRefacciones] = useState([{ cantidad:'', descripcion:'', conCargo:false, codigo:'' }]);
+
+  // ✅ FETCH SOLO SI FALTAN DATOS
+  useEffect(() => {
+    let alive = true;
+
+    const tengoDatosMinimos =
+      !!(datos?.Orderid && datos?.equipment && (datos?.tecnico_nombre || datos?.Name1 || datos?.Name2));
+
+    if (!orderid || tengoDatosMinimos) {
+      setLoading(false);
+      return;
+    }
+
+    (async () => {
+      try {
+        setLoading(true);
+        const d = await fetchDatosMantenimiento(orderid);
+        if (!alive) return;
+        setDatos(prev => ({ ...(prev || {}), ...(d || {}) }));
+      } catch (e) {
+        const tengoAlgo =
+          !!(datos?.Orderid || datos?.equipment || datos?.tecnico_nombre || datos?.Name1 || datos?.Name2);
+
+        if (!tengoAlgo) {
+          Alert.alert('Aviso', 'No se pudo cargar desde servidor. Se mostrará lo disponible.');
+        }
+      } finally {
+        if (alive) setLoading(false);
+      }
+    })();
+
+    return () => { alive = false; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orderid]);
 
   const [modalOpen, setModalOpen] = useState(false);
   const [modalKey, setModalKey] = useState({ type: 'A', name: '' });
@@ -69,48 +133,23 @@ export default function MantEscaleras() {
     else setIn(setSubsel, subsel, modalKey.name, vals);
   };
 
-  const fecha = useMemo(() => {
-    const d = new Date(); return `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${d.getFullYear()}`;
-  }, []);
-  const horaEntrada = useMemo(() => {
-    const d = new Date(); return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
-  }, []);
-
-  const [avisoCliente, setAvisoCliente] = useState('');
-  const [detalleTrabajo, setDetalleTrabajo] = useState('');
-  const [notas, setNotas] = useState('');
-  const [refacciones, setRefacciones] = useState([{ cantidad:'', descripcion:'', conCargo:false, codigo:'' }]);
-
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      try {
-        setLoading(true);
-        const d = await fetchDatosMantenimiento(String(orderid));
-        if (!alive) return;
-        setDatos(d);
-      } catch (e) {
-        console.error(e);
-        Alert.alert('Error', 'No se pudieron cargar los datos.');
-      } finally {
-        if (alive) setLoading(false);
-      }
-    })();
-    return () => { alive = false; };
-  }, [orderid]);
-
   const onGuardar = async () => {
-    if (!datos) return;
-    const horaSalida = (() => {
-      const d = new Date(); return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
-    })();
+    if (!datos?.Orderid) {
+      Alert.alert('Error', 'No hay Orderid para guardar.');
+      return;
+    }
+
+    const d = new Date();
+    const horaSalida = `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
 
     const payload = {
       orderid: datos.Orderid,
       equipment: datos.equipment,
       tecnico: datos.tecnico_nombre,
       cliente: `${datos.Name1 ?? ''} ${datos.Name2 ?? ''}`.trim(),
-      fecha, hora_entrada: horaEntrada, hora_salida: horaSalida,
+      fecha,
+      hora_entrada: horaEntrada,
+      hora_salida: horaSalida,
       pisos,
       bloques: { tablaA: mA, tablaB: mB, subconjuntos: subsel },
       aviso_cliente: avisoCliente,
@@ -130,7 +169,7 @@ export default function MantEscaleras() {
     }
   };
 
-  if (loading) return <View style={styles.center}><ActivityIndicator/></View>;
+  if (loading && !datos?.Orderid) return <View style={styles.center}><ActivityIndicator/></View>;
   if (!datos) return <View style={styles.center}><Text>No hay datos.</Text></View>;
 
   return (
@@ -138,21 +177,23 @@ export default function MantEscaleras() {
       <Header title="Mantenimiento de Escaleras" />
 
       <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 160 }}>
-        {/* CABECERA */}
         <View style={styles.card}>
           <Text style={styles.h1}>{`${datos.Name1 ?? ''} ${datos.Name2 ?? ''}`.trim()}</Text>
+
           <View style={styles.pillsRow}>
-            <View style={styles.pill}><Text style={styles.pillText}>MX: {datos.Orderid}</Text></View>
-            <View style={styles.pill}><Text style={styles.pillText}>Equipo: {datos.equipment}</Text></View>
+            <View style={styles.pill}><Text style={styles.pillText}>MX: {datos.Orderid ?? '—'}</Text></View>
+            <View style={styles.pill}><Text style={styles.pillText}>Equipo: {datos.equipment ?? '—'}</Text></View>
             <View style={styles.pill}><Text style={styles.pillText}>Técnico: {datos.tecnico_nombre ?? '—'}</Text></View>
           </View>
+
           <View style={styles.pillsRow}>
             <View style={styles.pill}><Text style={styles.pillText}>Fecha: {fecha}</Text></View>
             <View style={styles.pill}><Text style={styles.pillText}>Entrada: {horaEntrada}</Text></View>
+
             <View style={styles.pill}>
               <Text style={styles.pillText}>Pisos:</Text>
               <TextInput
-                style={[styles.pillInput]}
+                style={styles.pillInput}
                 keyboardType="numeric"
                 value={String(pisos)}
                 onChangeText={(t)=>setPisos(Math.max(1, Math.min(50, Number(t)||6)))}
@@ -161,7 +202,6 @@ export default function MantEscaleras() {
           </View>
         </View>
 
-        {/* BLOQUE A */}
         <Text style={styles.section}>Bloque A</Text>
         <View style={styles.card}>
           <View style={styles.grid2}>
@@ -171,7 +211,6 @@ export default function MantEscaleras() {
           </View>
         </View>
 
-        {/* BLOQUE B */}
         <Text style={styles.section}>Bloque B</Text>
         <View style={styles.card}>
           <View style={styles.grid2}>
@@ -181,7 +220,6 @@ export default function MantEscaleras() {
           </View>
         </View>
 
-        {/* SUBCONJUNTOS */}
         <Text style={styles.section}>Subconjuntos</Text>
         <View style={styles.card}>
           {SUBCONJUNTOS.map(group => (
@@ -195,46 +233,20 @@ export default function MantEscaleras() {
           ))}
         </View>
 
-        {/* INFERIOR */}
         <Text style={styles.section}>Aviso al cliente</Text>
-        <View style={styles.card}><TextInput style={[styles.input, styles.tarea]} placeholder="Escribe el aviso..." value={avisoCliente} onChangeText={setAvisoCliente} multiline /></View>
+        <View style={styles.card}>
+          <TextInput style={[styles.input, styles.tarea]} value={avisoCliente} onChangeText={setAvisoCliente} multiline />
+        </View>
 
         <Text style={styles.section}>Detalle de trabajo</Text>
-        <View style={styles.card}><TextInput style={[styles.input, styles.tarea]} placeholder="Describe el trabajo realizado..." value={detalleTrabajo} onChangeText={setDetalleTrabajo} multiline /></View>
-
-        <Text style={styles.section}>Refacciones</Text>
         <View style={styles.card}>
-          {refacciones.map((r,i)=>(
-            <View key={`ref-${i}`} style={{ marginTop: i?10:0 }}>
-              <View style={styles.rowGap}>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.smallLabel}>Cantidad</Text>
-                  <TextInput style={styles.input} keyboardType="numeric" value={r.cantidad} onChangeText={(v)=>patchArr(setRefacciones, refacciones, i, { cantidad:v })} />
-                </View>
-                <View style={{ flex: 2 }}>
-                  <Text style={styles.smallLabel}>Descripción</Text>
-                  <TextInput style={styles.input} value={r.descripcion} onChangeText={(v)=>patchArr(setRefacciones, refacciones, i, { descripcion:v })} />
-                </View>
-              </View>
-              <View style={[styles.rowGap, { marginTop: 8 }]}>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.smallLabel}>Con cargo al cliente (SI/NO)</Text>
-                  <TextInput style={styles.input} placeholder="SI o NO" value={r.conCargo ? 'SI' : 'NO'} onChangeText={(v)=>patchArr(setRefacciones, refacciones, i, { conCargo: (v||'').trim().toUpperCase()==='SI' })} />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.smallLabel}>Código interno</Text>
-                  <TextInput style={styles.input} value={r.codigo} onChangeText={(v)=>patchArr(setRefacciones, refacciones, i, { codigo:v })} />
-                </View>
-              </View>
-            </View>
-          ))}
-          <TouchableOpacity onPress={()=>setRefacciones([...refacciones,{cantidad:'',descripcion:'',conCargo:false,codigo:''}])} style={styles.addBtn}>
-            <Text style={styles.addBtnText}>+ Agregar refacción</Text>
-          </TouchableOpacity>
+          <TextInput style={[styles.input, styles.tarea]} value={detalleTrabajo} onChangeText={setDetalleTrabajo} multiline />
         </View>
 
         <Text style={styles.section}>Notas</Text>
-        <View style={styles.card}><TextInput style={[styles.input, styles.tarea]} placeholder="Notas adicionales..." value={notas} onChangeText={setNotas} multiline /></View>
+        <View style={styles.card}>
+          <TextInput style={[styles.input, styles.tarea]} value={notas} onChangeText={setNotas} multiline />
+        </View>
       </ScrollView>
 
       <TouchableOpacity style={styles.fab} onPress={onGuardar}>
@@ -252,7 +264,8 @@ export default function MantEscaleras() {
         }
         onChange={applyModal}
       />
-      <Footer />
+
+      
     </View>
   );
 }
@@ -267,34 +280,25 @@ const styles = StyleSheet.create({
   center: { flex:1, justifyContent:'center', alignItems:'center' },
   h1: { fontSize: 18, fontWeight: '900', color: '#111827', marginBottom: 6 },
   section: { marginTop: 18, fontSize: 18, fontWeight: '800', color: '#1f2937' },
-  card: {
-    backgroundColor:'#fff', borderRadius:14, padding:14, marginTop:10,
-    borderWidth:1, borderColor:'#e5e7eb', shadowColor:'#000', shadowOpacity:0.03, shadowRadius:6, elevation:1
-  },
+  card: { backgroundColor:'#fff', borderRadius:14, padding:14, marginTop:10, borderWidth:1, borderColor:'#e5e7eb', elevation:1 },
   pillsRow: { flexDirection:'row', flexWrap:'wrap', gap:8 },
   pill: { flexDirection:'row', alignItems:'center', gap:6, paddingVertical:8, paddingHorizontal:12, backgroundColor:'#F5F7FB', borderRadius:999, borderWidth:1, borderColor:'#e5e7eb' },
   pillText: { color:'#111827', fontWeight:'700' },
   pillInput: { minWidth: 60, paddingVertical: 4, paddingHorizontal: 8, backgroundColor:'#fff', borderRadius:8, borderWidth:1, borderColor:'#d1d5db', color:'#111827' },
   grid2: { flexDirection:'row', flexWrap:'wrap', justifyContent:'space-between' },
-  cardItem: { width: '48%', borderWidth:1, borderColor:'#e5e7eb', borderRadius:12, padding:12, marginBottom:10, backgroundColor:'#fff' },
+  cardItem: { width: '48%', borderWidth:1, borderColor:'#e5e7eb', borderRadius:12, padding:12, marginBottom:10 },
   cardItemTitle: { fontWeight:'800', color:'#111827', minHeight:40 },
   cardItemLink: { color:'#0A84FF', fontWeight:'900', marginTop: 8 },
-  badge: { marginTop:8, alignSelf:'flex-start', backgroundColor:'#eef2ff', paddingVertical:4, paddingHorizontal:8, borderRadius:999 },
+  badge: { marginTop:8, backgroundColor:'#eef2ff', paddingVertical:4, paddingHorizontal:8, borderRadius:999 },
   badgeOn: { backgroundColor:'#111827' },
-  badgeText: { color:'#111827', fontWeight:'900' },
+  badgeText: { fontWeight:'900' },
   badgeTextOn: { color:'#fff', fontWeight:'900' },
   group: { marginBottom: 8 },
-  groupHeader: { flexDirection:'row', justifyContent:'space-between', alignItems:'center', paddingVertical:4 },
-  groupTitle: { fontWeight:'900', color:'#111827' },
+  groupHeader: { flexDirection:'row', justifyContent:'space-between' },
+  groupTitle: { fontWeight:'900' },
   groupToggle: { color:'#0A84FF', fontWeight:'900' },
-  rowGap: { flexDirection:'row', gap: 8 },
-  input: { borderWidth:1, borderColor:'#d1d5db', borderRadius:10, paddingVertical:10, paddingHorizontal:10, backgroundColor:'#fff', fontSize:16, color:'#111827' },
-  smallLabel: { fontSize: 12, color: '#6b7280', marginBottom: 4 },
-  addBtn: { marginTop: 10 }, addBtnText: { color:'#0A84FF', fontWeight:'800' },
+  input: { borderWidth:1, borderColor:'#d1d5db', borderRadius:10, padding:10 },
   tarea: { height: 110, textAlignVertical:'top' },
-  fab: {
-    position:'absolute', right:16, bottom:92, backgroundColor:'#16a34a',
-    paddingVertical:14, paddingHorizontal:18, borderRadius:999, shadowColor:'#000', shadowOpacity:0.15, shadowRadius:8, elevation:4
-  },
-  fabText: { color:'#fff', fontWeight:'900', fontSize:16 },
+  fab: { position:'absolute', right:16, bottom:92, backgroundColor:'#16a34a', padding:14, borderRadius:999 },
+  fabText: { color:'#fff', fontWeight:'900' },
 });

@@ -44,7 +44,13 @@
       "expo-asset"
     ],
     "extra": {
-      "API_BASE_URL": "http://192.168.3.17:5000",
+      "AZURE_TENANT_ID": "87faafe0-ea5a-47aa-9359-20fd75c1bce8",
+      "AZURE_CLIENT_ID": "c765513b-f429-4f8e-8685-171012f1974c",
+      "AZURE_API_SCOPE": "api://c765513b-f429-4f8e-8685-171012f1974c/access_as_user",
+
+      "API_BASE_URL_DEV": "http://192.168.3.17:5000",
+      "API_BASE_URL_PROD": "https://my-node-api-qas-01.cfapps.us10-001.hana.ondemand.com",
+
       "GOOGLE_MAPS_API_KEY": "xXsfDizxhemYIlweqX7X",
       "router": {},
       "eas": {

@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import { View, Text, TextInput, StyleSheet, ScrollView, TouchableOpacity, Alert, Image } from 'react-native';
 import Header from '../../../../src/components/Header';
-import Footer from '../../../../src/components/Footer';
 import * as ImagePicker from 'expo-image-picker';
 
 export default function FormularioInstalacion() {
@@ -72,7 +71,7 @@ export default function FormularioInstalacion() {
           <Text style={styles.buttonText}>Guardar</Text>
         </TouchableOpacity>
       </ScrollView>
-      <Footer />
+     
     </View>
   );
 }

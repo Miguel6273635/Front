@@ -9,7 +9,6 @@ import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, ScrollView, Alert } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Header from '../../../../src/components/Header';
-import Footer from '../../../../src/components/Footer';
 import { useLocalSearchParams, router } from 'expo-router';
 
 function LabeledInput({ label, value, onChangeText, placeholder, multiline, editable = true, keyboardType="default" }) {
@@ -303,7 +302,6 @@ export default function AutorizacionGastosErrorHumano() {
           </TouchableOpacity>
         </View>
       </ScrollView>
-      <Footer />
     </View>
   );
 }

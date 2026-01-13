@@ -17,7 +17,6 @@ import {
   Switch,
 } from 'react-native';
 import Header from '../../../../src/components/Header';
-import Footer from '../../../../src/components/Footer';
 import { useLocalSearchParams, router } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import api from '../../../../src/services/api';
@@ -802,8 +801,6 @@ export default function ManttoCablesScreen() {
           {saving ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryText}>Guardar</Text>}
         </TouchableOpacity>
       </ScrollView>
-
-      <Footer />
     </View>
   );
 }

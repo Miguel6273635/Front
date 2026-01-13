@@ -1,49 +1,71 @@
 // src/context/NotificacionesContext.js
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import api from '../services/api';
 import { useAuth } from './AuthContext';
-import {
-  fetchNotificationsSmart,
-  markReadLocal,
-} from '../offline/notifications.store';
 
 const NotificacionesContext = createContext();
 
 export const NotificacionesProvider = ({ children }) => {
-  const { token, user } = useAuth();
+  const { token } = useAuth();
+
   const [notificaciones, setNotificaciones] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
 
   const fetchNotificaciones = async () => {
+    if (!token) return;
+    setLoading(true);
     try {
-      const data = await fetchNotificationsSmart(token); // ← smart (online→cache / offline→sqlite)
+      // Ajusta esta ruta si tu backend usa otra (ej: '/notificaciones')
+      const res = await api.get('/notificaciones', {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      // soporta: res.data (array) o { data: [...] } o { results: [...] }
+      const data = Array.isArray(res.data)
+        ? res.data
+        : (res.data?.data ?? res.data?.results ?? []);
+
       setNotificaciones(data);
     } catch (err) {
-      console.error('Error notificaciones smart:', err);
+      console.error('Error al cargar notificaciones:', err);
     } finally {
       setLoading(false);
     }
   };
 
   const marcarComoLeida = async (notifno) => {
+    if (!token) return;
+
+    // Optimista: que la UI refleje de inmediato
+    setNotificaciones((prev) =>
+      prev.map((n) => (n.notifno === notifno ? { ...n, leida: true } : n))
+    );
+
     try {
       await api.put(
         '/notificaciones/leidas',
         { notifno },
         { headers: { Authorization: `Bearer ${token}` } }
       );
+      // Opcional: recargar por si el backend cambia algo más
+      await fetchNotificaciones();
     } catch (err) {
-      // sin red: marca local para que la UI refleje el estado
-      await markReadLocal(user?.id, notifno);
-    } finally {
-      await fetchNotificaciones(); // recarga lista (smart)
+      console.error('Error al marcar como leída:', err);
+      // Si falló, revertimos el cambio optimista
+      setNotificaciones((prev) =>
+        prev.map((n) => (n.notifno === notifno ? { ...n, leida: false } : n))
+      );
     }
   };
 
-  const noLeidas = notificaciones.filter((n) => !n.leida);
+  const noLeidas = useMemo(
+    () => notificaciones.filter((n) => !n.leida),
+    [notificaciones]
+  );
 
   useEffect(() => {
     if (token) fetchNotificaciones();
+    else setNotificaciones([]);
   }, [token]);
 
   return (

@@ -1,7 +1,27 @@
 // app/index.js
-import { Redirect } from "expo-router";
+import React from 'react';
+import { ActivityIndicator, View } from 'react-native';
+import { Redirect } from 'expo-router';
+import { useAuth } from '../src/context/AuthContext';
+
+function pickHomeByRole(rol_id) {
+  if (rol_id === 1) return '/admin';
+  if (rol_id === 2) return '/supervisor';
+  return '/tecnico';
+}
 
 export default function Index() {
-  // Como tu login está en app/(auth)/login.js la ruta es esta:
-  return <Redirect href="/(auth)/login" />;
+  const { user, loading } = useAuth();
+
+  if (loading) {
+    return (
+      <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+        <ActivityIndicator />
+      </View>
+    );
+  }
+
+  if (!user) return <Redirect href="/(auth)/login" />;
+
+  return <Redirect href={pickHomeByRole(user.rol_id)} />;
 }

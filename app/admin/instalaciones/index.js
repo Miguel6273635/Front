@@ -10,7 +10,6 @@ import {
 import { Dropdown } from 'react-native-element-dropdown';
 import { Ionicons } from '@expo/vector-icons';
 import Header from '../../../src/components/Header';
-import Footer from '../../../src/components/Footer';
 
 const lugares = [
   { label: 'Guadalajara', value: '1' },
@@ -156,8 +155,6 @@ export default function FormularioAsignacionInstalacion() {
           <Text style={styles.buttonText}>Guardar asignación</Text>
         </TouchableOpacity>
       </ScrollView>
-
-      <Footer />
     </View>
   );
 }

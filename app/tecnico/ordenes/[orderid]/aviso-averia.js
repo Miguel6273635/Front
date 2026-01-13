@@ -9,9 +9,10 @@ import {
   TextInput,
   ActivityIndicator,
   Alert,
+  Image,
 } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
 import Header from '../../../../src/components/Header';
-import Footer from '../../../../src/components/Footer';
 import { useLocalSearchParams, router } from 'expo-router';
 import { useAuth } from '../../../../src/context/AuthContext';
 import {
@@ -31,45 +32,40 @@ const FIORI = {
 };
 
 const Chip = ({ active, label, onPress }) => (
-  <TouchableOpacity
-    onPress={onPress}
-    style={[styles.chip, active && styles.chipOn]}
-  >
-    <Text style={[styles.chipText, active && styles.chipTextOn]}>
-      {label}
-    </Text>
+  <TouchableOpacity onPress={onPress} style={[styles.chip, active && styles.chipOn]}>
+    <Text style={[styles.chipText, active && styles.chipTextOn]}>{label}</Text>
   </TouchableOpacity>
 );
 
 export default function AvisoAveriaSapScreen() {
   const params = useLocalSearchParams();
-  // Intentamos varias claves posibles por si cambias navegación
-  const rawId =
-    params.id ||
-    params.orderid ||
-    params.Orderid ||
-    params.ordenId ||
-    null;
-
+  const rawId = params.id || params.orderid || params.Orderid || params.ordenId || null;
   const orderid = rawId ? String(rawId).trim() : null;
   const { token } = useAuth();
 
   const [loading, setLoading] = useState(true);
   const [meta, setMeta] = useState(null);
 
-  const [catP, setCatP] = useState([]);
   const [catR, setCatR] = useState([]);
   const [catS, setCatS] = useState([]);
   const [catT, setCatT] = useState([]);
 
-  const [selP, setSelP] = useState(null);
-  const [selR, setSelR] = useState(null);
-  const [selS, setSelS] = useState(null);
-  const [selT, setSelT] = useState(null);
+  // 👉 daños y causas son ARREGLOS (máx 2)
+  const [selR, setSelR] = useState([]);   // daños (R)
+  const [selS, setSelS] = useState(null); // localización (S) única
+  const [selT, setSelT] = useState([]);   // causas (T)
 
   const [shortText, setShortText] = useState('');
-  const [itemDescript, setItemDescript] = useState('');
+  const [itemDescript, setItemDescript] = useState(''); // Descript para NotificationItemsSet
   const [causaText, setCausaText] = useState('');
+
+  // ✅ NUEVO: descripción de la pieza para NotificationTextSet.TextLine
+  const [piezaDescripcion, setPiezaDescripcion] = useState('');
+
+  const [saving, setSaving] = useState(false);
+
+  // Foto evidencia (local)
+  const [evidenceUri, setEvidenceUri] = useState(null);
 
   useEffect(() => {
     let alive = true;
@@ -81,21 +77,13 @@ export default function AvisoAveriaSapScreen() {
         console.log('[AVISO-AVERIA] orderid resuelto =', orderid);
 
         if (!orderid || orderid === 'undefined' || orderid === 'null') {
-          console.error(
-            '[AVISO-AVERIA] orderid inválido en params:',
-            orderid
-          );
-          Alert.alert(
-            'Error',
-            'No se recibió el identificador de la orden para crear el aviso.'
-          );
+          Alert.alert('Error', 'No se recibió el identificador de la orden para crear el aviso.');
           if (alive) setLoading(false);
           return;
         }
 
-        const [metaRes, p, r, s, t] = await Promise.all([
+        const [metaRes, r, s, t] = await Promise.all([
           fetchMetaAviso(orderid, token),
-          fetchCatalogoCircunstancia('P', token),
           fetchCatalogoCircunstancia('R', token),
           fetchCatalogoCircunstancia('S', token),
           fetchCatalogoCircunstancia('T', token),
@@ -103,17 +91,13 @@ export default function AvisoAveriaSapScreen() {
 
         if (!alive) return;
         setMeta(metaRes);
-        setCatP(p);
         setCatR(r);
         setCatS(s);
         setCatT(t);
 
         setShortText(metaRes.ShortTextDefault || '');
       } catch (e) {
-        console.error(
-          'Error cargando aviso de avería:',
-          e?.response?.data || e
-        );
+        console.error('Error cargando aviso de avería:', e?.response?.data || e);
         Alert.alert('Error', 'No se pudo cargar la información del aviso.');
       } finally {
         if (alive) setLoading(false);
@@ -126,34 +110,30 @@ export default function AvisoAveriaSapScreen() {
   }, [orderid, token]);
 
   const onGuardar = async () => {
+    if (saving) return;
     if (!meta) return;
 
     if (!shortText.trim())
-      return Alert.alert(
-        'Falta información',
-        'Captura la descripción breve (ShortText).'
-      );
-    if (!itemDescript.trim())
-      return Alert.alert(
-        'Falta información',
-        'Captura la descripción de la pieza dañada (Descript).'
-      );
-    if (!causaText.trim())
-      return Alert.alert(
-        'Falta información',
-        'Captura el texto de causa.'
-      );
-    if (!selP || !selR || !selS || !selT)
-      return Alert.alert(
-        'Falta información',
-        'Selecciona al menos un código en cada sección (P, R, S, T).'
-      );
+      return Alert.alert('Falta información', 'Captura la descripción breve (ShortText).');
 
-    // Validar PersNo que vino del backend (ya viene limpio)
-    if (
-      !meta.ReportedByPersNo ||
-      meta.ReportedByPersNo.trim() === ''
-    ) {
+    // ✅ NUEVO: requerido para mandarlo a NotificationTextSet.TextLine
+    if (!piezaDescripcion.trim())
+      return Alert.alert('Falta información', 'Captura la descripción de la pieza.');
+
+    if (!itemDescript.trim())
+      return Alert.alert('Falta información', 'Captura la descripción de la falla (Descript).');
+
+    if (!causaText.trim())
+      return Alert.alert('Falta información', 'Captura el texto de causa.');
+
+    if (!selR.length || !selS || !selT.length) {
+      return Alert.alert(
+        'Falta información',
+        'Selecciona al menos un código de daño (R), una localización (S) y al menos una causa (T).'
+      );
+    }
+
+    if (!meta.ReportedByPersNo || meta.ReportedByPersNo.trim() === '') {
       return Alert.alert(
         'Aviso',
         'Esta orden no tiene un número de persona (PersNo) asignado en las operaciones de SAP.\n\nNo se puede crear el aviso automáticamente porque falta el ReportedBy.'
@@ -165,41 +145,108 @@ export default function AvisoAveriaSapScreen() {
       docNumber: meta.DocNumber,
       itmNumber: meta.ItmNumber,
       shortText,
+
+      // ✅ se usa en ItemsSet[].Descript (falla)
       itemDescript,
+
+      // ✅ NUEVO: se usa en NotificationTextSet[].TextLine (descripción pieza)
+      piezaDescripcion,
+
       causaText,
-      headerCirc: selP,
-      piezaCirc: selR,
+
+      // daños/causas
+      piezaCircList: selR,
       lugarCirc: selS,
-      causaCirc: selT,
-      reportedBy: meta.ReportedByPersNo, // ya validado y limpio
+      causasCirc: selT,
+
+      reportedBy: meta.ReportedByPersNo,
+      // evidenceUri
     };
 
     try {
+      setSaving(true);
+      console.log("=======================================");
+      console.log("[AVISO-AVERIA] JSON ARMADO (payload):");
+      console.log(JSON.stringify(payload, null, 2));
+      console.log("=======================================");
+
+
       const res = await crearAvisoAveriaSap(payload, token);
+      console.log('[AVISO-AVERIA] respuesta backend crearAvisoAveriaSap:', res);
+
       if (res.ok) {
-        const suffix = res.notifNo ? `\nNo. de aviso: ${res.notifNo}` : '';
-        Alert.alert('Aviso creado', `Se creó el aviso en SAP.${suffix}`, [
-          { text: 'OK', onPress: () => router.back() },
-        ]);
+        const notifNo =
+          res?.notifNo ||
+          res?.raw?.NotifNo ||
+          res?.raw?.NotificationNo ||
+          (Array.isArray(res?.raw?.Return?.results)
+            ? (() => {
+                const msgs = res.raw.Return.results
+                  .map((x) => String(x?.Message || ''))
+                  .join(' | ');
+                const nums = msgs.match(/\d{6,}/g);
+                return nums?.sort((a, b) => b.length - a.length)[0] || null;
+              })()
+            : null);
+
+        const backendMsg = res?.sapMessage;
+        let message = '';
+
+        if (backendMsg && notifNo) message = `${backendMsg}\nNo. de aviso: ${notifNo}`;
+        else if (backendMsg) message = backendMsg;
+        else if (notifNo) message = `Se creó el aviso en SAP.\nNo. de aviso: ${notifNo}`;
+        else message = 'Se creó el aviso en SAP (no se recibió número de aviso).';
+
+        Alert.alert('Aviso creado', message, [{ text: 'OK', onPress: () => router.back() }]);
       } else {
         Alert.alert(
           'Aviso no creado',
           res.error ||
             'Hubo un problema al crear el aviso en SAP. Revisa conexión o intenta más tarde.'
         );
-        console.warn('SAP aviso error:', res.detail || res);
       }
     } catch (e) {
-      console.error(
-        'Error al crear aviso de avería:',
-        e?.response?.data || e
-      );
+      console.error('Error al crear aviso de avería:', e?.response?.data || e);
       const msg =
         e?.response?.data?.error ||
         e?.response?.data?.sapMessage ||
         'No se pudo crear el aviso en SAP.';
       Alert.alert('Error', msg);
+    } finally {
+      setSaving(false);
     }
+  };
+
+  const handleTakePhoto = async () => {
+    try {
+      const { status } = await ImagePicker.requestCameraPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permiso requerido', 'Necesitas otorgar permiso de cámara para tomar una foto.');
+        return;
+      }
+
+      const result = await ImagePicker.launchCameraAsync({
+        allowsEditing: false,
+        quality: 0.7,
+      });
+
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        setEvidenceUri(result.assets[0].uri);
+      }
+    } catch (e) {
+      console.error('Error al tomar foto:', e);
+      Alert.alert('Error', 'No se pudo abrir la cámara.');
+    }
+  };
+
+  const toggleMultiWithLimit = (prev, item, max = 2) => {
+    const exists = prev.some((sel) => sel.Codigo === item.Codigo);
+    if (exists) return prev.filter((sel) => sel.Codigo !== item.Codigo);
+    if (prev.length >= max) {
+      Alert.alert('Límite alcanzado', `Sólo puedes seleccionar hasta ${max} opciones en este grupo.`);
+      return prev;
+    }
+    return [...prev, item];
   };
 
   if (loading) {
@@ -221,7 +268,7 @@ export default function AvisoAveriaSapScreen() {
   return (
     <View style={{ flex: 1, backgroundColor: FIORI.bg }}>
       <Header title="Aviso de avería (SAP)" />
-      <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 120 }}>
+      <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 140 }}>
         <Text style={styles.section}>Datos base</Text>
         <View style={styles.card}>
           <Text style={styles.label}>Orden</Text>
@@ -249,24 +296,17 @@ export default function AvisoAveriaSapScreen() {
           <Text style={styles.label}>Descripción breve (ShortText)</Text>
           <TextInput
             style={styles.input}
-            value={shortText}
             onChangeText={setShortText}
             placeholder="Breve descripción del aviso"
           />
 
-          <Text style={[styles.label, { marginTop: 10 }]}>
-            Código de circunstancia (Catálogo = P)
-          </Text>
-          <View style={styles.chipsWrap}>
-            {catP.map((c) => (
-              <Chip
-                key={c.Codigo}
-                label={`${c.Codigo} - ${c.Descripcion}`}
-                active={selP?.Codigo === c.Codigo}
-                onPress={() => setSelP(c)}
-              />
-            ))}
-          </View>
+          <Text style={styles.label}>Descripción de la pieza (se manda a SAP en NotificationTextSet)</Text>
+          <TextInput
+            style={styles.input}
+            value={piezaDescripcion}
+            onChangeText={setPiezaDescripcion}
+            placeholder="Ej: sensor, polea, etc."
+          />
         </View>
 
         <Text style={styles.section}>Falla en la pieza / daño</Text>
@@ -280,22 +320,25 @@ export default function AvisoAveriaSapScreen() {
           />
 
           <Text style={[styles.label, { marginTop: 10 }]}>
-            Código de daño (Catálogo = R)
+            Código de daño (Catálogo = R) – máx 2
           </Text>
           <View style={styles.chipsWrap}>
-            {catR.map((c) => (
-              <Chip
-                key={c.Codigo}
-                label={`${c.Codigo} - ${c.Descripcion}`}
-                active={selR?.Codigo === c.Codigo}
-                onPress={() => setSelR(c)}
-              />
-            ))}
+            {catR.map((c) => {
+              const isActive = selR.some((sel) => sel.Codigo === c.Codigo);
+              return (
+                <Chip
+                  key={c.Codigo}
+                  label={`${c.Codigo} - ${c.Descripcion}`}
+                  active={isActive}
+                  onPress={() => setSelR((prev) => toggleMultiWithLimit(prev, c, 2))}
+                />
+              );
+            })}
           </View>
+        </View>
 
-          <Text style={[styles.label, { marginTop: 10 }]}>
-            Código de localización (Catálogo = S)
-          </Text>
+        <Text style={styles.section}>Código de localización</Text>
+        <View style={styles.card}>
           <View style={styles.chipsWrap}>
             {catS.map((c) => (
               <Chip
@@ -319,41 +362,58 @@ export default function AvisoAveriaSapScreen() {
           />
 
           <Text style={[styles.label, { marginTop: 10 }]}>
-            Código de causa (Catálogo = T)
+            Código de causa (Catálogo = T) – máx 2
           </Text>
           <View style={styles.chipsWrap}>
-            {catT.map((c) => (
-              <Chip
-                key={c.Codigo}
-                label={`${c.Codigo} - ${c.Descripcion}`}
-                active={selT?.Codigo === c.Codigo}
-                onPress={() => setSelT(c)}
-              />
-            ))}
+            {catT.map((c) => {
+              const isActive = selT.some((sel) => sel.Codigo === c.Codigo);
+              return (
+                <Chip
+                  key={c.Codigo}
+                  label={`${c.Codigo} - ${c.Descripcion}`}
+                  active={isActive}
+                  onPress={() => setSelT((prev) => toggleMultiWithLimit(prev, c, 2))}
+                />
+              );
+            })}
           </View>
         </View>
 
-        <TouchableOpacity style={styles.btnPrimary} onPress={onGuardar}>
-          <Text style={styles.btnPrimaryText}>Crear aviso en SAP</Text>
+        <Text style={styles.section}>Evidencia (foto)</Text>
+        <View style={styles.card}>
+          <TouchableOpacity style={styles.btnSecondary} onPress={handleTakePhoto}>
+            <Text style={styles.btnSecondaryText}>Tomar foto de evidencia</Text>
+          </TouchableOpacity>
+
+          {evidenceUri ? (
+            <View style={{ marginTop: 12 }}>
+              <Text style={styles.label}>Foto capturada:</Text>
+              <Image
+                source={{ uri: evidenceUri }}
+                style={{ width: '100%', height: 200, borderRadius: 12, marginTop: 6 }}
+                resizeMode="cover"
+              />
+            </View>
+          ) : (
+            <Text style={[styles.label, { marginTop: 8 }]}>Aún no se ha tomado ninguna foto.</Text>
+          )}
+        </View>
+
+        <TouchableOpacity
+          style={[styles.btnPrimary, saving && styles.btnPrimaryDisabled]}
+          onPress={onGuardar}
+          disabled={saving}
+        >
+          {saving ? <ActivityIndicator color="#FFFFFF" /> : <Text style={styles.btnPrimaryText}>Crear aviso en SAP</Text>}
         </TouchableOpacity>
       </ScrollView>
-      <Footer />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  center: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  section: {
-    marginTop: 18,
-    fontSize: 18,
-    fontWeight: '800',
-    color: FIORI.text,
-  },
+  center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  section: { marginTop: 18, fontSize: 18, fontWeight: '800', color: FIORI.text },
   card: {
     backgroundColor: FIORI.card,
     borderRadius: 14,
@@ -362,16 +422,8 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: FIORI.border,
   },
-  label: {
-    fontSize: 12,
-    color: FIORI.textMuted,
-    marginTop: 6,
-  },
-  value: {
-    fontSize: 15,
-    color: FIORI.text,
-    fontWeight: '600',
-  },
+  label: { fontSize: 12, color: FIORI.textMuted, marginTop: 6 },
+  value: { fontSize: 15, color: FIORI.text, fontWeight: '600' },
   input: {
     borderWidth: 1,
     borderColor: FIORI.border,
@@ -383,12 +435,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     marginTop: 4,
   },
-  chipsWrap: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-    marginTop: 8,
-  },
+  chipsWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8 },
   chip: {
     borderWidth: 1,
     borderColor: FIORI.border,
@@ -397,18 +444,9 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     backgroundColor: '#FFFFFF',
   },
-  chipOn: {
-    backgroundColor: FIORI.primary,
-    borderColor: FIORI.primary,
-  },
-  chipText: {
-    fontSize: 11,
-    color: FIORI.text,
-    fontWeight: '700',
-  },
-  chipTextOn: {
-    color: '#FFFFFF',
-  },
+  chipOn: { backgroundColor: FIORI.primary, borderColor: FIORI.primary },
+  chipText: { fontSize: 11, color: FIORI.text, fontWeight: '700' },
+  chipTextOn: { color: '#FFFFFF' },
   btnPrimary: {
     marginTop: 20,
     backgroundColor: FIORI.danger,
@@ -416,9 +454,8 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     alignItems: 'center',
   },
-  btnPrimaryText: {
-    color: '#FFFFFF',
-    fontWeight: '900',
-    fontSize: 16,
-  },
+  btnPrimaryDisabled: { opacity: 0.7 },
+  btnPrimaryText: { color: '#FFFFFF', fontWeight: '900', fontSize: 16 },
+  btnSecondary: { backgroundColor: '#111827', paddingVertical: 10, borderRadius: 12, alignItems: 'center' },
+  btnSecondaryText: { color: '#FFFFFF', fontWeight: '700', fontSize: 14 },
 });

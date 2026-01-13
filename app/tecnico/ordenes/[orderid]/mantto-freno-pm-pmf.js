@@ -4,7 +4,6 @@ import { View, Text, TextInput, TouchableOpacity, StyleSheet, ScrollView, Activi
 import { useLocalSearchParams, router } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Header from '../../../../src/components/Header';
-import Footer from '../../../../src/components/Footer';
 import api from '../../../../src/services/api';
 
 // —— UI utilitaria (mismo patrón que tu ejemplo) ——
@@ -322,7 +321,6 @@ export default function ManttoFrenoPMFForm() {
           <Text style={[styles.btnText, { color: '#fff' }]}>{saving ? 'Guardando…' : 'Guardar'}</Text>
         </TouchableOpacity>
       </ScrollView>
-      <Footer />
     </View>
   );
 }

@@ -10,7 +10,6 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import Header from '../../src/components/Header';
-import Footer from '../../src/components/Footer';
 import { router } from 'expo-router';
 
 const SAP_BG = '#F4F6F9';
@@ -32,18 +31,6 @@ const ADMIN_TILES = [
     title: 'Órdenes de servicio',
     icon: 'document-text-outline',
     onPress: () => router.push('/admin/ordenes'),
-  },
-  {
-    key: 'materiales',
-    title: 'Materiales asignados',
-    icon: 'construct-outline',
-    onPress: () => router.push('/admin/materiales'),
-  },
-  {
-    key: 'planes',
-    title: 'Planes de mantenimiento',
-    icon: 'calendar-outline',
-    onPress: () => router.push('/admin/planes'),
   },
   {
     key: 'monitoreo',
@@ -135,8 +122,6 @@ export default function AdminHome() {
           />
         )}
       />
-
-      <Footer />
     </View>
   );
 }

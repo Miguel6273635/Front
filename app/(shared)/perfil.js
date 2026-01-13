@@ -1,7 +1,6 @@
 import React from 'react';
 import { View, Text, StyleSheet, Image, ScrollView } from 'react-native';
 import Header from '../../src/components/Header';
-import Footer from '../../src/components/Footer';
 import { useAuth } from '../../src/context/AuthContext';
 import Colors from '../../src/constants/colors';
 
@@ -36,7 +35,7 @@ export default function PerfilScreen() {
         </View>
       </ScrollView>
 
-      <Footer />
+      
     </View>
   );
 }

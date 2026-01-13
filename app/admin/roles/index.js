@@ -11,7 +11,6 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import Header from '../../../src/components/Header';
-import Footer from '../../../src/components/Footer';
 import { useAuth } from '../../../src/context/AuthContext';
 import api from '../../../src/services/api';
 
@@ -210,7 +209,7 @@ export default function RolesAdminScreen() {
         </ScrollView>
       )}
 
-      <Footer />
+   
     </View>
   );
 }

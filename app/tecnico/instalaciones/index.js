@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { View, Text, FlatList, TouchableOpacity, StyleSheet, Alert, ActivityIndicator } from 'react-native';
 import Header from '../../../src/components/Header';
-import Footer from '../../../src/components/Footer';
 import { router } from 'expo-router';
 
 export default function InstalacionesTecnico() {
@@ -85,7 +84,7 @@ export default function InstalacionesTecnico() {
           contentContainerStyle={{ padding: 20 }}
         />
       )}
-      <Footer />
+      
     </View>
   );
 }

@@ -6,7 +6,6 @@ import {
   ScrollView,
 } from 'react-native';
 import Header from '../../../../src/components/Header';
-import Footer from '../../../../src/components/Footer';
 
 export default function DetallesInstalacion({ route }) {
   const { id, ubicacion, lugar, equipo, estatus, inicio, termino } = route || {
@@ -33,7 +32,7 @@ export default function DetallesInstalacion({ route }) {
                 <Text style={styles.fecha}>Término: {termino}</Text>
                 </View>
             </ScrollView>
-        <Footer />
+       
     </View>
 
   );
