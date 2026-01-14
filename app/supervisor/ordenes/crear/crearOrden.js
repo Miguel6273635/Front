@@ -1,5 +1,5 @@
 // app/supervisor/averia/[averiaid]/crear-orden-mantto.js
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -78,6 +78,57 @@ function toIsoLocalDateTime(hour = 8, minute = 0, plusDays = 0) {
   return `${yyyy}-${mm}-${dd}T${hh}:${mi}:${ss}`;
 }
 
+// Extrae OrderId desde Return.results (tu caso real)
+function extractOrderFromReturn(d) {
+  const returns = d?.Return?.results || [];
+  if (!Array.isArray(returns) || returns.length === 0) {
+    return { orderId: null, message: null, hasError: false, errorMessage: null };
+  }
+
+  // Detecta si hay errores (Type "E")
+  const errItem = returns.find((r) => String(r?.Type || '').toUpperCase() === 'E');
+  const hasError = !!errItem;
+  const errorMessage = errItem?.Message || null;
+
+  // 1) Preferido: el registro exacto que trae el número en tu ejemplo (Id IWO_BAPI2, Number 126)
+  let item =
+    returns.find((r) => String(r?.Id || '') === 'IWO_BAPI2' && String(r?.Number || '') === '126') ||
+    null;
+
+  // 2) Si no, busca el que contenga "se ha grabado con número"
+  if (!item) {
+    item = returns.find((r) =>
+      String(r?.Message || '').toLowerCase().includes('se ha grabado con número')
+    );
+  }
+
+  // 3) Fallback: cualquier mensaje que mencione "número"
+  if (!item) {
+    item = returns.find((r) => String(r?.Message || '').toLowerCase().includes('número'));
+  }
+
+  const message = item?.Message || null;
+
+  // ✅ En tu JSON, el número viene en MessageV2
+  const orderId =
+    (item?.MessageV2 && String(item.MessageV2).trim()) ||
+    null;
+
+  // Fallback regex por si MessageV2 viene vacío alguna vez
+  let orderIdFromRegex = null;
+  if (!orderId && message) {
+    const m = String(message).match(/n[uú]mero\s+(\d{6,12})/i);
+    orderIdFromRegex = m?.[1] || null;
+  }
+
+  return {
+    orderId: orderId || orderIdFromRegex,
+    message,
+    hasError,
+    errorMessage,
+  };
+}
+
 export default function CrearOrdenMantto() {
   const { averiaid, notifNo, equipment, functLoc, shortText } =
     useLocalSearchParams();
@@ -97,34 +148,36 @@ export default function CrearOrdenMantto() {
 
   // Operaciones
   const [operations, setOperations] = useState([
-    {
-      Activity: '0010',
-      Description: '',
-      DurationNormal: '',
-    },
-    {
-      Activity: '0020',
-      Description: '',
-      DurationNormal: '',
-    },
+    { Activity: '0010', Description: '', DurationNormal: '', IsExternal: false },
+    { Activity: '0020', Description: '', DurationNormal: '', IsExternal: false },
   ]);
 
-  // Componentes (materiales) – cada uno con su propia categoría y catálogo
+  // Componentes (materiales)
   const [components, setComponents] = useState([
     {
       ItemNumber: '0010',
-      Category: '',            // categoría seleccionada (Agrupador2)
-      Materials: [],           // catálogo devuelto por OData para esa categoría
-      LoadingMaterials: false, // spinner por componente
-      Material: '',            // código seleccionado (Material)
+      Category: '',
+      Materials: [],
+      LoadingMaterials: false,
+      Material: '',
       RequirementQuantity: '',
       StgeLoc: '',
-      Plant: planPlant,        // TLP1 por defecto
-      Activity: '0010',        // siempre 0010
+      Plant: planPlant,
+      Activity: '0010',
+      Trackingno: '03',
+
+      NotFound: false,
+      MultiSelected: [],
+      MultiTrackingno: '02',
     },
   ]);
 
   const [saving, setSaving] = useState(false);
+
+  // Multi select modal
+  const [multiVisible, setMultiVisible] = useState(false);
+  const [multiIndex, setMultiIndex] = useState(-1);
+  const [multiQuery, setMultiQuery] = useState('');
 
   const goBack = () => router.back();
 
@@ -160,7 +213,7 @@ export default function CrearOrdenMantto() {
     fetchWorkCenters();
   }, []);
 
-  // ===== Helpers de estado =====
+  // ===== Helpers =====
   const updateOperation = (index, field, value) => {
     setOperations((prev) =>
       prev.map((op, i) => (i === index ? { ...op, [field]: value } : op))
@@ -169,14 +222,10 @@ export default function CrearOrdenMantto() {
 
   const addOperation = () => {
     const nextIndex = operations.length;
-    const nextActivity = String((nextIndex + 1) * 10).padStart(4, '0'); // 0010, 0020, 0030...
+    const nextActivity = String((nextIndex + 1) * 10).padStart(4, '0');
     setOperations((prev) => [
       ...prev,
-      {
-        Activity: nextActivity,
-        Description: '',
-        DurationNormal: '',
-      },
+      { Activity: nextActivity, Description: '', DurationNormal: '', IsExternal: false },
     ]);
   };
 
@@ -196,7 +245,7 @@ export default function CrearOrdenMantto() {
 
   const addComponent = () => {
     const nextIndex = components.length;
-    const nextItem = String((nextIndex + 1) * 10).padStart(4, '0'); // 0010, 0020, 0030, ...
+    const nextItem = String((nextIndex + 1) * 10).padStart(4, '0');
     setComponents((prev) => [
       ...prev,
       {
@@ -209,6 +258,10 @@ export default function CrearOrdenMantto() {
         StgeLoc: '',
         Plant: planPlant,
         Activity: '0010',
+        Trackingno: '03',
+        NotFound: false,
+        MultiSelected: [],
+        MultiTrackingno: '02',
       },
     ]);
   };
@@ -221,10 +274,15 @@ export default function CrearOrdenMantto() {
     setComponents((prev) => prev.filter((_, i) => i !== index));
   };
 
-  // ==== Cargar materiales para UNA categoría y UN componente específico ====
+  const openMultiSelect = (index) => {
+    setMultiIndex(index);
+    setMultiQuery('');
+    setMultiVisible(true);
+  };
+
+  // ==== Cargar materiales por categoría y componente ====
   const handleCategoryChangeForComponent = async (index, category) => {
     if (!category) {
-      // Limpia selección de categoría/material/catálogo
       setComponents((prev) =>
         prev.map((c, i) =>
           i === index
@@ -234,6 +292,9 @@ export default function CrearOrdenMantto() {
                 Materials: [],
                 Material: '',
                 LoadingMaterials: false,
+                NotFound: false,
+                MultiSelected: [],
+                MultiTrackingno: '02',
               }
             : c
         )
@@ -241,17 +302,10 @@ export default function CrearOrdenMantto() {
       return;
     }
 
-    // 1) Marcamos la categoría y ponemos loading en ese componente
     setComponents((prev) =>
       prev.map((c, i) =>
         i === index
-          ? {
-              ...c,
-              Category: category,
-              Materials: [],
-              Material: '',
-              LoadingMaterials: true,
-            }
+          ? { ...c, Category: category, Materials: [], Material: '', LoadingMaterials: true }
           : c
       )
     );
@@ -267,7 +321,6 @@ export default function CrearOrdenMantto() {
       const json = await res.json();
       const list = json?.d?.results ?? json?.value ?? [];
 
-      // NO eliminar duplicados – se manda tal cual viene
       const mapped = list.map((m) => ({
         Id: m.Id,
         Material: m.Material,
@@ -276,49 +329,25 @@ export default function CrearOrdenMantto() {
 
       setComponents((prev) =>
         prev.map((c, i) =>
-          i === index
-            ? {
-                ...c,
-                Materials: mapped,
-                LoadingMaterials: false,
-              }
-            : c
+          i === index ? { ...c, Materials: mapped, LoadingMaterials: false } : c
         )
       );
     } catch (err) {
       console.error('Error al cargar MaterialesCoberturaSet:', err);
-      Alert.alert(
-        'Catálogo de materiales',
-        'No se pudo cargar el catálogo de materiales de cobertura.'
-      );
-      // Apagamos el loading aunque haya error
+      Alert.alert('Catálogo de materiales', 'No se pudo cargar el catálogo.');
       setComponents((prev) =>
-        prev.map((c, i) =>
-          i === index
-            ? {
-                ...c,
-                LoadingMaterials: false,
-              }
-            : c
-        )
+        prev.map((c, i) => (i === index ? { ...c, LoadingMaterials: false } : c))
       );
     }
   };
 
   const onGuardar = async () => {
     if (!selectedWorkCenter) {
-      Alert.alert(
-        'Centro de trabajo',
-        'Debes seleccionar un técnico / centro de trabajo (MnWkCtr).'
-      );
+      Alert.alert('Centro de trabajo', 'Debes seleccionar un técnico (MnWkCtr).');
       return;
     }
-
     if (!headerShortText.trim()) {
-      Alert.alert(
-        'Descripción corta',
-        'Captura la descripción corta (ShortText) de la orden.'
-      );
+      Alert.alert('Descripción corta', 'Captura el ShortText.');
       return;
     }
 
@@ -331,19 +360,53 @@ export default function CrearOrdenMantto() {
     );
 
     if (!opsValidas.length) {
-      Alert.alert(
-        'Operaciones',
-        'Cada operación debe tener Activity (auto), descripción y duración (en horas) válidas.'
-      );
+      Alert.alert('Operaciones', 'Debe haber operaciones válidas.');
       return;
     }
 
-    const compsValidas = components.filter(
-      (c) => c.Material && c.RequirementQuantity
-    );
-
     const workCntrValue = String(selectedWorkCenter.Arbpl || '').trim();
     const planPlantValue = String(planPlant).trim();
+
+    // ===== Components payload (soporta NotFound multi) =====
+    const componentItems = [];
+    components.forEach((c) => {
+      const stge = String(c.StgeLoc || '').trim();
+      const qty = String(c.RequirementQuantity || '').trim();
+
+      if (c.NotFound) {
+        const tracking = String(c.MultiTrackingno || '02').trim(); // 01 Oferta / 02 Préstamo
+        (c.MultiSelected || []).forEach((mSel) => {
+          componentItems.push({
+            ItemNumber: String(c.ItemNumber || '').trim(),
+            Material: String(mSel.Material || '').trim(),
+            RequirementQuantity: qty,
+            StgeLoc: stge,
+            Plant: planPlantValue,
+            Activity: '0010',
+            Trackingno: tracking,
+          });
+        });
+        return;
+      }
+
+      const hasSomething =
+        String(c.Material || '').trim() ||
+        String(c.RequirementQuantity || '').trim() ||
+        String(c.StgeLoc || '').trim() ||
+        String(c.Category || '').trim();
+
+      if (!hasSomething) return;
+
+      componentItems.push({
+        ItemNumber: String(c.ItemNumber || '').trim(),
+        Material: String(c.Material || '').trim(),
+        RequirementQuantity: qty,
+        StgeLoc: stge,
+        Plant: planPlantValue,
+        Activity: '0010',
+        Trackingno: String(c.Trackingno || '03').trim(),
+      });
+    });
 
     const payload = {
       WorkOrderHeader: {
@@ -355,65 +418,49 @@ export default function CrearOrdenMantto() {
         StartDate: String(startDate).trim(),
         FinishDate: String(finishDate).trim(),
       },
-      WorkOrderOperationSet: opsValidas.map((op) => ({
-        Activity: String(op.Activity || '').trim(),
-        WorkCntr: workCntrValue,
-        Plant: planPlantValue,
-        Description: String(op.Description || '').trim(),
-        DurationNormal: String(op.DurationNormal || '').trim(),
-      })),
-      WorkOrderComponentSet: compsValidas.map((c) => ({
-        ItemNumber: String(c.ItemNumber || '').trim(),
-        Material: String(c.Material || '').trim(),
-        RequirementQuantity: String(c.RequirementQuantity || '').trim(),
-        StgeLoc: String(c.StgeLoc || '').trim(),
-        Plant: planPlantValue,
-        Activity: '0010',
-      })),
+      WorkOrderOperationSet: opsValidas.map((op) => {
+        const base = {
+          Activity: String(op.Activity || '').trim(),
+          WorkCntr: workCntrValue,
+          Plant: planPlantValue,
+          Description: String(op.Description || '').trim(),
+          DurationNormal: String(op.DurationNormal || '').trim(),
+        };
+        if (op.IsExternal) base.ControlKey = 'X';
+        return base;
+      }),
+      WorkOrderComponentSet: componentItems,
     };
 
     try {
       setSaving(true);
 
       const res = await api.post(
-        '/sap/ordenes/crear-mantenimiento-desde-aviso',
-        {
-          averiaId: averiaid,
-          notifNo: notifNo,
-          payload,
-        }
+        '/api/odata/ZCS_CREATE_WORKORDER_SRV_02/WorkOrderSet',
+        payload
       );
 
-      // 👀 Log para que veas exactamente qué llega
-      console.log(
-        'Respuesta crear orden mantto:',
-        JSON.stringify(res.data, null, 2)
-      );
+      console.log('Respuesta crear orden mantto:', JSON.stringify(res.data, null, 2));
 
-      const d = res?.data?.d || res?.data || {};
-      
-      // 1) Lo que calculaste en backend (recomendado)
-      let orderId = d?.createdOrderId;
+      const data = res?.data || {};
+      const d = data?.d || data;
 
-      // 2) Fallbacks por si acaso
-      if (!orderId) {
-        orderId =
-          d?.OrderId ||
-          d?.WorkOrderHeader?.Orderid ||
-          null;
+      // ✅ Aquí se obtiene el número REAL (MessageV2) desde ReturnSet
+      const { orderId, message, hasError, errorMessage } = extractOrderFromReturn(d);
+
+      // Si en el Return hay error, lo mostramos (pero aun así puede venir orderId)
+      if (hasError && !orderId) {
+        Alert.alert('Error SAP', errorMessage || 'Error al crear la orden.');
+        return;
       }
+
+      // Mensaje principal
+      const finalMsg = message || (orderId ? `Orden creada con número ${orderId}` : 'Orden creada.');
 
       Alert.alert(
         'Orden creada',
-        orderId
-          ? `Se creó la orden de mantenimiento ${orderId} correctamente.`
-          : 'La orden de mantenimiento se creó correctamente.',
-        [
-          {
-            text: 'OK',
-            onPress: () => router.back(),
-          },
-        ]
+        orderId ? `${finalMsg}\n\nNo. Orden: ${orderId}` : finalMsg,
+        [{ text: 'OK', onPress: () => router.back() }]
       );
     } catch (err) {
       console.error('Error al crear orden de mantenimiento:', err);
@@ -428,23 +475,16 @@ export default function CrearOrdenMantto() {
     }
   };
 
-
   return (
     <View style={styles.container}>
       <Header title="Crear orden de mantenimiento" />
 
       <ScrollView contentContainerStyle={styles.scrollContent}>
-        {/* Botón regresar */}
-        <TouchableOpacity
-          style={styles.backRow}
-          onPress={goBack}
-          activeOpacity={0.6}
-        >
+        <TouchableOpacity style={styles.backRow} onPress={goBack} activeOpacity={0.6}>
           <Ionicons name="chevron-back" size={20} color={COLORS.accent} />
           <Text style={styles.backText}>Volver al aviso</Text>
         </TouchableOpacity>
 
-        {/* Card: contexto del aviso */}
         <View style={styles.cardHighlight}>
           <View style={styles.chipRow}>
             <View style={styles.chip}>
@@ -454,9 +494,7 @@ export default function CrearOrdenMantto() {
                 color={COLORS.accent}
                 style={{ marginRight: 4 }}
               />
-              <Text style={styles.chipText}>
-                Aviso {notifNo || averiaid}
-              </Text>
+              <Text style={styles.chipText}>Aviso {notifNo || averiaid}</Text>
             </View>
 
             {equipment ? (
@@ -475,9 +513,7 @@ export default function CrearOrdenMantto() {
           {shortText ? (
             <Text style={styles.mainTitle}>{shortText}</Text>
           ) : (
-            <Text style={styles.mainTitleMuted}>
-              Sin descripción corta en el aviso
-            </Text>
+            <Text style={styles.mainTitleMuted}>Sin descripción corta en el aviso</Text>
           )}
 
           <View style={styles.block}>
@@ -486,7 +522,7 @@ export default function CrearOrdenMantto() {
           </View>
         </View>
 
-        {/* Card: WorkOrderHeader */}
+        {/* Card Header */}
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>Datos de la orden</Text>
 
@@ -499,7 +535,6 @@ export default function CrearOrdenMantto() {
             </View>
           </View>
 
-          {/* ShortText editable */}
           <View style={{ marginTop: 12, marginBottom: 14 }}>
             <Text style={styles.fieldLabel}>Descripción corta (ShortText)</Text>
             <TextInput
@@ -512,10 +547,7 @@ export default function CrearOrdenMantto() {
             />
           </View>
 
-          {/* Centro de trabajo / técnico (MnWkCtr) */}
-          <Text style={styles.fieldLabel}>
-            Centro de trabajo / técnico (MnWkCtr)
-          </Text>
+          <Text style={styles.fieldLabel}>Centro de trabajo / técnico (MnWkCtr)</Text>
           {loadingWorkCenters ? (
             <View style={{ paddingVertical: 8 }}>
               <ActivityIndicator color={COLORS.accent} />
@@ -528,7 +560,6 @@ export default function CrearOrdenMantto() {
             />
           )}
 
-          {/* Fechas inicio / fin */}
           <View style={styles.dateRow}>
             <View style={styles.dateCol}>
               <Text style={styles.fieldLabel}>Fecha inicio (StartDate)</Text>
@@ -553,13 +584,12 @@ export default function CrearOrdenMantto() {
           </View>
 
           <Text style={styles.helpText}>
-            Formato:{' '}
-            <Text style={{ fontWeight: '700' }}>YYYY-MM-DDTHH:mm:ss</Text>{' '}
-            (ej. 2025-07-29T08:00:00)
+            Formato: <Text style={{ fontWeight: '700' }}>YYYY-MM-DDTHH:mm:ss</Text> (ej.
+            2025-07-29T08:00:00)
           </Text>
         </View>
 
-        {/* Card: Operaciones */}
+        {/* Operaciones */}
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>Operaciones</Text>
           <Text style={styles.sectionSubtitle}>
@@ -573,29 +603,43 @@ export default function CrearOrdenMantto() {
                   Operación {index + 1} · Activity {op.Activity || '—'}
                 </Text>
                 {operations.length > 1 && (
-                  <TouchableOpacity
-                    onPress={() => removeOperation(index)}
-                    style={styles.opDeleteBtn}
-                  >
-                    <Ionicons
-                      name="trash-outline"
-                      size={16}
-                      color={COLORS.danger}
-                    />
+                  <TouchableOpacity onPress={() => removeOperation(index)} style={styles.opDeleteBtn}>
+                    <Ionicons name="trash-outline" size={16} color={COLORS.danger} />
                   </TouchableOpacity>
                 )}
               </View>
 
               <Row label="Activity" value={op.Activity} />
 
+              <Text style={styles.fieldLabel}>Tipo de operación</Text>
+              <View style={styles.toggleRow}>
+                <TouchableOpacity
+                  style={[styles.toggleChip, !op.IsExternal && styles.toggleChipActive]}
+                  onPress={() => updateOperation(index, 'IsExternal', false)}
+                  activeOpacity={0.85}
+                >
+                  <Text style={[styles.toggleText, !op.IsExternal && styles.toggleTextActive]}>
+                    Interna
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[styles.toggleChip, op.IsExternal && styles.toggleChipActive]}
+                  onPress={() => updateOperation(index, 'IsExternal', true)}
+                  activeOpacity={0.85}
+                >
+                  <Text style={[styles.toggleText, op.IsExternal && styles.toggleTextActive]}>
+                    Externa (ControlKey X)
+                  </Text>
+                </TouchableOpacity>
+              </View>
+
               <View style={{ marginBottom: 10 }}>
                 <Text style={styles.fieldLabel}>Descripción de la actividad</Text>
                 <TextInput
                   style={[styles.input, { minHeight: 60, textAlignVertical: 'top' }]}
                   value={op.Description}
-                  onChangeText={(txt) =>
-                    updateOperation(index, 'Description', txt)
-                  }
+                  onChangeText={(txt) => updateOperation(index, 'Description', txt)}
                   placeholder="Describe la actividad de mantenimiento..."
                   placeholderTextColor={COLORS.muted}
                   multiline
@@ -606,11 +650,7 @@ export default function CrearOrdenMantto() {
                 label="Duración (horas) - DurationNormal"
                 value={op.DurationNormal}
                 onChangeText={(txt) =>
-                  updateOperation(
-                    index,
-                    'DurationNormal',
-                    txt.replace(/[^0-9.]/g, '')
-                  )
+                  updateOperation(index, 'DurationNormal', txt.replace(/[^0-9.]/g, ''))
                 }
                 placeholder="Ej. 2"
                 keyboardType="numeric"
@@ -624,13 +664,11 @@ export default function CrearOrdenMantto() {
           </TouchableOpacity>
         </View>
 
-        {/* Card: Componentes / materiales */}
+        {/* Componentes */}
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>Componentes / materiales</Text>
           <Text style={styles.sectionSubtitle}>
-            Opcional: materiales que consideras necesarios para la orden.
-            {'\n'}
-            Para cada componente, selecciona una categoría y luego el material.
+            Opcional: materiales necesarios para la orden. Para cada componente, selecciona categoría y material.
           </Text>
 
           {components.map((c, index) => (
@@ -640,22 +678,14 @@ export default function CrearOrdenMantto() {
                   Componente {index + 1} · ItemNumber {c.ItemNumber}
                 </Text>
                 {components.length > 1 && (
-                  <TouchableOpacity
-                    onPress={() => removeComponent(index)}
-                    style={styles.opDeleteBtn}
-                  >
-                    <Ionicons
-                      name="trash-outline"
-                      size={16}
-                      color={COLORS.danger}
-                    />
+                  <TouchableOpacity onPress={() => removeComponent(index)} style={styles.opDeleteBtn}>
+                    <Ionicons name="trash-outline" size={16} color={COLORS.danger} />
                   </TouchableOpacity>
                 )}
               </View>
 
               <Row label="ItemNumber" value={c.ItemNumber} />
 
-              {/* Categoría por componente */}
               <Text style={styles.fieldLabel}>Categoría de material</Text>
               <View style={styles.categoryRow}>
                 <ScrollView horizontal showsHorizontalScrollIndicator={false}>
@@ -665,21 +695,11 @@ export default function CrearOrdenMantto() {
                       return (
                         <TouchableOpacity
                           key={cat}
-                          style={[
-                            styles.categoryChip,
-                            active && styles.categoryChipActive,
-                          ]}
-                          onPress={() =>
-                            handleCategoryChangeForComponent(index, cat)
-                          }
+                          style={[styles.categoryChip, active && styles.categoryChipActive]}
+                          onPress={() => handleCategoryChangeForComponent(index, cat)}
                           activeOpacity={0.8}
                         >
-                          <Text
-                            style={[
-                              styles.categoryChipText,
-                              active && styles.categoryChipTextActive,
-                            ]}
-                          >
+                          <Text style={[styles.categoryChipText, active && styles.categoryChipTextActive]}>
                             {cat}
                           </Text>
                         </TouchableOpacity>
@@ -695,28 +715,112 @@ export default function CrearOrdenMantto() {
                 </View>
               )}
 
-              {/* Selector de Material desde OData (muestra Descripcion, manda Material) */}
               <View style={{ marginBottom: 10 }}>
                 <Text style={styles.fieldLabel}>Material</Text>
                 <SelectMaterial
                   items={c.Materials || []}
                   value={c.Material}
-                  onSelect={(materialCode) =>
-                    updateComponent(index, 'Material', materialCode)
-                  }
-                  disabled={!c.Category || c.LoadingMaterials}
+                  onSelect={(materialCode) => updateComponent(index, 'Material', materialCode)}
+                  disabled={!c.Category || c.LoadingMaterials || c.NotFound}
                 />
               </View>
+
+              {!c.NotFound && (
+                <>
+                  <Text style={styles.fieldLabel}>Tipo de material</Text>
+                  <View style={styles.toggleRow}>
+                    <TouchableOpacity
+                      style={[styles.toggleChip, c.Trackingno === '03' && styles.toggleChipActive]}
+                      onPress={() => updateComponent(index, 'Trackingno', '03')}
+                      activeOpacity={0.85}
+                    >
+                      <Text style={[styles.toggleText, c.Trackingno === '03' && styles.toggleTextActive]}>
+                        Directo (03)
+                      </Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={[styles.toggleChip, c.Trackingno === '02' && styles.toggleChipActive]}
+                      onPress={() => updateComponent(index, 'Trackingno', '02')}
+                      activeOpacity={0.85}
+                    >
+                      <Text style={[styles.toggleText, c.Trackingno === '02' && styles.toggleTextActive]}>
+                        Préstamo / Falla (02)
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                </>
+              )}
+
+              <TouchableOpacity
+                style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 10 }}
+                onPress={() => {
+                  const next = !c.NotFound;
+                  updateComponent(index, 'NotFound', next);
+                  if (next) updateComponent(index, 'Material', '');
+                  else {
+                    updateComponent(index, 'MultiSelected', []);
+                    updateComponent(index, 'MultiTrackingno', '02');
+                  }
+                }}
+                activeOpacity={0.85}
+              >
+                <View style={[styles.checkbox, c.NotFound && styles.checkboxChecked]}>
+                  {c.NotFound && <Ionicons name="checkmark" size={14} color="#fff" />}
+                </View>
+                <Text style={{ color: COLORS.title, fontWeight: '800' }}>
+                  Material no encontrado
+                </Text>
+              </TouchableOpacity>
+
+              {c.NotFound && (
+                <>
+                  <TouchableOpacity
+                    style={[styles.btnMini, (!c.Category || c.LoadingMaterials) && { opacity: 0.6 }]}
+                    disabled={!c.Category || c.LoadingMaterials}
+                    onPress={() => openMultiSelect(index)}
+                    activeOpacity={0.85}
+                  >
+                    <Ionicons name="list-outline" size={16} color={COLORS.accent} />
+                    <Text style={styles.btnMiniText}>Seleccionar materiales</Text>
+                  </TouchableOpacity>
+
+                  <Text style={{ marginTop: 6, fontSize: 12, color: COLORS.text }}>
+                    Seleccionados: {(c.MultiSelected || []).length}
+                  </Text>
+
+                  <Text style={[styles.fieldLabel, { marginTop: 10 }]}>
+                    Tipo para “no encontrado”
+                  </Text>
+                  <View style={styles.toggleRow}>
+                    <TouchableOpacity
+                      style={[styles.toggleChip, c.MultiTrackingno === '02' && styles.toggleChipActive]}
+                      onPress={() => updateComponent(index, 'MultiTrackingno', '02')}
+                      activeOpacity={0.85}
+                    >
+                      <Text style={[styles.toggleText, c.MultiTrackingno === '02' && styles.toggleTextActive]}>
+                        Préstamo (02)
+                      </Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={[styles.toggleChip, c.MultiTrackingno === '01' && styles.toggleChipActive]}
+                      onPress={() => updateComponent(index, 'MultiTrackingno', '01')}
+                      activeOpacity={0.85}
+                    >
+                      <Text style={[styles.toggleText, c.MultiTrackingno === '01' && styles.toggleTextActive]}>
+                        Oferta (01)
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                </>
+              )}
 
               <Field
                 label="Cantidad requerida (RequirementQuantity)"
                 value={c.RequirementQuantity}
                 onChangeText={(txt) =>
-                  updateComponent(
-                    index,
-                    'RequirementQuantity',
-                    txt.replace(/[^0-9.]/g, '')
-                  )
+                  updateComponent(index, 'RequirementQuantity', txt.replace(/[^0-9.]/g, ''))
                 }
                 placeholder="Ej. 2"
                 keyboardType="numeric"
@@ -727,13 +831,9 @@ export default function CrearOrdenMantto() {
                 value={c.StgeLoc}
                 onChangeText={(txt) => updateComponent(index, 'StgeLoc', txt)}
                 placeholder="BHER"
-                
               />
 
-              {/* Plant solo lectura: viene del header */}
               <Row label="Planta (Plant)" value={planPlant} />
-
-              {/* Activity ligada solo informativa, siempre 0010 en payload */}
               <Row label="Activity ligada" value="0010" />
             </View>
           ))}
@@ -744,7 +844,7 @@ export default function CrearOrdenMantto() {
           </TouchableOpacity>
         </View>
 
-        {/* Botón guardar */}
+        {/* Guardar */}
         <Pressable
           android_ripple={{ color: 'rgba(255,255,255,0.2)' }}
           style={({ pressed }) => [
@@ -759,15 +859,8 @@ export default function CrearOrdenMantto() {
             <ActivityIndicator color="#fff" />
           ) : (
             <View style={styles.btnPrimaryContent}>
-              <Ionicons
-                name="save-outline"
-                size={18}
-                color="#fff"
-                style={{ marginRight: 6 }}
-              />
-              <Text style={styles.btnPrimaryText}>
-                Crear orden de mantenimiento
-              </Text>
+              <Ionicons name="save-outline" size={18} color="#fff" style={{ marginRight: 6 }} />
+              <Text style={styles.btnPrimaryText}>Crear orden de mantenimiento</Text>
             </View>
           )}
         </Pressable>
@@ -775,7 +868,115 @@ export default function CrearOrdenMantto() {
         <View style={{ height: 30 }} />
       </ScrollView>
 
-  
+      {/* ===== Modal MultiSelect ===== */}
+      <Modal
+        visible={multiVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setMultiVisible(false)}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Seleccionar materiales (multi)</Text>
+              <TouchableOpacity onPress={() => setMultiVisible(false)} style={styles.modalCloseBtn}>
+                <Ionicons name="close" size={18} color="#fff" />
+              </TouchableOpacity>
+            </View>
+
+            <View style={{ padding: 12, paddingBottom: 6 }}>
+              <View style={[styles.input, { flexDirection: 'row', alignItems: 'center', gap: 8 }]}>
+                <Ionicons name="search" size={16} color={COLORS.muted} />
+                <TextInput
+                  style={{ flex: 1, fontSize: 13, color: COLORS.title }}
+                  value={multiQuery}
+                  onChangeText={setMultiQuery}
+                  placeholder="Buscar material..."
+                  placeholderTextColor={COLORS.muted}
+                  autoCorrect={false}
+                  autoCapitalize="none"
+                />
+                {!!multiQuery && (
+                  <TouchableOpacity onPress={() => setMultiQuery('')} hitSlop={8}>
+                    <Ionicons name="close-circle" size={18} color={COLORS.muted} />
+                  </TouchableOpacity>
+                )}
+              </View>
+            </View>
+
+            <ScrollView style={{ maxHeight: 320 }} contentContainerStyle={{ paddingVertical: 8 }}>
+              {(() => {
+                const c = components[multiIndex] || {};
+                const list = c.Materials || [];
+                const q = String(multiQuery || '').trim().toLowerCase();
+
+                const filtered = !q
+                  ? list
+                  : list.filter((m) =>
+                      `${m.Descripcion || ''} ${m.Material || ''}`
+                        .toLowerCase()
+                        .includes(q)
+                    );
+
+                return filtered.map((m, idx) => {
+                  const selected = (c.MultiSelected || []).some((x) => x.Material === m.Material);
+                  const key = m.Id ? `${m.Id}-${idx}` : `mul-${idx}`;
+
+                  return (
+                    <TouchableOpacity
+                      key={key}
+                      style={styles.workerRow}
+                      onPress={() => {
+                        setComponents((prev) =>
+                          prev.map((cc, i) => {
+                            if (i !== multiIndex) return cc;
+                            const curr = cc.MultiSelected || [];
+                            const exists = curr.some((x) => x.Material === m.Material);
+                            const next = exists
+                              ? curr.filter((x) => x.Material !== m.Material)
+                              : [...curr, { Material: m.Material, Descripcion: m.Descripcion }];
+                            return { ...cc, MultiSelected: next };
+                          })
+                        );
+                      }}
+                      activeOpacity={0.7}
+                    >
+                      <View style={[styles.checkbox, selected && styles.checkboxChecked]}>
+                        {selected && <Ionicons name="checkmark" size={14} color="#fff" />}
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.workerName}>{m.Descripcion || m.Material}</Text>
+                        <Text style={styles.materialCodeText}>{m.Material}</Text>
+                      </View>
+                    </TouchableOpacity>
+                  );
+                });
+              })()}
+            </ScrollView>
+
+            <View style={styles.modalFooterRow}>
+              <TouchableOpacity
+                style={[styles.smallBtn, { backgroundColor: COLORS.cardBg }]}
+                onPress={() => {
+                  if (multiIndex < 0) return;
+                  setComponents((prev) =>
+                    prev.map((cc, i) => (i === multiIndex ? { ...cc, MultiSelected: [] } : cc))
+                  );
+                }}
+              >
+                <Text style={styles.smallBtnText}>Limpiar</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.smallBtn, { backgroundColor: COLORS.accent, borderColor: COLORS.accent }]}
+                onPress={() => setMultiVisible(false)}
+              >
+                <Text style={[styles.smallBtnText, { color: '#fff' }]}>Listo</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -803,7 +1004,7 @@ const Field = ({ label, value, onChangeText, placeholder, keyboardType }) => (
   </View>
 );
 
-/** Selector de centro de trabajo (técnico) con modal + buscador, selecciona 1 Arbpl */
+/** Selector de centro de trabajo (técnico) */
 const SelectWorkCenter = ({ items, selected, onSelect }) => {
   const [visible, setVisible] = useState(false);
   const [query, setQuery] = useState('');
@@ -818,10 +1019,7 @@ const SelectWorkCenter = ({ items, selected, onSelect }) => {
     ? items
     : items.filter((wc) => {
         const q = normalized(query);
-        return (
-          normalized(wc.Ktext).includes(q) ||
-          normalized(wc.Arbpl).includes(q)
-        );
+        return normalized(wc.Ktext).includes(q) || normalized(wc.Arbpl).includes(q);
       });
 
   return (
@@ -830,58 +1028,28 @@ const SelectWorkCenter = ({ items, selected, onSelect }) => {
         style={[styles.input, styles.multiInput]}
         onPress={() => {
           setVisible(true);
-          setQuery(''); // opcional: abrir siempre con búsqueda vacía
+          setQuery('');
         }}
         activeOpacity={0.7}
       >
-        <Text
-          style={{
-            fontSize: 13,
-            color: selected ? COLORS.title : COLORS.muted,
-          }}
-          numberOfLines={2}
-        >
+        <Text style={{ fontSize: 13, color: selected ? COLORS.title : COLORS.muted }} numberOfLines={2}>
           {label}
         </Text>
-        <Ionicons
-          name="chevron-down-outline"
-          size={18}
-          color={COLORS.muted}
-          style={{ marginLeft: 6 }}
-        />
+        <Ionicons name="chevron-down-outline" size={18} color={COLORS.muted} style={{ marginLeft: 6 }} />
       </TouchableOpacity>
 
-      <Modal
-        visible={visible}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setVisible(false)}
-      >
+      <Modal visible={visible} transparent animationType="fade" onRequestClose={() => setVisible(false)}>
         <View style={styles.modalBackdrop}>
           <View style={styles.modalCard}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Seleccionar técnico / centro</Text>
-              <TouchableOpacity
-                onPress={() => setVisible(false)}
-                style={styles.modalCloseBtn}
-              >
+              <TouchableOpacity onPress={() => setVisible(false)} style={styles.modalCloseBtn}>
                 <Ionicons name="close" size={18} color="#fff" />
               </TouchableOpacity>
             </View>
 
-            {/* 🔎 Buscador */}
             <View style={{ padding: 12, paddingBottom: 6 }}>
-              <View
-                style={[
-                  styles.input,
-                  {
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    gap: 8,
-                    backgroundColor: '#fff',
-                  },
-                ]}
-              >
+              <View style={[styles.input, { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#fff' }]}>
                 <Ionicons name="search" size={16} color={COLORS.muted} />
                 <TextInput
                   style={{ flex: 1, fontSize: 13, color: COLORS.title }}
@@ -904,10 +1072,7 @@ const SelectWorkCenter = ({ items, selected, onSelect }) => {
               </Text>
             </View>
 
-            <ScrollView
-              style={{ maxHeight: 280 }}
-              contentContainerStyle={{ paddingVertical: 8 }}
-            >
+            <ScrollView style={{ maxHeight: 280 }} contentContainerStyle={{ paddingVertical: 8 }}>
               {filteredItems.map((wc, index) => {
                 const checked = selected?.Arbpl === wc.Arbpl;
                 const key = wc.Arbpl ? `${wc.Arbpl}-${index}` : `wc-${index}`;
@@ -918,19 +1083,12 @@ const SelectWorkCenter = ({ items, selected, onSelect }) => {
                     style={styles.workerRow}
                     onPress={() => {
                       onSelect(wc);
-                      setVisible(false); // opcional: cerrar al seleccionar
+                      setVisible(false);
                     }}
                     activeOpacity={0.7}
                   >
-                    <View
-                      style={[
-                        styles.checkbox,
-                        checked && styles.checkboxChecked,
-                      ]}
-                    >
-                      {checked && (
-                        <Ionicons name="checkmark" size={14} color="#fff" />
-                      )}
+                    <View style={[styles.checkbox, checked && styles.checkboxChecked]}>
+                      {checked && <Ionicons name="checkmark" size={14} color="#fff" />}
                     </View>
                     <Text style={styles.workerName}>
                       {wc.Ktext} ({wc.Arbpl})
@@ -941,9 +1099,7 @@ const SelectWorkCenter = ({ items, selected, onSelect }) => {
 
               {!filteredItems.length && (
                 <View style={{ paddingHorizontal: 14, paddingVertical: 10 }}>
-                  <Text style={{ color: COLORS.muted, fontSize: 12 }}>
-                    No hay resultados con esa búsqueda.
-                  </Text>
+                  <Text style={{ color: COLORS.muted, fontSize: 12 }}>No hay resultados con esa búsqueda.</Text>
                 </View>
               )}
             </ScrollView>
@@ -960,15 +1116,10 @@ const SelectWorkCenter = ({ items, selected, onSelect }) => {
               </TouchableOpacity>
 
               <TouchableOpacity
-                style={[
-                  styles.smallBtn,
-                  { backgroundColor: COLORS.accent, borderColor: COLORS.accent },
-                ]}
+                style={[styles.smallBtn, { backgroundColor: COLORS.accent, borderColor: COLORS.accent }]}
                 onPress={() => setVisible(false)}
               >
-                <Text style={[styles.smallBtnText, { color: '#fff' }]}>
-                  Listo
-                </Text>
+                <Text style={[styles.smallBtnText, { color: '#fff' }]}>Listo</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -978,11 +1129,7 @@ const SelectWorkCenter = ({ items, selected, onSelect }) => {
   );
 };
 
-
-/** Selector de material desde catálogo BASICO / <CATEGORÍA>
- *  - Muestra Descripcion (y el código)
- *  - En value/onSelect solo viaja el código de Material
- */
+/** Selector de material */
 const SelectMaterial = ({ items, value, onSelect, disabled }) => {
   const [visible, setVisible] = useState(false);
 
@@ -1019,37 +1166,21 @@ const SelectMaterial = ({ items, value, onSelect, disabled }) => {
           {label}
         </Text>
         {!disabled && (
-          <Ionicons
-            name="chevron-down-outline"
-            size={18}
-            color={COLORS.muted}
-            style={{ marginLeft: 6 }}
-          />
+          <Ionicons name="chevron-down-outline" size={18} color={COLORS.muted} style={{ marginLeft: 6 }} />
         )}
       </TouchableOpacity>
 
-      <Modal
-        visible={visible}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setVisible(false)}
-      >
+      <Modal visible={visible} transparent animationType="fade" onRequestClose={() => setVisible(false)}>
         <View style={styles.modalBackdrop}>
           <View style={styles.modalCard}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Seleccionar material</Text>
-              <TouchableOpacity
-                onPress={() => setVisible(false)}
-                style={styles.modalCloseBtn}
-              >
+              <TouchableOpacity onPress={() => setVisible(false)} style={styles.modalCloseBtn}>
                 <Ionicons name="close" size={18} color="#fff" />
               </TouchableOpacity>
             </View>
 
-            <ScrollView
-              style={{ maxHeight: 320 }}
-              contentContainerStyle={{ paddingVertical: 8 }}
-            >
+            <ScrollView style={{ maxHeight: 320 }} contentContainerStyle={{ paddingVertical: 8 }}>
               {items.map((m, index) => {
                 const checked = value === m.Material;
                 const key = m.Id ? `${m.Id}-${index}` : `mat-${index}`;
@@ -1059,35 +1190,24 @@ const SelectMaterial = ({ items, value, onSelect, disabled }) => {
                     key={key}
                     style={styles.workerRow}
                     onPress={() => {
-                      onSelect(m.Material); // solo se guarda el código
+                      onSelect(m.Material);
                       setVisible(false);
                     }}
                     activeOpacity={0.7}
                   >
-                    <View
-                      style={[
-                        styles.checkbox,
-                        checked && styles.checkboxChecked,
-                      ]}
-                    >
-                      {checked && (
-                        <Ionicons name="checkmark" size={14} color="#fff" />
-                      )}
+                    <View style={[styles.checkbox, checked && styles.checkboxChecked]}>
+                      {checked && <Ionicons name="checkmark" size={14} color="#fff" />}
                     </View>
                     <View style={{ flex: 1 }}>
-                      <Text style={styles.workerName}>
-                        {m.Descripcion || m.Material}
-                      </Text>
-                      <Text style={styles.materialCodeText}>
-                        {m.Material}
-                      </Text>
+                      <Text style={styles.workerName}>{m.Descripcion || m.Material}</Text>
+                      <Text style={styles.materialCodeText}>{m.Material}</Text>
                     </View>
                   </TouchableOpacity>
                 );
               })}
             </ScrollView>
 
-            <View className={styles.modalFooterRow}>
+            <View style={styles.modalFooterRow}>
               <TouchableOpacity
                 style={[styles.smallBtn, { backgroundColor: COLORS.cardBg }]}
                 onPress={() => onSelect('')}
@@ -1096,17 +1216,10 @@ const SelectMaterial = ({ items, value, onSelect, disabled }) => {
               </TouchableOpacity>
 
               <TouchableOpacity
-                style={[
-                  styles.smallBtn,
-                  { backgroundColor: COLORS.accent, borderColor: COLORS.accent },
-                ]}
+                style={[styles.smallBtn, { backgroundColor: COLORS.accent, borderColor: COLORS.accent }]}
                 onPress={() => setVisible(false)}
               >
-                <Text
-                  style={[styles.smallBtnText, { color: '#fff' }]}
-                >
-                  Listo
-                </Text>
+                <Text style={[styles.smallBtnText, { color: '#fff' }]}>Listo</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -1119,24 +1232,12 @@ const SelectMaterial = ({ items, value, onSelect, disabled }) => {
 /* ========= Estilos ========= */
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: COLORS.pageBg,
-  },
-  scrollContent: {
-    padding: 16,
-    paddingBottom: 90,
-  },
-  backRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 10,
-  },
-  backText: {
-    marginLeft: 4,
-    color: COLORS.accent,
-    fontWeight: '600',
-  },
+  container: { flex: 1, backgroundColor: COLORS.pageBg },
+  scrollContent: { padding: 16, paddingBottom: 90 },
+
+  backRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 10 },
+  backText: { marginLeft: 4, color: COLORS.accent, fontWeight: '600' },
+
   cardHighlight: {
     backgroundColor: COLORS.cardBg,
     borderRadius: 18,
@@ -1146,12 +1247,8 @@ const styles = StyleSheet.create({
     borderColor: COLORS.border,
     ...elev(1.2),
   },
-  chipRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 6,
-    marginBottom: 8,
-  },
+
+  chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 8 },
   chip: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1160,10 +1257,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 4,
   },
-  chipText: {
-    fontSize: 11,
-    color: COLORS.title,
-  },
+  chipText: { fontSize: 11, color: COLORS.title },
+
   chipSmall: {
     backgroundColor: COLORS.chipBg,
     borderRadius: 999,
@@ -1171,16 +1266,9 @@ const styles = StyleSheet.create({
     paddingVertical: 3,
     marginTop: 4,
   },
-  chipTextSmall: {
-    fontSize: 11,
-    color: COLORS.title,
-  },
-  mainTitle: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: COLORS.title,
-    marginBottom: 6,
-  },
+  chipTextSmall: { fontSize: 11, color: COLORS.title },
+
+  mainTitle: { fontSize: 15, fontWeight: '700', color: COLORS.title, marginBottom: 6 },
   mainTitleMuted: {
     fontSize: 15,
     fontWeight: '600',
@@ -1188,20 +1276,11 @@ const styles = StyleSheet.create({
     fontStyle: 'italic',
     marginBottom: 6,
   },
-  block: {
-    marginTop: 4,
-  },
-  infoLabel: {
-    fontSize: 11,
-    color: COLORS.text,
-    opacity: 0.8,
-    marginBottom: 2,
-  },
-  infoValue: {
-    fontSize: 13,
-    color: COLORS.title,
-    fontWeight: '600',
-  },
+
+  block: { marginTop: 4 },
+  infoLabel: { fontSize: 11, color: COLORS.text, opacity: 0.8, marginBottom: 2 },
+  infoValue: { fontSize: 13, color: COLORS.title, fontWeight: '600' },
+
   card: {
     backgroundColor: COLORS.cardBg,
     borderRadius: 16,
@@ -1211,26 +1290,13 @@ const styles = StyleSheet.create({
     borderColor: COLORS.border,
     ...elev(1),
   },
-  sectionTitle: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: COLORS.title,
-    marginBottom: 4,
-  },
-  sectionSubtitle: {
-    fontSize: 12,
-    color: COLORS.muted,
-    marginBottom: 10,
-  },
-  row: {
-    marginBottom: 6,
-  },
-  fieldLabel: {
-    fontSize: 13,
-    color: COLORS.text,
-    fontWeight: '600',
-    marginBottom: 4,
-  },
+  sectionTitle: { fontSize: 15, fontWeight: '700', color: COLORS.title, marginBottom: 4 },
+  sectionSubtitle: { fontSize: 12, color: COLORS.muted, marginBottom: 10 },
+
+  row: { marginBottom: 6 },
+
+  fieldLabel: { fontSize: 13, color: COLORS.text, fontWeight: '600', marginBottom: 4 },
+
   input: {
     borderWidth: 1,
     borderColor: COLORS.border,
@@ -1241,24 +1307,13 @@ const styles = StyleSheet.create({
     color: COLORS.title,
     backgroundColor: '#FDFDFE',
   },
-  multiInput: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  dateRow: {
-    flexDirection: 'row',
-    gap: 10,
-    marginTop: 10,
-  },
-  dateCol: {
-    flex: 1,
-  },
-  helpText: {
-    fontSize: 11,
-    color: COLORS.muted,
-    marginTop: 4,
-  },
+
+  multiInput: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+
+  dateRow: { flexDirection: 'row', gap: 10, marginTop: 10 },
+  dateCol: { flex: 1 },
+  helpText: { fontSize: 11, color: COLORS.muted, marginTop: 4 },
+
   opCard: {
     borderWidth: 1,
     borderColor: COLORS.border,
@@ -1267,33 +1322,14 @@ const styles = StyleSheet.create({
     marginBottom: 10,
     backgroundColor: '#FAFBFF',
   },
-  opHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 6,
-  },
-  opTitle: {
-    flex: 1,
-    fontSize: 13,
-    fontWeight: '700',
-    color: COLORS.title,
-  },
-  opDeleteBtn: {
-    paddingHorizontal: 6,
-    paddingVertical: 4,
-  },
-  btnSecondary: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 6,
-    paddingVertical: 8,
-  },
-  btnSecondaryText: {
-    marginLeft: 6,
-    color: COLORS.accent,
-    fontWeight: '700',
-    fontSize: 13,
-  },
+
+  opHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 6 },
+  opTitle: { flex: 1, fontSize: 13, fontWeight: '700', color: COLORS.title },
+  opDeleteBtn: { paddingHorizontal: 6, paddingVertical: 4 },
+
+  btnSecondary: { flexDirection: 'row', alignItems: 'center', marginTop: 6, paddingVertical: 8 },
+  btnSecondaryText: { marginLeft: 6, color: COLORS.accent, fontWeight: '700', fontSize: 13 },
+
   btnPrimary: {
     marginTop: 10,
     backgroundColor: COLORS.accent,
@@ -1303,24 +1339,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     ...elev(1.4),
   },
-  btnPrimaryPressed: {
-    transform: [{ scale: 0.97 }],
-    opacity: 0.9,
-  },
-  btnPrimaryDisabled: {
-    opacity: 0.7,
-  },
-  btnPrimaryContent: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  btnPrimaryText: {
-    color: '#FFFFFF',
-    fontWeight: '900',
-    fontSize: 15,
-  },
+  btnPrimaryPressed: { transform: [{ scale: 0.97 }], opacity: 0.9 },
+  btnPrimaryDisabled: { opacity: 0.7 },
+  btnPrimaryContent: { flexDirection: 'row', alignItems: 'center' },
+  btnPrimaryText: { color: '#FFFFFF', fontWeight: '900', fontSize: 15 },
 
-  /* Modal selector work center / material */
   modalBackdrop: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.35)',
@@ -1345,12 +1368,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
   },
-  modalTitle: {
-    flex: 1,
-    color: '#fff',
-    fontWeight: '700',
-    fontSize: 14,
-  },
+  modalTitle: { flex: 1, color: '#fff', fontWeight: '700', fontSize: 14 },
   modalCloseBtn: {
     width: 28,
     height: 28,
@@ -1360,12 +1378,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  workerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-  },
+
+  workerRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 8 },
+
   checkbox: {
     width: 20,
     height: 20,
@@ -1377,24 +1392,12 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: '#fff',
   },
-  checkboxChecked: {
-    backgroundColor: COLORS.accent,
-    borderColor: COLORS.accent,
-  },
-  workerName: {
-    fontSize: 13,
-    color: COLORS.title,
-  },
-  materialCodeText: {
-    fontSize: 11,
-    color: COLORS.muted,
-  },
-  modalFooterRow: {
-    padding: 10,
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
-    gap: 10,
-  },
+  checkboxChecked: { backgroundColor: COLORS.accent, borderColor: COLORS.accent },
+
+  workerName: { fontSize: 13, color: COLORS.title },
+  materialCodeText: { fontSize: 11, color: COLORS.muted },
+
+  modalFooterRow: { padding: 10, flexDirection: 'row', justifyContent: 'flex-end', gap: 10 },
   smallBtn: {
     paddingHorizontal: 12,
     paddingVertical: 8,
@@ -1402,21 +1405,10 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.border,
   },
-  smallBtnText: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: COLORS.text,
-  },
+  smallBtnText: { fontSize: 13, fontWeight: '700', color: COLORS.text },
 
-  /* Categorías de materiales */
-  categoryRow: {
-    marginBottom: 8,
-  },
-  categoryChipsWrapper: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 4,
-  },
+  categoryRow: { marginBottom: 8 },
+  categoryChipsWrapper: { flexDirection: 'row', alignItems: 'center', paddingVertical: 4 },
   categoryChip: {
     paddingHorizontal: 10,
     paddingVertical: 4,
@@ -1426,16 +1418,34 @@ const styles = StyleSheet.create({
     backgroundColor: '#F7F8FC',
     marginRight: 6,
   },
-  categoryChipActive: {
-    backgroundColor: COLORS.accent,
-    borderColor: COLORS.accent,
+  categoryChipActive: { backgroundColor: COLORS.accent, borderColor: COLORS.accent },
+  categoryChipText: { fontSize: 11, color: COLORS.text, fontWeight: '600' },
+  categoryChipTextActive: { color: '#fff' },
+
+  toggleRow: { flexDirection: 'row', gap: 10, marginBottom: 10 },
+  toggleChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    backgroundColor: '#F7F8FC',
   },
-  categoryChipText: {
-    fontSize: 11,
-    color: COLORS.text,
-    fontWeight: '600',
+  toggleChipActive: { backgroundColor: COLORS.accent, borderColor: COLORS.accent },
+  toggleText: { fontSize: 12, fontWeight: '800', color: COLORS.text },
+  toggleTextActive: { color: '#fff' },
+
+  btnMini: {
+    marginTop: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    backgroundColor: '#fff',
   },
-  categoryChipTextActive: {
-    color: '#fff',
-  },
+  btnMiniText: { color: COLORS.accent, fontWeight: '900' },
 });
