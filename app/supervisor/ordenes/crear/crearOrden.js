@@ -563,30 +563,36 @@ export default function CrearOrdenMantto() {
       });
     });
 
-    const payload = {
-      WorkOrderHeader: {
-        OrderType: String(orderType).trim(),
-        Planplant: planPlantValue,
-        MnWkCtr: workCntrValue,
-        Equipment: String(equipment || "").trim(),
-        ShortText: headerShortText.trim(),
-        StartDate: String(startDate).trim(),
-        FinishDate: String(finishDate).trim(),
-      },
-      WorkOrderOperationSet: opsValidas.map((op) => {
-        const base = {
-          Activity: String(op.Activity || "").trim(),
-          WorkCntr: workCntrValue,
-          Plant: planPlantValue,
-          Description: String(op.Description || "").trim(),
-          DurationNormal: String(op.DurationNormal || "").trim(),
-        };
-        if (op.IsExternal) base.ControlKey = "X";
-        return base;
-      }),
-      WorkOrderComponentSet: componentItems,
-      Return: [], // ✅ como tu Postman (payload)
-    };
+    const notifOriginal = String(notifNo || averiaid || "").trim();
+
+  const payload = {
+    WorkOrderHeader: {
+      OrderType: String(orderType).trim(),
+      Planplant: planPlantValue,
+      MnWkCtr: workCntrValue,
+      Equipment: String(equipment || "").trim(),
+      ShortText: headerShortText.trim(),
+      StartDate: String(startDate).trim(),
+      FinishDate: String(finishDate).trim(),
+
+      // ✅ NUEVO: referencia al aviso original
+      NotifNo: notifOriginal,
+    },
+    WorkOrderOperationSet: opsValidas.map((op) => {
+      const base = {
+        Activity: String(op.Activity || "").trim(),
+        WorkCntr: workCntrValue,
+        Plant: planPlantValue,
+        Description: String(op.Description || "").trim(),
+        DurationNormal: String(op.DurationNormal || "").trim(),
+      };
+      if (op.IsExternal) base.ControlKey = "X";
+      return base;
+    }),
+    WorkOrderComponentSet: componentItems,
+    Return: [],
+  };
+
 
     try {
       setSaving(true);
@@ -597,6 +603,8 @@ export default function CrearOrdenMantto() {
       // - TU SERVICIO NO PERMITE $expand EN POST (te daba 400)
       // - así que mandamos SOLO $format=json (o incluso sin nada)
       const url = "/api/odata/ZCS_CREATE_WORKORDER_SRV_02/WorkOrderSet";
+      
+      console.log("[CREATE WO] NotifNo usado:", notifOriginal);
 
       const res = await api.post(url, payload, {
         headers: {
@@ -717,7 +725,7 @@ export default function CrearOrdenMantto() {
           </View>
 
           <View style={{ marginTop: 12, marginBottom: 14 }}>
-            <Text style={styles.fieldLabel}>Descripción corta (ShortText)</Text>
+            <Text style={styles.fieldLabel}>Descripción corta</Text>
             <TextInput
               style={[styles.input, { minHeight: 60, textAlignVertical: "top" }]}
               value={headerShortText}
@@ -728,7 +736,7 @@ export default function CrearOrdenMantto() {
             />
           </View>
 
-          <Text style={styles.fieldLabel}>Centro de trabajo / técnico (MnWkCtr)</Text>
+          <Text style={styles.fieldLabel}>Centro de trabajo / técnico</Text>
           {loadingWorkCenters ? (
             <View style={{ paddingVertical: 8 }}>
               <ActivityIndicator color={COLORS.accent} />
@@ -743,7 +751,7 @@ export default function CrearOrdenMantto() {
 
           <View style={styles.dateRow}>
             <View style={styles.dateCol}>
-              <Text style={styles.fieldLabel}>Fecha inicio (StartDate)</Text>
+              <Text style={styles.fieldLabel}>Fecha inicio</Text>
               <TextInput
                 style={styles.input}
                 value={startDate}
@@ -753,7 +761,7 @@ export default function CrearOrdenMantto() {
               />
             </View>
             <View style={styles.dateCol}>
-              <Text style={styles.fieldLabel}>Fecha fin (FinishDate)</Text>
+              <Text style={styles.fieldLabel}>Fecha fin</Text>
               <TextInput
                 style={styles.input}
                 value={finishDate}
@@ -806,7 +814,7 @@ export default function CrearOrdenMantto() {
                   activeOpacity={0.85}
                 >
                   <Text style={[styles.toggleText, op.IsExternal && styles.toggleTextActive]}>
-                    Externa (ControlKey X)
+                    Externa
                   </Text>
                 </TouchableOpacity>
               </View>
@@ -824,7 +832,7 @@ export default function CrearOrdenMantto() {
               </View>
 
               <Field
-                label="Duración (horas) - DurationNormal"
+                label="Duración (horas)"
                 value={op.DurationNormal}
                 onChangeText={(txt) =>
                   updateOperation(index, "DurationNormal", String(txt || "").replace(/[^0-9.]/g, ""))
@@ -908,7 +916,7 @@ export default function CrearOrdenMantto() {
                       activeOpacity={0.85}
                     >
                       <Text style={[styles.toggleText, c.Trackingno === "03" && styles.toggleTextActive]}>
-                        Directo (03)
+                        Directo 
                       </Text>
                     </TouchableOpacity>
 
@@ -918,7 +926,7 @@ export default function CrearOrdenMantto() {
                       activeOpacity={0.85}
                     >
                       <Text style={[styles.toggleText, c.Trackingno === "02" && styles.toggleTextActive]}>
-                        Préstamo / Falla (02)
+                        Préstamo / Falla 
                       </Text>
                     </TouchableOpacity>
                   </View>
@@ -1014,7 +1022,7 @@ export default function CrearOrdenMantto() {
               )}
 
               <Field
-                label="Cantidad requerida (RequirementQuantity)"
+                label="Cantidad requerida"
                 value={c.RequirementQuantity}
                 onChangeText={(txt) =>
                   updateComponent(index, "RequirementQuantity", String(txt || "").replace(/[^0-9.]/g, ""))
@@ -1024,7 +1032,7 @@ export default function CrearOrdenMantto() {
               />
 
               <Field
-                label="Almacén (StgeLoc)"
+                label="Almacén"
                 value={c.StgeLoc}
                 onChangeText={(txt) => updateComponent(index, "StgeLoc", txt)}
                 placeholder="BHER"

@@ -14,7 +14,10 @@
       "backgroundColor": "#FFFFFF"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "Necesitamos tu ubicación para monitoreo en tiempo real."
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -29,7 +32,9 @@
       },
       "permissions": [
         "android.permission.RECORD_AUDIO",
-        "android.permission.MODIFY_AUDIO_SETTINGS"
+        "android.permission.MODIFY_AUDIO_SETTINGS",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION"
       ],
       "package": "com.guadalub130.mitsu_frontend"
     },
@@ -41,7 +46,8 @@
       "expo-audio",
       "expo-video",
       "expo-sqlite",
-      "expo-asset"
+      "expo-asset",
+      "expo-location"
     ],
     "extra": {
       "AZURE_TENANT_ID": "87faafe0-ea5a-47aa-9359-20fd75c1bce8",

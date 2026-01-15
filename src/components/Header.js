@@ -1,42 +1,46 @@
 // src/components/Header.js
-import React from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  TouchableOpacity,
-  Platform,
-  Image,
-} from 'react-native';
-import { useRouter, useNavigation, useSegments } from 'expo-router';
-import { Ionicons } from '@expo/vector-icons';
-import { useNotificaciones } from '../context/NotificacionesContext';
-import { useDrawer } from '../context/DrawerContext';
+import React from "react";
+import { View, Text, StyleSheet, TouchableOpacity, Platform, Image } from "react-native";
+import { useRouter, useNavigation, useSegments } from "expo-router";
+import { Ionicons } from "@expo/vector-icons";
+import { useDrawer } from "../context/DrawerContext";
+
+// ✅ Import opcional: si existe el archivo, lo usas.
+// Si lo borraste, simplemente borra esta línea.
+import { useNotificaciones } from "../context/NotificacionesContext";
 
 const FIORI = {
-  shellBg: '#FFFFFF',
-  border: '#E6E9EF',
-  ink: '#0B1F3B',
-  accent: '#0A6ED1',
-  danger: '#EB5757',
+  shellBg: "#FFFFFF",
+  border: "#E6E9EF",
+  ink: "#0B1F3B",
+  accent: "#0A6ED1",
+  danger: "#EB5757",
 };
 
 export default function Header({ title }) {
   const router = useRouter();
   const navigation = useNavigation();
   const segments = useSegments();
-  const { noLeidas = [] } = useNotificaciones();
   const { toggleDrawer } = useDrawer();
 
+  // ✅ SAFE: si no hay Provider, evita crash
+  let noLeidas = [];
+  try {
+    const ctx = useNotificaciones?.(); // si existe hook
+    noLeidas = Array.isArray(ctx?.noLeidas) ? ctx.noLeidas : [];
+  } catch (e) {
+    noLeidas = [];
+  }
+
   // Detecta si estamos en una pantalla raíz
-  const isRoot = ['/admin', '/supervisor', '/tecnico'].includes('/' + segments[1]);
+  const isRoot = ["/admin", "/supervisor", "/tecnico"].includes("/" + segments[1]);
 
   return (
     <View style={styles.header}>
       {/* ===== LOGO CENTRADO ===== */}
       <View style={styles.logoWrapper}>
         <Image
-          source={require('../../assets/logo_simple.png')}
+          source={require("../../assets/logo_simple.png")}
           style={styles.logo}
           resizeMode="contain"
         />
@@ -56,7 +60,7 @@ export default function Header({ title }) {
             <Ionicons name="arrow-back" size={22} color={FIORI.ink} />
           </TouchableOpacity>
         ) : (
-          <View style={{ width: 34 }} /> // espacio para centrar título
+          <View style={{ width: 34 }} />
         )}
 
         {/* Título */}
@@ -66,9 +70,14 @@ export default function Header({ title }) {
 
         {/* Iconos derecha */}
         <View style={styles.rightIcons}>
-          {/* Notificaciones */}
+          {/* Notificaciones (si algún día lo vuelves a usar) */}
           <TouchableOpacity
-            onPress={() => router.push('')}
+            // ✅ si no tienes módulo de notificaciones, mejor no navegar
+            onPress={() => {
+              // Si tienes la pantalla: router.push("/notificaciones")
+              // Si no, no hagas nada:
+              // router.push("/notificaciones");
+            }}
             style={styles.iconButton}
             activeOpacity={0.7}
           >
@@ -76,7 +85,7 @@ export default function Header({ title }) {
             {noLeidas.length > 0 && (
               <View style={styles.badge}>
                 <Text style={styles.badgeText}>
-                  {noLeidas.length > 99 ? '99+' : noLeidas.length}
+                  {noLeidas.length > 99 ? "99+" : noLeidas.length}
                 </Text>
               </View>
             )}
@@ -106,7 +115,7 @@ const styles = StyleSheet.create({
     borderColor: FIORI.border,
     ...Platform.select({
       ios: {
-        shadowColor: '#000',
+        shadowColor: "#000",
         shadowOpacity: 0.06,
         shadowRadius: 6,
         shadowOffset: { width: 0, height: 3 },
@@ -115,42 +124,26 @@ const styles = StyleSheet.create({
     }),
   },
 
-  logoWrapper: {
-    alignItems: 'center',
-    marginBottom: 6,
-  },
+  logoWrapper: { alignItems: "center", marginBottom: 6 },
 
-  logo: {
-    width: 120,
-    height: 32,
-  },
+  logo: { width: 120, height: 32 },
 
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
+  row: { flexDirection: "row", alignItems: "center" },
 
-  iconButton: {
-    padding: 6,
-    borderRadius: 18,
-    position: 'relative',
-  },
+  iconButton: { padding: 6, borderRadius: 18, position: "relative" },
 
   title: {
     flex: 1,
     fontSize: 18,
-    fontWeight: '600',
-    textAlign: 'center',
+    fontWeight: "600",
+    textAlign: "center",
     color: FIORI.ink,
   },
 
-  rightIcons: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
+  rightIcons: { flexDirection: "row", alignItems: "center" },
 
   badge: {
-    position: 'absolute',
+    position: "absolute",
     top: -4,
     right: -6,
     backgroundColor: FIORI.danger,
@@ -158,13 +151,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 5,
     minWidth: 18,
     height: 18,
-    justifyContent: 'center',
-    alignItems: 'center',
+    justifyContent: "center",
+    alignItems: "center",
   },
 
-  badgeText: {
-    color: '#fff',
-    fontSize: 10,
-    fontWeight: '700',
-  },
+  badgeText: { color: "#fff", fontSize: 10, fontWeight: "700" },
 });

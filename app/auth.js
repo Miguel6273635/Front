@@ -43,9 +43,9 @@ export default function AuthCallbackScreen() {
         <>
           <ActivityIndicator />
           <Text style={{ marginTop: 10 }}>Iniciando sesión...</Text>
-          <Text style={{ marginTop: 8, fontSize: 12, opacity: 0.6 }}>
-            API_URL: {API_URL}
-          </Text>
+          {/*<Text style={{ marginTop: 8, fontSize: 12, opacity: 0.6 }}>
+            API_URL: {API_URL} 
+          </Text>*/}
         </>
       )}
     </View>
