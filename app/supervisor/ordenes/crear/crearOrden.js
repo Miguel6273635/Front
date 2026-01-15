@@ -78,18 +78,16 @@ function toIsoLocalDateTime(hour = 8, minute = 0, plusDays = 0) {
   return `${yyyy}-${mm}-${dd}T${hh}:${mi}:${ss}`;
 }
 
-// Extrae OrderId desde Return.results (tu caso real)
-// Extrae OrderId desde Return.results (tu caso real en SAP)
-// - Prioriza MessageV2 en Type "S"
-// - Si hay errores "E" pero sí hay orderId, lo tratamos como "creada con avisos"
+/**
+ * ✅ Extrae OrderId y Aviso del Return:
+ * - Orden = MessageV2
+ * - Aviso = MessageV3
+ * - Fallback: regex desde el texto Message (ej. "... número 30008522 y mensaje 200029383")
+ */
 function extractOrderFromReturn(dataOrD) {
   const d = dataOrD?.d ? dataOrD.d : dataOrD;
 
-  const returns =
-    d?.Return?.results ||
-    d?.ReturnSet?.results ||
-    [];
-
+  const returns = d?.Return?.results || d?.ReturnSet?.results || [];
   if (!Array.isArray(returns) || returns.length === 0) {
     return {
       orderId: null,
@@ -106,23 +104,22 @@ function extractOrderFromReturn(dataOrD) {
   const errors = returns.filter((r) => upperType(r) === "E");
   const warnings = returns.filter((r) => upperType(r) === "W" || upperType(r) === "A");
 
-  // ✅ Mejor caso: "S" que trae MessageV2 y/o MessageV3
   const successItem =
     returns.find((r) => upperType(r) === "S" && String(r?.MessageV2 || "").trim().match(/^\d+$/)) ||
-    returns.find((r) => upperType(r) === "S" && String(r?.Message || "").toLowerCase().includes("se ha grabado con número")) ||
+    returns.find(
+      (r) =>
+        upperType(r) === "S" &&
+        String(r?.Message || "").toLowerCase().includes("se ha grabado con número")
+    ) ||
     returns.find((r) => upperType(r) === "S") ||
     null;
 
   const message = successItem?.Message ? String(successItem.Message) : null;
 
-  // ✅ ORDEN (MessageV2)
   let orderId = successItem?.MessageV2 ? String(successItem.MessageV2).trim() : null;
-
-  // ✅ AVISO / MENSAJE (MessageV3)
   let notifNo = successItem?.MessageV3 ? String(successItem.MessageV3).trim() : null;
 
-  // ✅ Fallback regex: si no vienen en MessageV2/V3, los sacamos de texto
-  // Busca 2 números: "... número 30008522 y mensaje 200029383"
+  // Fallback por texto
   if ((!orderId || !notifNo) && message) {
     const numbers = message.match(/\b\d{6,12}\b/g) || [];
     if (!orderId && numbers.length >= 1) orderId = numbers[0];
@@ -132,15 +129,33 @@ function extractOrderFromReturn(dataOrD) {
   return { orderId, notifNo, successItem, errors, warnings, message };
 }
 
+/**
+ * ✅ Fallback: extrae #orden / #aviso desde sap-message header.
+ * - En SAP Gateway suele venir JSON en header "sap-message"
+ */
+function extractFromSapMessageHeader(headers) {
+  const h = headers || {};
+  const raw = h["sap-message"] || h["SAP-MESSAGE"] || h["Sap-Message"] || null;
+  if (!raw) return { orderId: null, notifNo: null, text: null };
+
+  try {
+    const obj = typeof raw === "string" ? JSON.parse(raw) : raw;
+    const text = String(obj?.message || obj?.msg || obj?.Message || "").trim();
+    const nums = text.match(/\b\d{6,12}\b/g) || [];
+    return { orderId: nums[0] || null, notifNo: nums[1] || null, text };
+  } catch (e) {
+    const text = String(raw || "").trim();
+    const nums = text.match(/\b\d{6,12}\b/g) || [];
+    return { orderId: nums[0] || null, notifNo: nums[1] || null, text };
+  }
+}
 
 // ✅ TEMP: equipo fijo para BOM (Intrm)
 const FIXED_INTRM_FOR_BOM = "MX06GR478NL3-10P";
 
 export default function CrearOrdenMantto() {
-  // ⚠️ equipment llega como "MX01DF001-01" (y cambia según la orden)
   const { averiaid, notifNo, equipment, functLoc, shortText } = useLocalSearchParams();
 
-  // Header fijo
   const [orderType] = useState("SM01");
   const [planPlant] = useState("TLP1");
 
@@ -159,7 +174,7 @@ export default function CrearOrdenMantto() {
     { Activity: "0020", Description: "", DurationNormal: "", IsExternal: false },
   ]);
 
-  // Componentes (materiales)
+  // Componentes
   const [components, setComponents] = useState([
     {
       ItemNumber: "0010",
@@ -175,11 +190,10 @@ export default function CrearOrdenMantto() {
 
       NotFound: false,
 
-      // ✅ flujo NotFound (categorías + BOM)
       NotFoundCategories: [],
       LoadingNotFoundCategories: false,
-      NotFoundCategory: "", // Zeinr seleccionada (ej. "C.MAQUINA")
-      NotFoundMaterials: [], // BomItems (Idnrk/Ojtxp)
+      NotFoundCategory: "",
+      NotFoundMaterials: [],
       LoadingNotFoundMaterials: false,
 
       MultiSelected: [],
@@ -196,11 +210,13 @@ export default function CrearOrdenMantto() {
 
   const goBack = () => router.back();
 
-  // ==== Cargar WorkCentreSet (técnicos / centros) ====
+  // ==== Cargar WorkCentreSet ====
   useEffect(() => {
     const fetchWorkCenters = async () => {
       try {
         setLoadingWorkCenters(true);
+
+        // ✅ usa fetch directo (como lo tenías) para no romper auth si este endpoint es público
         const url =
           "https://my-node-api-qas-01.cfapps.us10-001.hana.ondemand.com/api/odata/ZSD_CATALOGOS_SRV/WorkCentreSet?$format=json";
 
@@ -294,7 +310,6 @@ export default function CrearOrdenMantto() {
   // ✅ NOT FOUND: Categorías + BOM
   // ============================
 
-  // CategoriaManttoSet: primero se elige categoría
   const fetchNotFoundCategories = async () => {
     const url = "/api/odata/ZSD_CATALOGOS_SRV/CategoriaManttoSet?$format=json";
     console.log("[CategoriaManttoSet] GET", url);
@@ -303,55 +318,50 @@ export default function CrearOrdenMantto() {
     const data = res?.data?.d?.results ?? res?.data?.value ?? [];
     console.log("[CategoriaManttoSet] rows:", data.length);
 
-    // ✅ en tu servicio, la categoría usable es Descripcion (ej. "C.MAQUINA")
     const mapped = data
       .map((x) => {
-        const id = String(x?.Id ?? x?.ID ?? "").trim();
         const desc = String(x?.Descripcion ?? x?.DESCRIPCION ?? "").trim();
         return {
-          Id: id,
-          Zeinr: desc, // ✅ esto se manda a BomItemsSet como Zeinr eq '...'
-          Texto: desc, // ✅ esto se muestra
+          Id: String(x?.Id ?? x?.ID ?? "").trim(),
+          Zeinr: desc,
+          Texto: desc,
         };
       })
       .filter((x) => !!x.Zeinr);
 
-    // uniq por Zeinr
     const uniq = new Map();
     for (const it of mapped) if (!uniq.has(it.Zeinr)) uniq.set(it.Zeinr, it);
     return Array.from(uniq.values());
   };
 
-  // BomItemsSet: depende de Intrm (equipment MX) + Zeinr (categoria)
   const fetchNotFoundBomItems = async ({ equipmentIntrm, zeinr }) => {
-  const eq = FIXED_INTRM_FOR_BOM; // ✅ fijo por ahora
-  const cat = String(zeinr || "").trim();
-  if (!eq || !cat) return [];
+    const eq = FIXED_INTRM_FOR_BOM;
+    const cat = String(zeinr || "").trim();
+    if (!eq || !cat) return [];
 
-  const filterRaw = `Intrm eq '${eq}' and Zeinr eq '${cat}'`;
-  console.log("[BomItemsSet] filter:", filterRaw);
+    const filterRaw = `Intrm eq '${eq}' and Zeinr eq '${cat}'`;
+    console.log("[BomItemsSet] filter:", filterRaw);
 
-  const url =
-    "/api/odata/ZCS_GET_BOM_MATERIAL_SRV/BomItemsSet" +
-    `?$filter=${encodeURIComponent(filterRaw)}` +
-    "&$format=json";
+    const url =
+      "/api/odata/ZCS_GET_BOM_MATERIAL_SRV/BomItemsSet" +
+      `?$filter=${encodeURIComponent(filterRaw)}` +
+      "&$format=json";
 
-  const res = await api.get(url, { headers: { Accept: "application/json" } });
-  const data = res?.data?.d?.results ?? res?.data?.value ?? [];
+    const res = await api.get(url, { headers: { Accept: "application/json" } });
+    const data = res?.data?.d?.results ?? res?.data?.value ?? [];
 
-  const mappedRaw = data.map((x) => ({
-    Idnrk: String(x?.Idnrk ?? x?.IDNRK ?? "").trim(),
-    Ojtxp: String(x?.Ojtxp ?? x?.OJTXP ?? "").trim(),
-  }));
+    const mappedRaw = data.map((x) => ({
+      Idnrk: String(x?.Idnrk ?? x?.IDNRK ?? "").trim(),
+      Ojtxp: String(x?.Ojtxp ?? x?.OJTXP ?? "").trim(),
+    }));
 
-  const uniq = new Map();
-  for (const it of mappedRaw) {
-    if (!it.Idnrk) continue;
-    if (!uniq.has(it.Idnrk)) uniq.set(it.Idnrk, it);
-  }
-  return Array.from(uniq.values());
-};
-
+    const uniq = new Map();
+    for (const it of mappedRaw) {
+      if (!it.Idnrk) continue;
+      if (!uniq.has(it.Idnrk)) uniq.set(it.Idnrk, it);
+    }
+    return Array.from(uniq.values());
+  };
 
   const ensureNotFoundCategories = async (index) => {
     setComponents((prev) =>
@@ -375,40 +385,39 @@ export default function CrearOrdenMantto() {
   };
 
   const loadNotFoundMaterialsByCategory = async (index, zeinrDescripcion) => {
-  const intrm = FIXED_INTRM_FOR_BOM; // ✅ FIJO: MX06GR478NL3-10P
-  const zeinr = String(zeinrDescripcion || "").trim();
+    const intrm = FIXED_INTRM_FOR_BOM;
+    const zeinr = String(zeinrDescripcion || "").trim();
 
-  setComponents((prev) =>
-    prev.map((c, i) =>
-      i === index
-        ? {
-            ...c,
-            NotFoundCategory: zeinr,
-            LoadingNotFoundMaterials: true,
-            NotFoundMaterials: [],
-            MultiSelected: [],
-          }
-        : c
-    )
-  );
-
-  try {
-    const mats = await fetchNotFoundBomItems({ equipmentIntrm: intrm, zeinr });
     setComponents((prev) =>
       prev.map((c, i) =>
-        i === index ? { ...c, NotFoundMaterials: mats, LoadingNotFoundMaterials: false } : c
+        i === index
+          ? {
+              ...c,
+              NotFoundCategory: zeinr,
+              LoadingNotFoundMaterials: true,
+              NotFoundMaterials: [],
+              MultiSelected: [],
+            }
+          : c
       )
     );
-  } catch (e) {
-    console.error("Error BomItemsSet:", e);
-    Alert.alert("Materiales", "No se pudieron cargar los materiales por BOM.");
-    setComponents((prev) =>
-      prev.map((c, i) => (i === index ? { ...c, LoadingNotFoundMaterials: false } : c))
-    );
-  }
-};
 
-  // ✅ Modal MultiSelect: ABRE y si es NotFound -> carga categorías INMEDIATO (sin reintentar)
+    try {
+      const mats = await fetchNotFoundBomItems({ equipmentIntrm: intrm, zeinr });
+      setComponents((prev) =>
+        prev.map((c, i) =>
+          i === index ? { ...c, NotFoundMaterials: mats, LoadingNotFoundMaterials: false } : c
+        )
+      );
+    } catch (e) {
+      console.error("Error BomItemsSet:", e);
+      Alert.alert("Materiales", "No se pudieron cargar los materiales por BOM.");
+      setComponents((prev) =>
+        prev.map((c, i) => (i === index ? { ...c, LoadingNotFoundMaterials: false } : c))
+      );
+    }
+  };
+
   const openMultiSelect = async (index, forceNotFound = false) => {
     setMultiIndex(index);
     setMultiQuery("");
@@ -448,14 +457,18 @@ export default function CrearOrdenMantto() {
 
     setComponents((prev) =>
       prev.map((c, i) =>
-        i === index ? { ...c, Category: category, Materials: [], Material: "", LoadingMaterials: true } : c
+        i === index
+          ? { ...c, Category: category, Materials: [], Material: "", LoadingMaterials: true }
+          : c
       )
     );
 
     try {
       const baseUrl =
         "https://my-node-api-qas-01.cfapps.us10-001.hana.ondemand.com/api/odata/ZSD_CATALOGOS_SRV/MaterialesCoberturaSet";
-      const url = baseUrl + `?$filter=Agrupador1 eq 'BASICO' and Agrupador2 eq '${category}'&$format=json`;
+      const url =
+        baseUrl +
+        `?$filter=Agrupador1 eq 'BASICO' and Agrupador2 eq '${category}'&$format=json`;
 
       const res = await fetch(encodeURI(url));
       const json = await res.json();
@@ -520,7 +533,7 @@ export default function CrearOrdenMantto() {
         (c.MultiSelected || []).forEach((mSel) => {
           componentItems.push({
             ItemNumber: String(c.ItemNumber || "").trim(),
-            Material: String(mSel.Material || "").trim(), // ✅ Idnrk
+            Material: String(mSel.Material || "").trim(),
             RequirementQuantity: qty,
             StgeLoc: stge,
             Plant: planPlantValue,
@@ -572,24 +585,46 @@ export default function CrearOrdenMantto() {
         return base;
       }),
       WorkOrderComponentSet: componentItems,
+      Return: [], // ✅ como tu Postman (payload)
     };
 
     try {
       setSaving(true);
+
       console.log("[CREATE WO] payload:", JSON.stringify(payload, null, 2));
 
-      const res = await api.post(
-        "/api/odata/ZCS_CREATE_WORKORDER_SRV_02/WorkOrderSet?$format=json&$expand=Return",
-        payload,
-        { headers: { Accept: "application/json" } }
-      );
+      // ✅ IMPORTANTE:
+      // - TU SERVICIO NO PERMITE $expand EN POST (te daba 400)
+      // - así que mandamos SOLO $format=json (o incluso sin nada)
+      const url = "/api/odata/ZCS_CREATE_WORKORDER_SRV_02/WorkOrderSet";
 
-      console.log("Respuesta crear orden mantto:", JSON.stringify(res.data, null, 2));
+      const res = await api.post(url, payload, {
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+      });
 
-      const { orderId, notifNo: avisoCreado, message, errors } = extractOrderFromReturn(res?.data);
+      console.log("[CREATE WO] create response:", JSON.stringify(res.data, null, 2));
+      console.log("[CREATE WO] response headers keys:", Object.keys(res.headers || {}));
 
+      // ✅ 1) Intentar leer Return inline (si llegara a venir)
+      const parsed = extractOrderFromReturn(res?.data);
+      let orderId = parsed?.orderId || null;
+      let avisoCreado = parsed?.notifNo || null;
+
+      // ✅ 2) Fallback: header sap-message
+      if (!orderId) {
+        const fromHeader = extractFromSapMessageHeader(res?.headers);
+        if (fromHeader?.text) console.log("[CREATE WO] sap-message parsed:", fromHeader.text);
+        orderId = fromHeader.orderId || orderId;
+        avisoCreado = fromHeader.notifNo || avisoCreado;
+      }
+
+      const errors = parsed?.errors || [];
       const avisoOriginal = String(notifNo || averiaid || "").trim();
 
+      // Si SAP regresó errores y no hay orderId -> no se creó
       if (errors.length && !orderId) {
         const errText = errors.map((e) => `• ${e?.Message || "Error SAP"}`).join("\n");
         Alert.alert("Error SAP", errText || "Error al crear la orden.");
@@ -598,27 +633,24 @@ export default function CrearOrdenMantto() {
 
       const baseMsg = orderId
         ? `✅ Orden creada: ${orderId}\n📌 Aviso original: ${avisoOriginal || "—"}\n📩 Mensaje/Aviso SAP: ${avisoCreado || "—"}`
-        : (message || "Orden creada.");
-
-      Alert.alert("Orden creada", baseMsg, [
-        { text: "OK", onPress: () => router.back() },
-      ]);
-
-
+        : "✅ Orden creada (no pude leer el número desde Return/sap-message).";
 
       const avisos = errors.length
         ? `\n\nAvisos SAP:\n${errors.map((e) => `• ${e?.Message || ""}`).join("\n")}`
         : "";
 
-      Alert.alert("Orden creada", `${baseMsg}${avisos}`, [
-        { text: "OK", onPress: () => router.back() },
-      ]);
-
+      Alert.alert("Orden creada", `${baseMsg}${avisos}`, [{ text: "OK", onPress: () => router.back() }]);
     } catch (err) {
-      console.error("Error al crear orden de mantenimiento:", err);
-      const msg =
-        err?.response?.data?.error || err?.response?.data?.message || err?.message || "No se pudo crear la orden.";
-      Alert.alert("Error", msg);
+      console.error("Error al crear orden de mantenimiento:", err?.response?.data || err);
+
+      const sapMsg =
+        err?.response?.data?.error?.message?.value ||
+        err?.response?.data?.error?.message ||
+        err?.response?.data?.message ||
+        err?.message ||
+        "No se pudo crear la orden.";
+
+      Alert.alert("Error", String(sapMsg));
     } finally {
       setSaving(false);
     }
@@ -702,7 +734,11 @@ export default function CrearOrdenMantto() {
               <ActivityIndicator color={COLORS.accent} />
             </View>
           ) : (
-            <SelectWorkCenter items={workCenters} selected={selectedWorkCenter} onSelect={setSelectedWorkCenter} />
+            <SelectWorkCenter
+              items={workCenters}
+              selected={selectedWorkCenter}
+              onSelect={setSelectedWorkCenter}
+            />
           )}
 
           <View style={styles.dateRow}>
@@ -729,7 +765,8 @@ export default function CrearOrdenMantto() {
           </View>
 
           <Text style={styles.helpText}>
-            Formato: <Text style={{ fontWeight: "700" }}>YYYY-MM-DDTHH:mm:ss</Text> (ej. 2026-01-14T08:00:00)
+            Formato: <Text style={{ fontWeight: "700" }}>YYYY-MM-DDTHH:mm:ss</Text> (ej.
+            {" "}2026-01-14T08:00:00)
           </Text>
         </View>
 
@@ -741,7 +778,9 @@ export default function CrearOrdenMantto() {
           {operations.map((op, index) => (
             <View key={index} style={styles.opCard}>
               <View style={styles.opHeader}>
-                <Text style={styles.opTitle}>Operación {index + 1} · Activity {op.Activity || "—"}</Text>
+                <Text style={styles.opTitle}>
+                  Operación {index + 1} · Activity {op.Activity || "—"}
+                </Text>
                 {operations.length > 1 && (
                   <TouchableOpacity onPress={() => removeOperation(index)} style={styles.opDeleteBtn}>
                     <Ionicons name="trash-outline" size={16} color={COLORS.danger} />
@@ -766,7 +805,9 @@ export default function CrearOrdenMantto() {
                   onPress={() => updateOperation(index, "IsExternal", true)}
                   activeOpacity={0.85}
                 >
-                  <Text style={[styles.toggleText, op.IsExternal && styles.toggleTextActive]}>Externa (ControlKey X)</Text>
+                  <Text style={[styles.toggleText, op.IsExternal && styles.toggleTextActive]}>
+                    Externa (ControlKey X)
+                  </Text>
                 </TouchableOpacity>
               </View>
 
@@ -785,7 +826,9 @@ export default function CrearOrdenMantto() {
               <Field
                 label="Duración (horas) - DurationNormal"
                 value={op.DurationNormal}
-                onChangeText={(txt) => updateOperation(index, "DurationNormal", txt.replace(/[^0-9.]/g, ""))}
+                onChangeText={(txt) =>
+                  updateOperation(index, "DurationNormal", String(txt || "").replace(/[^0-9.]/g, ""))
+                }
                 placeholder="Ej. 2"
                 keyboardType="numeric"
               />
@@ -864,7 +907,9 @@ export default function CrearOrdenMantto() {
                       onPress={() => updateComponent(index, "Trackingno", "03")}
                       activeOpacity={0.85}
                     >
-                      <Text style={[styles.toggleText, c.Trackingno === "03" && styles.toggleTextActive]}>Directo (03)</Text>
+                      <Text style={[styles.toggleText, c.Trackingno === "03" && styles.toggleTextActive]}>
+                        Directo (03)
+                      </Text>
                     </TouchableOpacity>
 
                     <TouchableOpacity
@@ -872,13 +917,15 @@ export default function CrearOrdenMantto() {
                       onPress={() => updateComponent(index, "Trackingno", "02")}
                       activeOpacity={0.85}
                     >
-                      <Text style={[styles.toggleText, c.Trackingno === "02" && styles.toggleTextActive]}>Préstamo / Falla (02)</Text>
+                      <Text style={[styles.toggleText, c.Trackingno === "02" && styles.toggleTextActive]}>
+                        Préstamo / Falla (02)
+                      </Text>
                     </TouchableOpacity>
                   </View>
                 </>
               )}
 
-              {/* ✅ Material no encontrado: abre modal y carga categorías AL INSTANTE */}
+              {/* Material no encontrado */}
               <TouchableOpacity
                 style={{ flexDirection: "row", alignItems: "center", marginBottom: 10 }}
                 onPress={async () => {
@@ -892,14 +939,10 @@ export default function CrearOrdenMantto() {
                         return {
                           ...cc,
                           NotFound: true,
-
-                          // limpia cobertura
                           Material: "",
                           Category: "",
                           Materials: [],
                           LoadingMaterials: false,
-
-                          // prepara notfound
                           NotFoundCategory: "",
                           NotFoundMaterials: [],
                           MultiSelected: [],
@@ -919,7 +962,6 @@ export default function CrearOrdenMantto() {
                   );
 
                   if (next) {
-                    // ✅ ABRIR + cargar categorías inmediatamente
                     await openMultiSelect(index, true);
                   }
                 }}
@@ -953,7 +995,9 @@ export default function CrearOrdenMantto() {
                       onPress={() => updateComponent(index, "MultiTrackingno", "02")}
                       activeOpacity={0.85}
                     >
-                      <Text style={[styles.toggleText, c.MultiTrackingno === "02" && styles.toggleTextActive]}>Préstamo (02)</Text>
+                      <Text style={[styles.toggleText, c.MultiTrackingno === "02" && styles.toggleTextActive]}>
+                        Préstamo (02)
+                      </Text>
                     </TouchableOpacity>
 
                     <TouchableOpacity
@@ -961,7 +1005,9 @@ export default function CrearOrdenMantto() {
                       onPress={() => updateComponent(index, "MultiTrackingno", "01")}
                       activeOpacity={0.85}
                     >
-                      <Text style={[styles.toggleText, c.MultiTrackingno === "01" && styles.toggleTextActive]}>Oferta (01)</Text>
+                      <Text style={[styles.toggleText, c.MultiTrackingno === "01" && styles.toggleTextActive]}>
+                        Oferta (01)
+                      </Text>
                     </TouchableOpacity>
                   </View>
                 </>
@@ -970,7 +1016,9 @@ export default function CrearOrdenMantto() {
               <Field
                 label="Cantidad requerida (RequirementQuantity)"
                 value={c.RequirementQuantity}
-                onChangeText={(txt) => updateComponent(index, "RequirementQuantity", txt.replace(/[^0-9.]/g, ""))}
+                onChangeText={(txt) =>
+                  updateComponent(index, "RequirementQuantity", String(txt || "").replace(/[^0-9.]/g, ""))
+                }
                 placeholder="Ej. 2"
                 keyboardType="numeric"
               />
@@ -1053,12 +1101,11 @@ export default function CrearOrdenMantto() {
                 const c = components[multiIndex] || {};
                 const q = String(multiQuery || "").trim().toLowerCase();
 
-                // ✅ NOT FOUND: primero categorías, luego BOM items
+                // NOT FOUND: categorías -> bom items
                 if (c.NotFound) {
                   const cats = c.NotFoundCategories || [];
                   const zeinr = String(c.NotFoundCategory || "").trim();
 
-                  // 1) si no hay categoría, mostramos categorías
                   if (!zeinr) {
                     if (c.LoadingNotFoundCategories) {
                       return (
@@ -1110,7 +1157,6 @@ export default function CrearOrdenMantto() {
                     });
                   }
 
-                  // 2) ya hay categoría => mostramos BOM items
                   const list = c.NotFoundMaterials || [];
 
                   if (c.LoadingNotFoundMaterials) {
@@ -1124,7 +1170,9 @@ export default function CrearOrdenMantto() {
                   if (!list.length) {
                     return (
                       <View style={{ paddingHorizontal: 14, paddingVertical: 10 }}>
-                        <Text style={{ color: COLORS.muted, fontSize: 12 }}>No hay materiales BOM para: {zeinr}</Text>
+                        <Text style={{ color: COLORS.muted, fontSize: 12 }}>
+                          No hay materiales BOM para: {zeinr}
+                        </Text>
 
                         <View style={{ flexDirection: "row", gap: 10, marginTop: 10 }}>
                           <TouchableOpacity
@@ -1143,7 +1191,10 @@ export default function CrearOrdenMantto() {
                           </TouchableOpacity>
 
                           <TouchableOpacity
-                            style={[styles.smallBtn, { backgroundColor: COLORS.accent, borderColor: COLORS.accent }]}
+                            style={[
+                              styles.smallBtn,
+                              { backgroundColor: COLORS.accent, borderColor: COLORS.accent },
+                            ]}
                             onPress={() => loadNotFoundMaterialsByCategory(multiIndex, zeinr)}
                           >
                             <Text style={[styles.smallBtnText, { color: "#fff" }]}>Reintentar</Text>
@@ -1192,7 +1243,7 @@ export default function CrearOrdenMantto() {
                   });
                 }
 
-                // ✅ NORMAL: usa cobertura (c.Materials)
+                // NORMAL: cobertura
                 const list = c.Materials || [];
                 const filtered = !q
                   ? list
@@ -1239,7 +1290,9 @@ export default function CrearOrdenMantto() {
                 style={[styles.smallBtn, { backgroundColor: COLORS.cardBg }]}
                 onPress={() => {
                   if (multiIndex < 0) return;
-                  setComponents((prev) => prev.map((cc, i) => (i === multiIndex ? { ...cc, MultiSelected: [] } : cc)));
+                  setComponents((prev) =>
+                    prev.map((cc, i) => (i === multiIndex ? { ...cc, MultiSelected: [] } : cc))
+                  );
                 }}
               >
                 <Text style={styles.smallBtnText}>Limpiar</Text>
@@ -1324,7 +1377,12 @@ const SelectWorkCenter = ({ items, selected, onSelect }) => {
             </View>
 
             <View style={{ padding: 12, paddingBottom: 6 }}>
-              <View style={[styles.input, { flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: "#fff" }]}>
+              <View
+                style={[
+                  styles.input,
+                  { flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: "#fff" },
+                ]}
+              >
                 <Ionicons name="search" size={16} color={COLORS.muted} />
                 <TextInput
                   style={{ flex: 1, fontSize: 13, color: COLORS.title }}
@@ -1342,7 +1400,9 @@ const SelectWorkCenter = ({ items, selected, onSelect }) => {
                 )}
               </View>
 
-              <Text style={{ fontSize: 11, color: COLORS.muted, marginTop: 6 }}>{filteredItems.length} resultado(s)</Text>
+              <Text style={{ fontSize: 11, color: COLORS.muted, marginTop: 6 }}>
+                {filteredItems.length} resultado(s)
+              </Text>
             </View>
 
             <ScrollView style={{ maxHeight: 280 }} contentContainerStyle={{ paddingVertical: 8 }}>
