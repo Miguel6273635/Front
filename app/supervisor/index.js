@@ -21,14 +21,6 @@ const TILES = [
     onPress: () => router.push('/supervisor/reprogramacionesPlan'),
   },
   {
-    key: 'notificaciones',
-    title: 'Notificaciones',
-    icon: 'notifications-outline',
-    // si en algún momento quieres pasarle el total, aquí se lo pones:
-    // badge: 5,
-    onPress: () => router.push('/notificaciones'),
-  },
-  {
     key: 'ordenes',
     title: 'Órdenes de servicio',
     icon: 'receipt-outline',
@@ -45,12 +37,6 @@ const TILES = [
     title: 'No mantenimiento',
     icon: 'trash-bin-outline',
     onPress: () => router.push('/supervisor/no_mantenimiento'),
-  },
-  {
-    key: 'pendientes',
-    title: 'Reportes de pendientes',
-    icon: 'documents-outline',
-    onPress: () => router.push('/supervisor/monitoreo/monitoreo'),
   },
   {
     key: 'monitoreo',

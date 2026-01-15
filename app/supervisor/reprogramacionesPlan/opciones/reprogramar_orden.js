@@ -1,5 +1,5 @@
 // app/supervisor/reprogramacionesPlan/opciones/normal/reprogramar-orden.js
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState, useCallback } from "react";
 import {
   View,
   Text,
@@ -12,49 +12,115 @@ import {
   Alert,
   TextInput,
   ActivityIndicator,
-  SafeAreaView,
-} from 'react-native';
-import { Calendar, LocaleConfig } from 'react-native-calendars';
-import { Ionicons } from '@expo/vector-icons';
-import Header from '../../../../src/components/Header';
-import api from '../../../../src/services/api';
-import { useAuth } from '../../../../src/context/AuthContext';
+
+} from "react-native";
+import { Calendar, LocaleConfig } from "react-native-calendars";
+import { Ionicons } from "@expo/vector-icons";
+import Header from "../../../../src/components/Header";
+import api from "../../../../src/services/api";
+import { useAuth } from "../../../../src/context/AuthContext";
+
+import { SafeAreaView } from "react-native-safe-area-context";
 
 /* ====================== Locale ES ====================== */
 LocaleConfig.locales.es = {
   monthNames: [
-    'Enero','Febrero','Marzo','Abril','Mayo','Junio',
-    'Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre',
+    "Enero","Febrero","Marzo","Abril","Mayo","Junio",
+    "Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre",
   ],
-  monthNamesShort: ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'],
-  dayNames: ['Domingo','Lunes','Martes','Miércoles','Jueves','Viernes','Sábado'],
-  dayNamesShort: ['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'],
-  today: 'Hoy',
+  monthNamesShort: ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"],
+  dayNames: ["Domingo","Lunes","Martes","Miércoles","Jueves","Viernes","Sábado"],
+  dayNamesShort: ["Dom","Lun","Mar","Mié","Jue","Vie","Sáb"],
+  today: "Hoy",
 };
-LocaleConfig.defaultLocale = 'es';
+LocaleConfig.defaultLocale = "es";
 
 /* ====================== Colores ====================== */
 const COLORS = {
-  pageBg: '#F7F7F7',
-  cardBg: '#FFFFFF',
-  border: '#E4E9F0',
-  textPrimary: '#0B1F3B',
-  textSub: '#6A7381',
-  accent: '#0A6ED1',
+  pageBg: "#F7F7F7",
+  cardBg: "#FFFFFF",
+  border: "#E4E9F0",
+  textPrimary: "#0B1F3B",
+  textSub: "#6A7381",
+  accent: "#0A6ED1",
+  danger: "#E76565",
+  ok: "#1F8A5B",
+  warn: "#B26A00",
 };
 
 /* ====================== Helpers ====================== */
-const pad2 = (n) => String(n).padStart(2, '0');
+const pad2 = (n) => String(n).padStart(2, "0");
 const toYMD = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+const safeStr = (v) => (v == null ? "" : String(v));
 
+function ymdToSAP(ymd) {
+  if (!ymd) return "";
+  const [y, m, d] = ymd.split("-");
+  return `${y}${m}${d}`;
+}
 function ymdToDate(ymd) {
-  const [y, m, d] = ymd.split('-').map(Number);
+  const [y, m, d] = ymd.split("-").map(Number);
   return new Date(y, m - 1, d);
 }
 
+// /Date(1768435200000)/ -> YYYY-MM-DD
+function odataDateToYMD(value) {
+  const s = safeStr(value);
+  const match = s.match(/\/Date\((\d+)\)\//);
+  if (!match) return "";
+  const ms = Number(match[1]);
+  if (!Number.isFinite(ms)) return "";
+  const d = new Date(ms);
+  return toYMD(d);
+}
+
+/**
+ * ✅ Regla de ocultamiento:
+ * NO mostrar si Userstatus contiene códigos y TODOS están entre 0001..0011.
+ * Mostrar si vacío o si hay algún código fuera del rango.
+ */
+function shouldHideByUserstatus(userstatusRaw) {
+  const s = safeStr(userstatusRaw).trim();
+  if (!s) return false;
+
+  const codes = s.match(/\b\d{4}\b/g) || [];
+  if (codes.length === 0) return false;
+
+  const allInRange = codes.every((c) => {
+    const n = Number(c);
+    return n >= 1 && n <= 11;
+  });
+
+  return allInRange;
+}
+
+function getMonthRange(year, month) {
+  const start = new Date(year, month - 1, 1);
+  const end = new Date(year, month, 0);
+  return { startYmd: toYMD(start), endYmd: toYMD(end) };
+}
+
+function buildODataDayFilter({ ymd, email }) {
+  return `StartDate ge datetime'${ymd}T00:00:00' and FinishDate le datetime'${ymd}T23:59:59' and Userstatus eq '${email}'`;
+}
+
+function buildODataRangeFilter({ startYmd, endYmd, email }) {
+  return `StartDate ge datetime'${startYmd}T00:00:00' and FinishDate le datetime'${endYmd}T23:59:59' and Userstatus eq '${email}'`;
+}
+
+
 function buildRangeMarkedDates(startYmd, endYmd) {
   const marked = {};
-  if (!startYmd || !endYmd) return marked;
+  if (!startYmd) return marked;
+
+  if (startYmd && !endYmd) {
+    marked[startYmd] = {
+      selected: true,
+      selectedColor: COLORS.accent,
+      selectedTextColor: "#fff",
+    };
+    return marked;
+  }
 
   const s = ymdToDate(startYmd);
   const e = ymdToDate(endYmd);
@@ -65,17 +131,13 @@ function buildRangeMarkedDates(startYmd, endYmd) {
     const key = toYMD(cur);
     marked[key] = {
       color: COLORS.accent,
-      textColor: '#FFFFFF',
+      textColor: "#FFFFFF",
       startingDay: key === startYmd,
       endingDay: key === endYmd,
     };
     cur.setDate(cur.getDate() + 1);
   }
   return marked;
-}
-
-function safeStr(v) {
-  return v == null ? '' : String(v);
 }
 
 export default function ReprogramarOrden() {
@@ -85,7 +147,7 @@ export default function ReprogramarOrden() {
     safeStr(user?.email) ||
     safeStr(user?.correo) ||
     safeStr(user?.username) ||
-    'supervisor@mitsu.com';
+    "supervisor1@mitsu.com";
 
   const today = new Date();
   const [anioVisible, setAnioVisible] = useState(today.getFullYear());
@@ -94,25 +156,27 @@ export default function ReprogramarOrden() {
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(false);
 
-  const [selectedDate, setSelectedDate] = useState(null); // filtro exacto por StartDate
-  const [query, setQuery] = useState('');
+  const [selectedDate, setSelectedDate] = useState(null); // filtro exacto por día
+  const [query, setQuery] = useState("");
 
-  // ✅ selección múltiple
+  // multiselect
   const [selectedIds, setSelectedIds] = useState(new Set());
   const selectedCount = selectedIds.size;
   const bulkMode = selectedCount > 0;
 
-  // Modal editar UNA orden (rango paso a paso)
+  // Modal reprogramar UNA (rango)
   const [editOpen, setEditOpen] = useState(false);
   const [editing, setEditing] = useState(null);
-  const [pickStep, setPickStep] = useState('start'); // 'start' | 'end'
-  const [tempStart, setTempStart] = useState('');
-  const [tempEnd, setTempEnd] = useState('');
+  const [pickStep, setPickStep] = useState("start"); // "start" | "end"
+  const [tempStart, setTempStart] = useState("");
+  const [tempEnd, setTempEnd] = useState("");
   const [saving, setSaving] = useState(false);
 
-  // Modal BULK (una fecha para muchas)
+  // Modal reprogramar VARIAS (rango igual para todas)
   const [bulkOpen, setBulkOpen] = useState(false);
-  const [bulkDate, setBulkDate] = useState(toYMD(new Date()));
+  const [bulkStep, setBulkStep] = useState("start"); // "start" | "end"
+  const [bulkStart, setBulkStart] = useState("");    // YYYY-MM-DD
+  const [bulkEnd, setBulkEnd] = useState("");        // YYYY-MM-DD
   const [bulkSaving, setBulkSaving] = useState(false);
 
   function toggleSelect(id) {
@@ -128,47 +192,75 @@ export default function ReprogramarOrden() {
     setSelectedIds(new Set());
   }
 
-  // ✅ NORMAL: backend ya EXCLUYE 0011
-  const fetchOrders = async ({ year, month }) => {
-    try {
-      setLoading(true);
+  // ✅ FETCH desde NotificationHeaderSet (como ya lo traías)
+  const fetchOrders = useCallback(
+    async ({ year, month, dayYmd }) => {
+      try {
+        setLoading(true);
 
-      const res = await api.get('/sap/reprogramaciones/ordenes', {
-        headers: { Authorization: `Bearer ${token}` },
-        params: { year, month },
-      });
+        const { startYmd, endYmd } = getMonthRange(year, month);
 
-      const list = Array.isArray(res.data?.results) ? res.data.results : [];
-      const mapped = list
-        .map((x) => ({
-          id: safeStr(x.Orderid || x.OrderId || x.id),
-          equipo: safeStr(x.Equipment || x.equipo || ''),
-          shortText: safeStr(x.ShortText || x.descripcion || ''),
-          startDate: safeStr(x.StartDate || x.startDate || ''),
-          finishDate: safeStr(x.FinishDate || x.finishDate || x.StartDate || ''),
-          userstatusCodes: safeStr(x.Userstatus || ''),
-        }))
-        .filter((o) => o.id);
+        const filter = dayYmd
+          ? buildODataDayFilter({ ymd: dayYmd, email: supervisorEmail })
+          : buildODataRangeFilter({ startYmd, endYmd, email: supervisorEmail });
 
-      setOrders(mapped);
-      clearSelection();
-    } catch (error) {
-      console.error('Error al cargar órdenes SAP:', error?.response?.data || error?.message);
-      Alert.alert('Error', error?.response?.data?.error || 'No se pudieron cargar las órdenes de SAP.');
-      setOrders([]);
-      clearSelection();
-    } finally {
-      setLoading(false);
-    }
-  };
+        const res = await api.get(
+          "/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet",
+          {
+            headers: { Authorization: `Bearer ${token}` },
+            params: { $filter: filter, $format: "json" },
+          }
+        );
+
+
+        const results = Array.isArray(res.data?.d?.results) ? res.data.d.results : [];
+
+        const mapped = results
+          .map((x) => {
+            const id = safeStr(x.Orderid || x.OrderId || x.OrderID || x.NotifNo || x.Notification || x.id);
+
+            const startFromWorkOrder = odataDateToYMD(x.StartDate);
+            const finishFromWorkOrder = odataDateToYMD(x.FinishDate);
+
+            const notifDate =
+              safeStr(x.NotifDate).includes("/Date(") ? odataDateToYMD(x.NotifDate) : safeStr(x.NotifDate || "");
+
+            const finalStart = startFromWorkOrder || notifDate;
+            const finalFinish = finishFromWorkOrder || notifDate || finalStart;
+
+            const userstatusCodes = safeStr(x.Userstatus || x.UserStatus || "");
+
+            return {
+              id,
+              equipo: safeStr(x.Equipment || x.Equipo || ""),
+              shortText: safeStr(x.ShortText || x.Description || x.Descripcion || ""),
+              startDate: finalStart,
+              finishDate: finalFinish,
+              userstatusCodes,
+            };
+          })
+          .filter((o) => o.id)
+          .filter((o) => !shouldHideByUserstatus(o.userstatusCodes));
+
+        setOrders(mapped);
+        clearSelection();
+      } catch (error) {
+        console.error("Error al cargar órdenes (NotificationHeaderSet):", error?.response?.data || error?.message);
+        Alert.alert("Error", "No se pudieron cargar las órdenes del servicio de notificaciones.");
+        setOrders([]);
+        clearSelection();
+      } finally {
+        setLoading(false);
+      }
+    },
+    [token, supervisorEmail]
+  );
 
   useEffect(() => {
     if (!token) return;
-    fetchOrders({ year: anioVisible, month: mesVisible });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token, anioVisible, mesVisible]);
+    fetchOrders({ year: anioVisible, month: mesVisible, dayYmd: null });
+  }, [token, anioVisible, mesVisible, fetchOrders]);
 
-  // Puntos en calendario (solo para “hay órdenes”)
   const markedDates = useMemo(() => {
     const marks = {};
     orders.forEach((o) => {
@@ -180,43 +272,34 @@ export default function ReprogramarOrden() {
         ...(marks[selectedDate] || {}),
         selected: true,
         selectedColor: COLORS.accent,
-        selectedTextColor: '#FFFFFF',
+        selectedTextColor: "#FFFFFF",
       };
     }
     return marks;
   }, [orders, selectedDate]);
 
-  // ✅ FILTRO: si selecciona día -> SOLO StartDate === selectedDate
   const filteredOrders = useMemo(() => {
     let list = orders;
 
-    if (selectedDate) {
-      list = list.filter((o) => o.startDate === selectedDate);
-    }
+    if (selectedDate) list = list.filter((o) => o.startDate === selectedDate);
 
     const q = query.trim().toLowerCase();
     if (q) {
-      list = list.filter((o) => {
-        const haystack = `${o.id} ${o.equipo} ${o.shortText}`.toLowerCase();
-        return haystack.includes(q);
-      });
+      list = list.filter((o) => (`${o.id} ${o.equipo} ${o.shortText} ${o.userstatusCodes}`).toLowerCase().includes(q));
     }
-
     return list;
   }, [orders, selectedDate, query]);
 
+  // ===== UNA orden (rango) =====
   function openEdit(order) {
     if (bulkMode) return;
 
     setEditing(order);
 
-    // paso a paso: primero inicio, luego fin
     const start = order.startDate || toYMD(new Date());
-    const end = order.finishDate || start;
-
     setTempStart(start);
-    setTempEnd(''); // 👈 dejamos fin vacío para que sea “paso 2”
-    setPickStep('start');
+    setTempEnd("");
+    setPickStep("start");
     setEditOpen(true);
   }
 
@@ -224,23 +307,21 @@ export default function ReprogramarOrden() {
     if (saving) return;
     setEditOpen(false);
     setEditing(null);
-    setPickStep('start');
-    setTempStart('');
-    setTempEnd('');
+    setPickStep("start");
+    setTempStart("");
+    setTempEnd("");
   }
 
-  // ✅ Paso a paso: primer tap define inicio, segundo tap define fin
   function onPickDate(ymd) {
-    if (pickStep === 'start') {
+    if (pickStep === "start") {
       setTempStart(ymd);
-      setTempEnd('');       // reset fin cada vez que cambias inicio
-      setPickStep('end');
+      setTempEnd("");
+      setPickStep("end");
       return;
     }
 
-    // pickStep === 'end'
     if (tempStart && ymdToDate(ymd) < ymdToDate(tempStart)) {
-      Alert.alert('Fecha inválida', 'La fecha fin no puede ser menor a la fecha inicio.');
+      Alert.alert("Fecha inválida", "La fecha fin no puede ser menor a la fecha inicio.");
       return;
     }
     setTempEnd(ymd);
@@ -252,65 +333,160 @@ export default function ReprogramarOrden() {
 
   async function saveEdit() {
     if (!editing) return;
-
     if (!tempStart || !tempEnd) {
-      Alert.alert('Faltan fechas', 'Selecciona fecha inicio y fecha fin.');
+      Alert.alert("Faltan fechas", "Selecciona fecha inicio y fecha fin.");
       return;
     }
     if (ymdToDate(tempEnd) < ymdToDate(tempStart)) {
-      Alert.alert('Fecha inválida', 'La fecha fin no puede ser menor a la fecha inicio.');
+      Alert.alert("Fecha inválida", "La fecha fin no puede ser menor a la fecha inicio.");
       return;
     }
+
+    const payload = {
+      WorkOrderHeader: { Supervisor: supervisorEmail },
+      WorkOrderItemsSet: [
+        {
+          OrderId: safeStr(editing.id),
+          OrderItem: "",
+          FechaIni: ymdToSAP(tempStart),
+          FechaFin: ymdToSAP(tempEnd),
+        },
+      ],
+      ReturnSet: [],
+    };
 
     try {
       setSaving(true);
 
-      await api.post(
-        '/sap/reprogramaciones/reagendar',
+      console.log("[REPROGRAMACION] payload:", JSON.stringify(payload, null, 2));
+
+      const res = await api.post(
+        "/api/odata/ZCS_RESCHEDULE_WORKORDER_SRV/WorkOrderHeaderSet",
+        payload,
         {
-          supervisor: supervisorEmail,
-          items: [{ OrderId: editing.id, fechaInicio: tempStart, fechaFin: tempEnd }],
-        },
-        { headers: { Authorization: `Bearer ${token}` } }
+          headers: {
+            Authorization: `Bearer ${token}`,
+            Accept: "application/json",
+            "Content-Type": "application/json",
+          },
+        }
       );
+
+      console.log("[REPROGRAMACION OK] response:", res?.data);
 
       setOrders((prev) =>
         prev.map((o) => (o.id === editing.id ? { ...o, startDate: tempStart, finishDate: tempEnd } : o))
       );
 
       closeEdit();
-      Alert.alert('Listo', 'Orden reprogramada.');
+      Alert.alert("Reprogramación lista", `Orden #${editing.id}\nInicio: ${tempStart}\nFin: ${tempEnd}`);
     } catch (error) {
-      console.error('Error al reagendar:', error?.response?.data || error?.message);
-      Alert.alert('Error', error?.response?.data?.error || 'No se pudo reprogramar en SAP.');
+      console.error("[REPROGRAMACION ERROR]", error?.response?.data || error?.message);
+      Alert.alert("Error", "No se pudo reprogramar en SAP (revisa logs del backend/BTP).");
     } finally {
       setSaving(false);
     }
   }
 
+  // ===== VARIAS órdenes (rango) =====
+  function openBulk() {
+    if (!bulkMode) return;
+
+    // ✅ recuerda lo último si ya había algo, si no, usa hoy
+    const fallback = toYMD(new Date());
+    const start = bulkStart || fallback;
+
+    setBulkStep("start");
+    setBulkStart(start);
+    setBulkEnd(bulkEnd || ""); // si ya tenía end, lo mantiene, si no, vacío
+    setBulkOpen(true);
+  }
+
+  function closeBulk() {
+    if (bulkSaving) return;
+    setBulkOpen(false);
+    setBulkStep("start");
+    // ✅ NO limpiamos bulkStart/bulkEnd para "recordar" la última selección
+  }
+
+  function onPickBulkDate(ymd) {
+    if (bulkStep === "start") {
+      setBulkStart(ymd);
+      setBulkEnd("");
+      setBulkStep("end");
+      return;
+    }
+
+    if (bulkStart && ymdToDate(ymd) < ymdToDate(bulkStart)) {
+      Alert.alert("Fecha inválida", "La fecha fin no puede ser menor a la fecha inicio.");
+      return;
+    }
+    setBulkEnd(ymd);
+  }
+
+  function canSaveBulk() {
+    return bulkMode && !!bulkStart && !!bulkEnd && !bulkSaving;
+  }
+
+  const selectedIdsArray = useMemo(() => Array.from(selectedIds), [selectedIds]);
+
   async function saveBulk() {
-    if (selectedIds.size === 0) return;
+    if (!bulkMode) return;
+
+    if (!bulkStart || !bulkEnd) {
+      Alert.alert("Faltan fechas", "Selecciona fecha inicio y fecha fin.");
+      return;
+    }
+    if (ymdToDate(bulkEnd) < ymdToDate(bulkStart)) {
+      Alert.alert("Fecha inválida", "La fecha fin no puede ser menor a la fecha inicio.");
+      return;
+    }
+
+    const payload = {
+      WorkOrderHeader: { Supervisor: supervisorEmail },
+      WorkOrderItemsSet: selectedIdsArray.map((id) => ({
+        OrderId: safeStr(id),
+        OrderItem: "",
+        FechaIni: ymdToSAP(bulkStart),
+        FechaFin: ymdToSAP(bulkEnd),
+      })),
+      ReturnSet: [],
+    };
 
     try {
       setBulkSaving(true);
-      const orderIds = Array.from(selectedIds);
 
-      await api.post(
-        '/sap/reprogramaciones/reagendar',
-        { supervisor: supervisorEmail, fecha: bulkDate, orderIds },
-        { headers: { Authorization: `Bearer ${token}` } }
+      console.log("[REPROGRAMACION BULK] payload:", JSON.stringify(payload, null, 2));
+
+      const res = await api.post(
+        "/api/odata/ZCS_RESCHEDULE_WORKORDER_SRV/WorkOrderHeaderSet",
+        payload,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            Accept: "application/json",
+            "Content-Type": "application/json",
+          },
+        }
       );
 
+      console.log("[REPROGRAMACION BULK OK] response:", res?.data);
+
+      // actualiza UI local
       setOrders((prev) =>
-        prev.map((o) => (selectedIds.has(o.id) ? { ...o, startDate: bulkDate, finishDate: bulkDate } : o))
+        prev.map((o) =>
+          selectedIds.has(o.id) ? { ...o, startDate: bulkStart, finishDate: bulkEnd } : o
+        )
       );
 
-      setBulkOpen(false);
+      const count = selectedIdsArray.length;
       clearSelection();
-      Alert.alert('Listo', `Se reprogramaron ${orderIds.length} órdenes.`);
+      setBulkOpen(false);
+
+      Alert.alert("Reprogramación lista", `Se reprogramaron ${count} órdenes.\nInicio: ${bulkStart}\nFin: ${bulkEnd}`);
     } catch (error) {
-      console.error('Error bulk:', error?.response?.data || error?.message);
-      Alert.alert('Error', error?.response?.data?.error || 'No se pudieron reprogramar las órdenes.');
+      console.error("[REPROGRAMACION BULK ERROR]", error?.response?.data || error?.message);
+      Alert.alert("Error", "No se pudieron reprogramar las órdenes seleccionadas.");
     } finally {
       setBulkSaving(false);
     }
@@ -320,13 +496,15 @@ export default function ReprogramarOrden() {
 
   const HeaderUI = (
     <View>
-      {/* info supervisor + refrescar */}
       <View style={styles.card}>
         <View style={styles.cardTitleRow}>
           <Ionicons name="person-outline" size={18} color={COLORS.textPrimary} />
           <Text style={styles.cardTitle}>Supervisor</Text>
 
-          <Pressable onPress={() => fetchOrders({ year: anioVisible, month: mesVisible })} style={styles.refreshBtn}>
+          <Pressable
+            onPress={() => fetchOrders({ year: anioVisible, month: mesVisible, dayYmd: null })}
+            style={styles.refreshBtn}
+          >
             <Ionicons name="refresh" size={16} color={COLORS.textSub} />
             <Text style={styles.refreshText}>Actualizar</Text>
           </Pressable>
@@ -335,23 +513,28 @@ export default function ReprogramarOrden() {
         <Text style={styles.hint}>{safeStr(supervisorEmail)}</Text>
 
         <Text style={styles.hint}>
-          Mes actual: <Text style={styles.bold}>{monthLabel}</Text>
+          Mes visible: <Text style={styles.bold}>{monthLabel}</Text>
         </Text>
 
         <Text style={styles.hint}>
-          *Aquí aparecen <Text style={styles.bold}>todas</Text> las órdenes <Text style={styles.bold}>EXCEPTO</Text> las de código <Text style={styles.bold}>0011</Text>.
+          *Se ocultan si Userstatus es únicamente códigos 0001..0011.
         </Text>
       </View>
 
-      {/* calendario */}
       <View style={[styles.card, { marginTop: 12 }]}>
         <View style={styles.cardTitleRow}>
           <Ionicons name="today-outline" size={18} color={COLORS.textPrimary} />
           <Text style={styles.cardTitle}>Calendario</Text>
 
           {!!selectedDate && (
-            <Pressable onPress={() => setSelectedDate(null)} style={styles.clearBtn}>
-              <Text style={styles.clearBtnText}>Ver todas</Text>
+            <Pressable
+              onPress={() => {
+                setSelectedDate(null);
+                fetchOrders({ year: anioVisible, month: mesVisible, dayYmd: null });
+              }}
+              style={styles.clearBtn}
+            >
+              <Text style={styles.clearBtnText}>Ver mes</Text>
             </Pressable>
           )}
         </View>
@@ -367,10 +550,14 @@ export default function ReprogramarOrden() {
           }}
           markingType="simple"
           markedDates={markedDates}
-          onDayPress={(day) => setSelectedDate(day.dateString)}
+          onDayPress={(day) => {
+            const ymd = day.dateString;
+            setSelectedDate(ymd);
+            fetchOrders({ year: anioVisible, month: mesVisible, dayYmd: ymd });
+          }}
           theme={{
-            backgroundColor: 'transparent',
-            calendarBackground: 'transparent',
+            backgroundColor: "transparent",
+            calendarBackground: "transparent",
             textSectionTitleColor: COLORS.textSub,
             dayTextColor: COLORS.textPrimary,
             monthTextColor: COLORS.textPrimary,
@@ -381,19 +568,18 @@ export default function ReprogramarOrden() {
 
         <Text style={styles.hint}>
           {selectedDate
-            ? `Filtro activo: solo órdenes que INICIAN el ${selectedDate}.`
-            : 'Toca un día para filtrar SOLO por fecha de INICIO.'}
+            ? `Mostrando solo órdenes del día: ${selectedDate}`
+            : "Toca un día para filtrar/cargar por esa fecha."}
         </Text>
       </View>
 
-      {/* buscador */}
       <View style={[styles.card, { marginTop: 12 }]}>
         <View style={styles.cardTitleRow}>
           <Ionicons name="search-outline" size={18} color={COLORS.textPrimary} />
-          <Text style={styles.cardTitle}>Buscar / Seleccionar orden</Text>
+          <Text style={styles.cardTitle}>Buscar orden</Text>
 
           {loading && (
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
               <ActivityIndicator size="small" color={COLORS.accent} />
               <Text style={{ color: COLORS.textSub, fontSize: 12 }}>Cargando…</Text>
             </View>
@@ -405,13 +591,13 @@ export default function ReprogramarOrden() {
           <TextInput
             value={query}
             onChangeText={setQuery}
-            placeholder="Busca por #orden, equipo o texto…"
+            placeholder="Busca por #orden, equipo, texto o códigos…"
             placeholderTextColor="#9AA5B1"
             style={styles.searchInput}
             autoCapitalize="none"
           />
           {!!query && (
-            <Pressable onPress={() => setQuery('')} hitSlop={10}>
+            <Pressable onPress={() => setQuery("")} hitSlop={10}>
               <Ionicons name="close-circle" size={18} color={COLORS.textSub} />
             </Pressable>
           )}
@@ -420,38 +606,25 @@ export default function ReprogramarOrden() {
 
       <Text style={styles.count}>
         Mostrando <Text style={styles.bold}>{filteredOrders.length}</Text> órdenes
-        {selectedDate ? ` del día ${selectedDate}` : ''}
+        {selectedDate ? ` del día ${selectedDate}` : ""}
       </Text>
-
-      {selectedCount > 0 && (
-        <View style={styles.bulkBar}>
-          <Text style={styles.bulkText}>Seleccionadas: {selectedCount}</Text>
-
-          <Pressable onPress={() => setBulkOpen(true)} style={styles.bulkBtn}>
-            <Ionicons name="calendar-outline" size={16} color="#fff" />
-            <Text style={styles.bulkBtnText}>Reprogramar</Text>
-          </Pressable>
-
-          <Pressable onPress={clearSelection} style={styles.bulkClear}>
-            <Text style={styles.bulkClearText}>Limpiar</Text>
-          </Pressable>
-        </View>
-      )}
     </View>
   );
 
   return (
     <SafeAreaView style={styles.safe}>
       <StatusBar barStyle="dark-content" />
-      <Header title="Reprogramar (Normal)" />
+      <Header title="Reprogramar (Supervisor)" />
 
       <FlatList
         data={filteredOrders}
         keyExtractor={(item) => item.id}
         ListHeaderComponent={HeaderUI}
-        contentContainerStyle={{ paddingBottom: 22 }}
+        contentContainerStyle={{
+          paddingBottom: bulkMode ? 110 : 22, // ✅ deja espacio para la barra flotante
+        }}
         ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
-        ListEmptyComponent={<Text style={styles.empty}>{loading ? 'Cargando…' : 'No hay resultados.'}</Text>}
+        ListEmptyComponent={<Text style={styles.empty}>{loading ? "Cargando…" : "No hay resultados."}</Text>}
         renderItem={({ item }) => {
           const checked = selectedIds.has(item.id);
 
@@ -459,7 +632,7 @@ export default function ReprogramarOrden() {
             <View style={styles.orderRow}>
               <Pressable onPress={() => toggleSelect(item.id)} style={styles.checkWrap} hitSlop={10}>
                 <Ionicons
-                  name={checked ? 'checkbox' : 'square-outline'}
+                  name={checked ? "checkbox" : "square-outline"}
                   size={22}
                   color={checked ? COLORS.accent : COLORS.textSub}
                 />
@@ -469,28 +642,23 @@ export default function ReprogramarOrden() {
                 <Text style={styles.orderId}>Orden #{item.id}</Text>
 
                 <Text style={styles.orderSub}>
-                  {item.equipo ? item.equipo : 'Equipo —'}
-                  {item.shortText ? ` • ${item.shortText}` : ''}
+                  {item.equipo ? item.equipo : "Equipo —"}
+                  {item.shortText ? ` • ${item.shortText}` : ""}
                 </Text>
 
                 <Text style={styles.orderDates}>
-                  Inicio: <Text style={styles.bold}>{item.startDate || '—'}</Text> · Fin:{' '}
-                  <Text style={styles.bold}>{item.finishDate || '—'}</Text>
+                  Inicio: <Text style={styles.bold}>{item.startDate || "—"}</Text> · Fin:{" "}
+                  <Text style={styles.bold}>{item.finishDate || "—"}</Text>
                 </Text>
 
-                {!!item.userstatusCodes && <Text style={styles.small}>Códigos: {item.userstatusCodes}</Text>}
+                {!!item.userstatusCodes && (
+                  <Text style={styles.small}>Userstatus: {safeStr(item.userstatusCodes).trim() || "—"}</Text>
+                )}
               </View>
 
-              {/* ✅ oculto si hay selección múltiple */}
+              {/* ✅ Solo permitir reprogramar UNA cuando NO hay selección múltiple */}
               {!bulkMode && (
-                <Pressable
-                  onPress={() => openEdit(item)}
-                  android_ripple={{ color: '#d7e3f3' }}
-                  style={({ pressed }) => [
-                    styles.editBtn,
-                    pressed && Platform.OS === 'ios' ? { opacity: 0.9 } : null,
-                  ]}
-                >
+                <Pressable style={styles.editBtn} onPress={() => openEdit(item)}>
                   <Ionicons name="calendar-outline" size={18} color="#fff" />
                   <Text style={styles.editBtnText}>Reprogramar</Text>
                 </Pressable>
@@ -500,41 +668,65 @@ export default function ReprogramarOrden() {
         }}
       />
 
-      {/* ===== Modal editar UNA orden (paso a paso: inicio -> fin) ===== */}
+      {/* ✅ BARRA FLOTANTE cuando hay selección */}
+      {bulkMode && (
+        <View style={styles.bulkBar}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.bulkTitle}>Seleccionadas: {selectedCount}</Text>
+            <Text style={styles.bulkSub}>Asigna un rango a todas</Text>
+          </View>
+
+          <Pressable onPress={clearSelection} style={styles.bulkGhost}>
+            <Text style={styles.bulkGhostText}>Limpiar</Text>
+          </Pressable>
+
+          <Pressable onPress={openBulk} style={styles.bulkPrimary}>
+            <Ionicons name="calendar-outline" size={18} color="#fff" />
+            <Text style={styles.bulkPrimaryText}>Reprogramar</Text>
+          </Pressable>
+        </View>
+      )}
+
+      {/* ===== Modal editar UNA (rango) ===== */}
       <Modal visible={editOpen} transparent animationType="fade" onRequestClose={closeEdit}>
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>{editing ? `Orden #${editing.id}` : 'Orden'}</Text>
+              <Text style={styles.modalTitle}>{editing ? `Orden #${editing.id}` : "Orden"}</Text>
               <Pressable onPress={closeEdit} hitSlop={10}>
                 <Ionicons name="close" size={22} color={COLORS.textPrimary} />
               </Pressable>
             </View>
 
-            <Text style={styles.modalHint}>
-              {pickStep === 'start'
-                ? 'Paso 1: selecciona la fecha de INICIO'
-                : 'Paso 2: selecciona la fecha de FIN'}
-            </Text>
+            <View style={[styles.stepBanner, pickStep === "start" ? styles.stepBannerStart : styles.stepBannerEnd]}>
+              <Ionicons
+                name={pickStep === "start" ? "flag-outline" : "checkmark-circle-outline"}
+                size={18}
+                color={pickStep === "start" ? COLORS.warn : COLORS.ok}
+              />
+              <Text style={styles.stepBannerText}>
+                {pickStep === "start" ? "Paso 1: Selecciona la FECHA DE INICIO" : "Paso 2: Selecciona la FECHA DE FIN"}
+              </Text>
+            </View>
 
             <View style={styles.pillsRow}>
-              <View style={[styles.pill, pickStep === 'start' && styles.pillActive]}>
+              <View style={[styles.pill, pickStep === "start" && styles.pillActive]}>
                 <Text style={styles.pillLabel}>Inicio</Text>
-                <Text style={styles.pillValue}>{tempStart || '—'}</Text>
+                <Text style={styles.pillValue}>{tempStart || "—"}</Text>
               </View>
-              <View style={[styles.pill, pickStep === 'end' && styles.pillActive]}>
+              <View style={[styles.pill, pickStep === "end" && styles.pillActive]}>
                 <Text style={styles.pillLabel}>Fin</Text>
-                <Text style={styles.pillValue}>{tempEnd || '—'}</Text>
+                <Text style={styles.pillValue}>{tempEnd || "—"}</Text>
               </View>
             </View>
 
             <Calendar
-              markingType="period"
-              markedDates={tempStart && tempEnd ? buildRangeMarkedDates(tempStart, tempEnd) : {}}
+              markingType={tempStart && tempEnd ? "period" : "simple"}
+              markedDates={tempStart ? buildRangeMarkedDates(tempStart, tempEnd) : {}}
               onDayPress={(d) => onPickDate(d.dateString)}
               theme={{
-                backgroundColor: 'transparent',
-                calendarBackground: 'transparent',
+                backgroundColor: "transparent",
+                calendarBackground: "transparent",
                 textSectionTitleColor: COLORS.textSub,
                 dayTextColor: COLORS.textPrimary,
                 monthTextColor: COLORS.textPrimary,
@@ -546,18 +738,18 @@ export default function ReprogramarOrden() {
             <View style={styles.stepRow}>
               <Pressable
                 onPress={() => {
-                  setPickStep('start');
+                  setPickStep("start");
                   setTempStart(editing?.startDate || toYMD(new Date()));
-                  setTempEnd('');
+                  setTempEnd("");
                 }}
                 style={[styles.stepBtn, saving && { opacity: 0.6 }]}
                 disabled={saving}
               >
                 <Ionicons name="arrow-back" size={16} color={COLORS.textPrimary} />
-                <Text style={styles.stepBtnText}>Volver a inicio</Text>
+                <Text style={styles.stepBtnText}>Elegir inicio</Text>
               </Pressable>
 
-              {pickStep === 'end' && (
+              {pickStep === "end" && (
                 <Pressable
                   onPress={() => {
                     if (!tempStart) return;
@@ -575,9 +767,9 @@ export default function ReprogramarOrden() {
             <View style={styles.modalActions}>
               <Pressable
                 onPress={() => {
-                  setPickStep('start');
+                  setPickStep("start");
                   setTempStart(editing?.startDate || toYMD(new Date()));
-                  setTempEnd('');
+                  setTempEnd("");
                 }}
                 style={[styles.ghostBtn, saving && { opacity: 0.6 }]}
                 disabled={saving}
@@ -587,63 +779,62 @@ export default function ReprogramarOrden() {
 
               <Pressable
                 onPress={saveEdit}
-                style={[styles.primaryBtn, (!canSave() ? { opacity: 0.6 } : null)]}
+                style={[styles.primaryBtn, !canSave() && { opacity: 0.6 }]}
                 disabled={!canSave()}
               >
-                <Text style={styles.primaryBtnText}>{saving ? 'Guardando…' : 'Guardar'}</Text>
+                <Text style={styles.primaryBtnText}>{saving ? "Guardando…" : "Guardar"}</Text>
               </Pressable>
             </View>
 
-            <Text style={styles.modalFooter}>*Paso a paso: primero Inicio, luego Fin.</Text>
+            <Text style={styles.modalFooter}>
+              *En POST NO se manda $format ni $expand. FechaIni/FechaFin van en YYYYMMDD.
+            </Text>
           </View>
         </View>
       </Modal>
 
-      {/* ===== Modal BULK ===== */}
-      <Modal
-        visible={bulkOpen}
-        transparent
-        animationType="fade"
-        onRequestClose={() => {
-          if (bulkSaving) return;
-          setBulkOpen(false);
-        }}
-      >
+      {/* ===== Modal BULK (rango a varias) ===== */}
+      <Modal visible={bulkOpen} transparent animationType="fade" onRequestClose={closeBulk}>
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Reprogramar seleccionadas</Text>
-              <Pressable
-                onPress={() => {
-                  if (bulkSaving) return;
-                  setBulkOpen(false);
-                }}
-                hitSlop={10}
-              >
+              <Text style={styles.modalTitle}>Reprogramar {selectedCount} órdenes</Text>
+              <Pressable onPress={closeBulk} hitSlop={10}>
                 <Ionicons name="close" size={22} color={COLORS.textPrimary} />
               </Pressable>
             </View>
 
-            <Text style={styles.modalHint}>
-              Se aplicará la misma fecha a <Text style={styles.bold}>{selectedCount}</Text> órdenes.
-            </Text>
+            <View style={[styles.stepBanner, bulkStep === "start" ? styles.stepBannerStart : styles.stepBannerEnd]}>
+              <Ionicons
+                name={bulkStep === "start" ? "flag-outline" : "checkmark-circle-outline"}
+                size={18}
+                color={bulkStep === "start" ? COLORS.warn : COLORS.ok}
+              />
+              <Text style={styles.stepBannerText}>
+                {bulkStep === "start"
+                  ? "Paso 1: Selecciona la FECHA DE INICIO (para todas)"
+                  : "Paso 2: Selecciona la FECHA DE FIN (para todas)"}
+              </Text>
+            </View>
 
             <View style={styles.pillsRow}>
-              <View style={styles.pill}>
-                <Text style={styles.pillLabel}>Fecha</Text>
-                <Text style={styles.pillValue}>{bulkDate}</Text>
+              <View style={[styles.pill, bulkStep === "start" && styles.pillActive]}>
+                <Text style={styles.pillLabel}>Inicio</Text>
+                <Text style={styles.pillValue}>{bulkStart || "—"}</Text>
+              </View>
+              <View style={[styles.pill, bulkStep === "end" && styles.pillActive]}>
+                <Text style={styles.pillLabel}>Fin</Text>
+                <Text style={styles.pillValue}>{bulkEnd || "—"}</Text>
               </View>
             </View>
 
             <Calendar
-              current={bulkDate}
-              markedDates={{
-                [bulkDate]: { selected: true, selectedColor: COLORS.accent, selectedTextColor: '#fff' },
-              }}
-              onDayPress={(d) => setBulkDate(d.dateString)}
+              markingType={bulkStart && bulkEnd ? "period" : "simple"}
+              markedDates={bulkStart ? buildRangeMarkedDates(bulkStart, bulkEnd) : {}}
+              onDayPress={(d) => onPickBulkDate(d.dateString)}
               theme={{
-                backgroundColor: 'transparent',
-                calendarBackground: 'transparent',
+                backgroundColor: "transparent",
+                calendarBackground: "transparent",
                 textSectionTitleColor: COLORS.textSub,
                 dayTextColor: COLORS.textPrimary,
                 monthTextColor: COLORS.textPrimary,
@@ -652,25 +843,57 @@ export default function ReprogramarOrden() {
               }}
             />
 
+            <View style={styles.stepRow}>
+              <Pressable
+                onPress={() => {
+                  setBulkStep("start");
+                  setBulkStart(bulkStart || toYMD(new Date()));
+                  setBulkEnd("");
+                }}
+                style={[styles.stepBtn, bulkSaving && { opacity: 0.6 }]}
+                disabled={bulkSaving}
+              >
+                <Ionicons name="arrow-back" size={16} color={COLORS.textPrimary} />
+                <Text style={styles.stepBtnText}>Elegir inicio</Text>
+              </Pressable>
+
+              {bulkStep === "end" && (
+                <Pressable
+                  onPress={() => {
+                    if (!bulkStart) return;
+                    setBulkEnd(bulkStart);
+                  }}
+                  style={[styles.stepBtn, bulkSaving && { opacity: 0.6 }]}
+                  disabled={bulkSaving}
+                >
+                  <Ionicons name="swap-horizontal" size={16} color={COLORS.textPrimary} />
+                  <Text style={styles.stepBtnText}>Fin = Inicio</Text>
+                </Pressable>
+              )}
+            </View>
+
             <View style={styles.modalActions}>
               <Pressable
-                onPress={() => setBulkDate(toYMD(new Date()))}
+                onPress={() => setBulkOpen(false)}
                 style={[styles.ghostBtn, bulkSaving && { opacity: 0.6 }]}
                 disabled={bulkSaving}
               >
-                <Text style={styles.ghostBtnText}>Hoy</Text>
+                <Text style={styles.ghostBtnText}>Cancelar</Text>
               </Pressable>
 
               <Pressable
                 onPress={saveBulk}
-                style={[styles.primaryBtn, bulkSaving && { opacity: 0.7 }]}
-                disabled={bulkSaving}
+                style={[styles.primaryBtn, (!canSaveBulk() || bulkSaving) && { opacity: 0.6 }]}
+                disabled={!canSaveBulk() || bulkSaving}
               >
-                <Text style={styles.primaryBtnText}>{bulkSaving ? 'Guardando…' : 'Guardar'}</Text>
+                <Text style={styles.primaryBtnText}>{bulkSaving ? "Guardando…" : "Guardar"}</Text>
               </Pressable>
             </View>
 
-            <Text style={styles.modalFooter}>*Esto manda RESCHEDULE a todas.</Text>
+            <Text style={styles.modalFooter}>
+              Inicio: <Text style={styles.bold}>{bulkStart || "—"}</Text> · Fin:{" "}
+              <Text style={styles.bold}>{bulkEnd || "—"}</Text>
+            </Text>
           </View>
         </View>
       </Modal>
@@ -681,6 +904,7 @@ export default function ReprogramarOrden() {
 /* ====================== Styles ====================== */
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: COLORS.pageBg },
+
   card: {
     backgroundColor: COLORS.cardBg,
     marginHorizontal: 16,
@@ -690,114 +914,150 @@ const styles = StyleSheet.create({
     borderColor: COLORS.border,
     padding: 14,
     ...Platform.select({
-      ios: { shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 12, shadowOffset: { width: 0, height: 5 } },
+      ios: { shadowColor: "#000", shadowOpacity: 0.06, shadowRadius: 12, shadowOffset: { width: 0, height: 5 } },
       android: { elevation: 2 },
     }),
   },
-  cardTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 },
-  cardTitle: { fontSize: 14, fontWeight: '800', color: COLORS.textPrimary, flex: 1 },
+
+  cardTitleRow: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 8 },
+  cardTitle: { fontSize: 14, fontWeight: "800", color: COLORS.textPrimary, flex: 1 },
+
   refreshBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     gap: 6,
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 999,
     borderWidth: 1,
     borderColor: COLORS.border,
-    backgroundColor: '#fff',
+    backgroundColor: "#fff",
   },
-  refreshText: { fontSize: 12, fontWeight: '800', color: COLORS.textSub },
+  refreshText: { fontSize: 12, fontWeight: "800", color: COLORS.textSub },
+
   clearBtn: {
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 999,
     borderWidth: 1,
     borderColor: COLORS.border,
-    backgroundColor: '#fff',
+    backgroundColor: "#fff",
   },
-  clearBtnText: { fontSize: 12, fontWeight: '700', color: COLORS.textSub },
+  clearBtnText: { fontSize: 12, fontWeight: "700", color: COLORS.textSub },
+
   hint: { marginTop: 8, fontSize: 12, color: COLORS.textSub },
-  bold: { fontWeight: '900', color: COLORS.textPrimary },
+  bold: { fontWeight: "900", color: COLORS.textPrimary },
+
   searchBox: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     gap: 8,
     borderWidth: 1,
     borderColor: COLORS.border,
     borderRadius: 14,
     paddingHorizontal: 12,
-    paddingVertical: Platform.OS === 'ios' ? 10 : 8,
-    backgroundColor: '#fff',
+    paddingVertical: Platform.OS === "ios" ? 10 : 8,
+    backgroundColor: "#fff",
   },
   searchInput: { flex: 1, fontSize: 13.5, color: COLORS.textPrimary },
+
   count: { marginHorizontal: 16, marginTop: 10, color: COLORS.textSub, fontSize: 12.5 },
   empty: { paddingVertical: 18, paddingHorizontal: 16, color: COLORS.textSub, fontSize: 13 },
+
   orderRow: {
-    flexDirection: 'row',
+    flexDirection: "row",
     gap: 12,
     marginHorizontal: 16,
     borderWidth: 1,
     borderColor: COLORS.border,
     borderRadius: 14,
     padding: 12,
-    backgroundColor: '#fff',
+    backgroundColor: "#fff",
   },
-  checkWrap: { alignSelf: 'center' },
-  orderId: { fontSize: 14, fontWeight: '900', color: COLORS.textPrimary },
+  checkWrap: { alignSelf: "center" },
+
+  orderId: { fontSize: 14, fontWeight: "900", color: COLORS.textPrimary },
   orderSub: { marginTop: 2, fontSize: 12.5, color: COLORS.textSub },
   orderDates: { marginTop: 6, fontSize: 12.5, color: COLORS.textSub },
   small: { marginTop: 4, fontSize: 11.5, color: COLORS.textSub },
+
   editBtn: {
-    alignSelf: 'center',
-    flexDirection: 'row',
-    alignItems: 'center',
+    alignSelf: "center",
+    flexDirection: "row",
+    alignItems: "center",
     gap: 6,
     paddingHorizontal: 12,
     paddingVertical: 10,
     borderRadius: 12,
     backgroundColor: COLORS.accent,
   },
-  editBtnText: { color: '#fff', fontWeight: '900', fontSize: 12.5 },
+  editBtnText: { color: "#fff", fontWeight: "900", fontSize: 12.5 },
+
+  // ✅ Barra bulk flotante abajo
   bulkBar: {
-    marginHorizontal: 16,
+    position: "absolute",
+    left: 12,
+    right: 12,
+    bottom: 12,
+    padding: 12,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    backgroundColor: "#fff",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    ...Platform.select({
+      ios: { shadowColor: "#000", shadowOpacity: 0.12, shadowRadius: 16, shadowOffset: { width: 0, height: 8 } },
+      android: { elevation: 6 },
+    }),
+  },
+  bulkTitle: { fontWeight: "900", color: COLORS.textPrimary, fontSize: 13 },
+  bulkSub: { marginTop: 2, color: COLORS.textSub, fontSize: 12 },
+
+  bulkGhost: {
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    backgroundColor: "#fff",
+  },
+  bulkGhostText: { fontWeight: "900", color: COLORS.textPrimary, fontSize: 12 },
+
+  bulkPrimary: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 12,
+    backgroundColor: COLORS.accent,
+  },
+  bulkPrimaryText: { fontWeight: "900", color: "#fff", fontSize: 12 },
+
+  modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.35)", justifyContent: "center", padding: 16 },
+  modalCard: { backgroundColor: "#fff", borderRadius: 18, borderWidth: 1, borderColor: COLORS.border, padding: 14 },
+  modalHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  modalTitle: { fontSize: 15, fontWeight: "900", color: COLORS.textPrimary },
+
+  stepBanner: {
     marginTop: 10,
     borderWidth: 1,
     borderColor: COLORS.border,
-    backgroundColor: '#fff',
     borderRadius: 14,
-    padding: 10,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-  },
-  bulkText: { flex: 1, fontSize: 12.5, color: COLORS.textPrimary, fontWeight: '800' },
-  bulkBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 12,
     paddingVertical: 10,
-    borderRadius: 12,
-    backgroundColor: COLORS.accent,
+    paddingHorizontal: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    backgroundColor: "#fff",
   },
-  bulkBtnText: { color: '#fff', fontWeight: '900', fontSize: 12.5 },
-  bulkClear: {
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-  },
-  bulkClearText: { color: COLORS.textSub, fontWeight: '900', fontSize: 12 },
+  stepBannerStart: { borderColor: "#F0D7A8", backgroundColor: "#FFF7EA" },
+  stepBannerEnd: { borderColor: "#BFE7D5", backgroundColor: "#ECFFF6" },
+  stepBannerText: { flex: 1, fontSize: 12.8, fontWeight: "900", color: COLORS.textPrimary },
 
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', justifyContent: 'center', padding: 16 },
-  modalCard: { backgroundColor: '#fff', borderRadius: 18, borderWidth: 1, borderColor: COLORS.border, padding: 14 },
-  modalHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  modalTitle: { fontSize: 15, fontWeight: '900', color: COLORS.textPrimary },
-  modalHint: { marginTop: 8, fontSize: 12.5, color: COLORS.textSub },
-
-  pillsRow: { flexDirection: 'row', gap: 10, marginTop: 10, marginBottom: 8 },
+  pillsRow: { flexDirection: "row", gap: 10, marginTop: 10, marginBottom: 8 },
   pill: {
     flex: 1,
     borderWidth: 1,
@@ -805,15 +1065,13 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     paddingVertical: 8,
     paddingHorizontal: 10,
-    backgroundColor: '#fff',
+    backgroundColor: "#fff",
   },
-  pillActive: {
-    borderColor: COLORS.accent,
-  },
-  pillLabel: { fontSize: 11.5, color: COLORS.textSub, fontWeight: '800' },
-  pillValue: { marginTop: 2, fontSize: 13, color: COLORS.textPrimary, fontWeight: '900' },
+  pillActive: { borderColor: COLORS.accent },
+  pillLabel: { fontSize: 11.5, color: COLORS.textSub, fontWeight: "800" },
+  pillValue: { marginTop: 2, fontSize: 13, color: COLORS.textPrimary, fontWeight: "900" },
 
-  stepRow: { flexDirection: 'row', gap: 10, marginTop: 8 },
+  stepRow: { flexDirection: "row", gap: 10, marginTop: 8 },
   stepBtn: {
     flex: 1,
     borderRadius: 14,
@@ -821,28 +1079,28 @@ const styles = StyleSheet.create({
     borderColor: COLORS.border,
     paddingVertical: 10,
     paddingHorizontal: 10,
-    alignItems: 'center',
-    backgroundColor: '#fff',
-    flexDirection: 'row',
-    justifyContent: 'center',
+    alignItems: "center",
+    backgroundColor: "#fff",
+    flexDirection: "row",
+    justifyContent: "center",
     gap: 8,
   },
-  stepBtnText: { fontSize: 12.5, fontWeight: '900', color: COLORS.textPrimary },
+  stepBtnText: { fontSize: 12.5, fontWeight: "900", color: COLORS.textPrimary },
 
-  modalActions: { flexDirection: 'row', gap: 10, marginTop: 10 },
+  modalActions: { flexDirection: "row", gap: 10, marginTop: 10 },
   ghostBtn: {
     flex: 1,
     borderRadius: 14,
     borderWidth: 1,
     borderColor: COLORS.border,
     paddingVertical: 12,
-    alignItems: 'center',
-    backgroundColor: '#fff',
+    alignItems: "center",
+    backgroundColor: "#fff",
   },
-  ghostBtnText: { fontSize: 13, fontWeight: '900', color: COLORS.textPrimary },
+  ghostBtnText: { fontSize: 13, fontWeight: "900", color: COLORS.textPrimary },
 
-  primaryBtn: { flex: 1, borderRadius: 14, paddingVertical: 12, alignItems: 'center', backgroundColor: COLORS.accent },
-  primaryBtnText: { fontSize: 13, fontWeight: '900', color: '#fff' },
+  primaryBtn: { flex: 1, borderRadius: 14, paddingVertical: 12, alignItems: "center", backgroundColor: COLORS.accent },
+  primaryBtnText: { fontSize: 13, fontWeight: "900", color: "#fff" },
 
   modalFooter: { marginTop: 10, fontSize: 11.5, color: COLORS.textSub },
 });
