@@ -647,7 +647,10 @@ export default function CrearOrdenMantto() {
         ? `\n\nAvisos SAP:\n${errors.map((e) => `• ${e?.Message || ""}`).join("\n")}`
         : "";
 
-      Alert.alert("Orden creada", `${baseMsg}${avisos}`, [{ text: "OK", onPress: () => router.back() }]);
+      Alert.alert("Orden creada", `${baseMsg}${avisos}`, [
+        { text: "OK", onPress: () => router.replace("/supervisor/averia") },
+      ]);
+
     } catch (err) {
       console.error("Error al crear orden de mantenimiento:", err?.response?.data || err);
 

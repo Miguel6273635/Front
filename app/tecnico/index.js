@@ -17,14 +17,7 @@ const TILES = [
   { key: 'ordenes', title: 'Órdenes de servicio', icon: 'document-text-outline', onPress: () => router.push('/tecnico/ordenes') },
   { key: 'averias', title: 'Aviso de avería', icon: 'warning-outline', onPress: () => router.push('/tecnico/averias') },
 
-  // ✅ DESHABILITADO
-  {
-    key: 'instalaciones',
-    title: 'Instalaciones',
-    icon: 'build-outline',
-    onPress: () => router.push('/tecnico/instalaciones'),
-    disabled: true, // Cambiar true (deshabilitar) o false (habilitar) 
-  },
+ 
 
   { key: 'rutas', title: 'Ruta asignada', icon: 'navigate-outline', onPress: () => router.push('/tecnico/rutas') },
 ];

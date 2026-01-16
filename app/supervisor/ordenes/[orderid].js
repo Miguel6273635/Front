@@ -44,9 +44,7 @@ export default function DetalleOrdenSupervisor() {
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState(null);
 
-  // colapsar/expandir operaciones
   const [openOps, setOpenOps] = useState({});
-  // cache de componentes por Activity
   const [componentsByAct, setComponentsByAct] = useState({});
   const [loadingComponents, setLoadingComponents] = useState({}); // { [activity]: true/false }
 
@@ -65,10 +63,7 @@ export default function DetalleOrdenSupervisor() {
       setLoading(true);
       setErrorMsg(null);
 
-      // 1) encabezado/detalle orden
       const detalle = await fetchOrdenDetalleSupervisor(orderid);
-
-      // 2) operaciones “bonitas”
       const ops = await fetchOperacionesSupervisor(orderid);
 
       setData(detalle || null);
@@ -88,18 +83,18 @@ export default function DetalleOrdenSupervisor() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [orderid]);
 
-  const toggleOp = async (op) => {
+  const toggleOp = async (op, idx) => {
     const activity = String(op?.Activity || "").padStart(4, "0");
-    const opId = `${activity}-${String(op?.SubActivity || "")}`;
+    const sub = String(op?.SubActivity || "");
+    const opId = `${activity}-${sub}-${idx}`; // ✅ mismo ID que en render
 
-    setOpenOps((prev) => ({ ...prev, [opId]: !prev[opId] }));
+    const willOpen = !openOps[opId];
+    setOpenOps((prev) => ({ ...prev, [opId]: willOpen }));
 
     // si ya estaba cargado, no vuelvas a pedir
     if (componentsByAct[activity]) return;
 
-    // si lo estás abriendo, trae componentes bajo demanda
-    // (si lo estás cerrando, no hace nada)
-    const willOpen = !openOps[opId];
+    // si se está cerrando, no hacer nada
     if (!willOpen) return;
 
     try {
@@ -226,9 +221,7 @@ export default function DetalleOrdenSupervisor() {
               const isOpen = !!openOps[opId];
 
               const est = String(op?.estatus || "pendiente");
-              const opColor = getStatusColor(
-                est === "finalizada" ? "finalizada_con_pendientes" : est
-              );
+              const opColor = getStatusColor(est);
 
               const comps = componentsByAct[activity];
               const compsLoading = !!loadingComponents[activity];
@@ -237,7 +230,7 @@ export default function DetalleOrdenSupervisor() {
                 <View key={opId} style={styles.operationCard}>
                   <TouchableOpacity
                     style={styles.operationHeader}
-                    onPress={() => toggleOp(op)}
+                    onPress={() => toggleOp(op, idx)}
                     activeOpacity={0.85}
                   >
                     <View style={{ flex: 1 }}>
@@ -255,12 +248,6 @@ export default function DetalleOrdenSupervisor() {
                           Duración: {op?.DurationNormal ?? "—"} {op?.DurationNormalUnit || ""}
                         </Text>
                       </View>
-
-                      {!!op?.FieldUserStatus && (
-                        <Text style={styles.operationSapSub}>
-                          SAP Status: {String(op.FieldUserStatus)}
-                        </Text>
-                      )}
                     </View>
 
                     <Ionicons
@@ -311,7 +298,6 @@ export default function DetalleOrdenSupervisor() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.pageBg },
-
   scrollContent: { padding: 16, paddingBottom: 80 },
 
   inlineBack: { flexDirection: "row", alignItems: "center", marginBottom: 8 },
@@ -325,36 +311,18 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.border,
     ...Platform.select({
-      ios: {
-        shadowColor: "#000",
-        shadowOpacity: 0.03,
-        shadowRadius: 5,
-        shadowOffset: { width: 0, height: 2 },
-      },
+      ios: { shadowColor: "#000", shadowOpacity: 0.03, shadowRadius: 5, shadowOffset: { width: 0, height: 2 } },
       android: { elevation: 1 },
     }),
   },
 
   cardHeaderRow: { flexDirection: "row", alignItems: "center", marginBottom: 10 },
-
   orderIdText: { fontSize: 18, fontWeight: "700", color: COLORS.title },
   orderTypeText: { fontSize: 14, color: COLORS.text, marginTop: 2 },
 
-  statusPill: {
-    flexDirection: "row",
-    alignItems: "center",
-    borderRadius: 20,
-    borderWidth: 1,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-  },
+  statusPill: { flexDirection: "row", alignItems: "center", borderRadius: 20, borderWidth: 1, paddingHorizontal: 10, paddingVertical: 4 },
   statusDot: { width: 10, height: 10, borderRadius: 5, marginRight: 6 },
-  statusPillText: {
-    fontSize: 12,
-    fontWeight: "600",
-    color: COLORS.title,
-    textTransform: "capitalize",
-  },
+  statusPillText: { fontSize: 12, fontWeight: "600", color: COLORS.title, textTransform: "capitalize" },
 
   row: { flexDirection: "row", alignItems: "center", marginTop: 4, columnGap: 6 },
   rowLabel: { fontSize: 13, color: COLORS.muted, fontWeight: "600" },
@@ -362,64 +330,25 @@ const styles = StyleSheet.create({
 
   sectionTitle: { fontSize: 15, fontWeight: "700", color: COLORS.title, marginBottom: 6 },
 
-  operationCard: {
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    borderRadius: 10,
-    marginTop: 8,
-    overflow: "hidden",
-  },
-  operationHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 10,
-    paddingVertical: 10,
-    backgroundColor: "#F5F7FA",
-  },
+  operationCard: { borderWidth: 1, borderColor: COLORS.border, borderRadius: 10, marginTop: 8, overflow: "hidden" },
+  operationHeader: { flexDirection: "row", alignItems: "center", paddingHorizontal: 10, paddingVertical: 10, backgroundColor: "#F5F7FA" },
   operationTitle: { fontSize: 14, fontWeight: "600", color: COLORS.title },
   operationSub: { fontSize: 12, color: COLORS.muted },
-  operationSapSub: { fontSize: 12, color: COLORS.muted, marginTop: 6 },
 
-  opBadge: {
-    borderWidth: 1,
-    borderRadius: 999,
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-  },
+  opBadge: { borderWidth: 1, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2 },
   opBadgeText: { fontSize: 11, fontWeight: "700", color: COLORS.title },
 
   operationBody: { paddingHorizontal: 10, paddingVertical: 10, backgroundColor: "#FFFFFF" },
 
-  componentRow: {
-    paddingVertical: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: COLORS.border,
-  },
+  componentRow: { paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: COLORS.border },
   componentTitle: { fontSize: 13, fontWeight: "600", color: COLORS.title },
   componentMeta: { fontSize: 12, color: COLORS.muted, marginTop: 2 },
 
-  emptyText: {
-    fontSize: 13,
-    color: COLORS.muted,
-    marginTop: 4,
-    fontStyle: "italic",
-  },
+  emptyText: { fontSize: 13, color: COLORS.muted, marginTop: 4, fontStyle: "italic" },
 
-  errorWrap: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    paddingHorizontal: 24,
-  },
+  errorWrap: { flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 24 },
   errorText: { textAlign: "center", fontSize: 14, color: COLORS.danger, marginBottom: 12 },
-  backBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: COLORS.accent,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 20,
-  },
+  backBtn: { flexDirection: "row", alignItems: "center", backgroundColor: COLORS.accent, paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20 },
   backBtnText: { color: "#fff", marginLeft: 6, fontWeight: "600" },
 
   centerBody: { flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 16 },

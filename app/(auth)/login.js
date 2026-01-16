@@ -1,4 +1,4 @@
-// app/login/index.js (o donde tengas tu login)
+// app/login/index.js
 import React, { useEffect, useState } from "react";
 import {
   View,
@@ -29,7 +29,6 @@ function pickHomeByRole(rol_id) {
   return "/tecnico";
 }
 
-// ✅ Ajusta estos textos a tu empresa
 const BRAND = {
   developer: "Tellus Technologies",
   customer: "Mitsubishi Electric de México",
@@ -47,8 +46,17 @@ export default function LoginScreen() {
   const handleLoginSSO = async () => {
     setError("");
     setSending(true);
+
     try {
-      await loginSSO();
+      const result = await loginSSO();
+
+      // ✅ Si el usuario canceló/dismiss, NO lo mostramos como error
+      if (result?.ok === false && result?.cancelled) {
+        setError("");
+        return;
+      }
+
+      // Si ok=true, el flujo sigue en /auth (finishSSO)
     } catch (e) {
       console.log("SSO error:", e?.message || e);
       setError(e?.message ? String(e.message) : "No se pudo iniciar sesión con Microsoft");
@@ -64,9 +72,7 @@ export default function LoginScreen() {
     <View style={styles.container}>
       <StatusBar barStyle="dark-content" />
 
-      {/* ✅ Contenido centrado */}
       <View style={styles.centerWrap}>
-        {/* Logo de la app / cliente */}
         <Image source={require("../../assets/logo.png")} style={styles.logo} />
 
         <View style={styles.card}>
@@ -92,12 +98,7 @@ export default function LoginScreen() {
         </View>
       </View>
 
-      {/* ✅ Footer marca / derechos + LOGO TELLUS */}
       <View style={styles.footer}>
-        {/* 👇 Asegúrate de tener este archivo:
-            /assets/tellus.png
-            (ideal PNG horizontal y transparente)
-        */}
         <Text style={styles.footerLine1}>
           Desarrollado por <Text style={styles.footerStrong}>{BRAND.developer}</Text>
         </Text>
@@ -118,7 +119,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 24,
     paddingTop: 10,
     paddingBottom: 18,
-    justifyContent: "space-between", // ✅ footer abajo
+    justifyContent: "space-between",
   },
 
   centerWrap: {
@@ -194,14 +195,12 @@ const styles = StyleSheet.create({
     fontWeight: "700",
   },
 
-  // ✅ Footer
   footer: {
     alignItems: "center",
     justifyContent: "center",
     paddingTop: 10,
   },
 
-  // ✅ Logo Tellus en footer
   footerLogo: {
     width: 90,
     height: 20,

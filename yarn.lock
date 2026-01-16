@@ -1488,9 +1488,9 @@
   dependencies:
     invariant "^2.2.4"
 
-"@react-native-community/netinfo@^11.4.1":
+"@react-native-community/netinfo@11.4.1":
   version "11.4.1"
-  resolved "https://registry.npmjs.org/@react-native-community/netinfo/-/netinfo-11.4.1.tgz"
+  resolved "https://registry.yarnpkg.com/@react-native-community/netinfo/-/netinfo-11.4.1.tgz#a3c247aceab35f75dd0aa4bfa85d2be5a4508688"
   integrity sha512-B0BYAkghz3Q2V09BF88RA601XursIEA111tnc2JOaN7axJWmNefmfjZqw/KdSxKZp7CZUuPpjBmz/WCR9uaHYg==
 
 "@react-native/assets-registry@0.81.5":
@@ -2862,10 +2862,10 @@ expo-splash-screen@~31.0.11:
   dependencies:
     "@expo/prebuild-config" "^54.0.6"
 
-expo-sqlite@~16.0.9:
-  version "16.0.9"
-  resolved "https://registry.npmjs.org/expo-sqlite/-/expo-sqlite-16.0.9.tgz"
-  integrity sha512-pMT52pTko539yZZQUZYfGiAYxQvpTUZIp/dwi2+IidSjPWB2wJi96ByaoNAzxmucarsYZN1F46C1Le6eT2VLkA==
+expo-sqlite@~16.0.10:
+  version "16.0.10"
+  resolved "https://registry.yarnpkg.com/expo-sqlite/-/expo-sqlite-16.0.10.tgz#dd3275e3b1f79063b6121fa3b11a074b7b84ce1f"
+  integrity sha512-tUOKxE9TpfneRG3eOfbNfhN9236SJ7IiUnP8gCqU7umd9DtgDGB/5PhYVVfl+U7KskgolgNoB9v9OZ9iwXN8Eg==
   dependencies:
     await-lock "^2.2.2"
 
