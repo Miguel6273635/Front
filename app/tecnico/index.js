@@ -14,38 +14,59 @@ import Header from '../../src/components/Header';
 
 // ====== Datos del menú (tiles) ======
 const TILES = [
-  { key: 'ordenes',        title: 'Órdenes de servicio', icon: 'document-text-outline', onPress: () => router.push('/tecnico/ordenes') },
-  { key: 'averias',        title: 'Aviso de avería',      icon: 'warning-outline',       onPress: () => router.push('/tecnico/averias') },
-  { key: 'instalaciones',  title: 'Instalaciones',        icon: 'build-outline',         onPress: () => router.push('/tecnico/instalaciones') },
-  { key: 'rutas',          title: 'Ruta asignada',        icon: 'navigate-outline',      onPress: () => router.push('/tecnico/rutas') },
-  
+  { key: 'ordenes', title: 'Órdenes de servicio', icon: 'document-text-outline', onPress: () => router.push('/tecnico/ordenes') },
+  { key: 'averias', title: 'Aviso de avería', icon: 'warning-outline', onPress: () => router.push('/tecnico/averias') },
+
+  // ✅ DESHABILITADO
+  {
+    key: 'instalaciones',
+    title: 'Instalaciones',
+    icon: 'build-outline',
+    onPress: () => router.push('/tecnico/instalaciones'),
+    disabled: true, // Cambiar true (deshabilitar) o false (habilitar) 
+  },
+
+  { key: 'rutas', title: 'Ruta asignada', icon: 'navigate-outline', onPress: () => router.push('/tecnico/rutas') },
 ];
 
+
 // ====== Tile (azulejo) estilo Fiori ======
-function FioriTile({ title, icon, badge, onPress }) {
+function FioriTile({ title, icon, badge, onPress, disabled = false }) {
   return (
     <Pressable
-      onPress={onPress}
-      android_ripple={{ color: '#d7e3f3' }}
+      onPress={disabled ? null : onPress}
+      disabled={disabled}
+      android_ripple={disabled ? null : { color: '#d7e3f3' }}
       style={({ pressed }) => [
         styles.tile,
-        pressed && Platform.OS === 'ios' ? { opacity: 0.9 } : null,
+        disabled && styles.tileDisabled,
+        pressed && !disabled && Platform.OS === 'ios' ? { opacity: 0.9 } : null,
       ]}
     >
       <View style={styles.tileHeader}>
-        <Ionicons name={icon} size={28} />
-        {typeof badge === 'number' && badge > 0 && (
+        <Ionicons
+          name={icon}
+          size={28}
+          color={disabled ? '#9AA5B1' : '#0B1F3B'}
+        />
+
+        {typeof badge === 'number' && badge > 0 && !disabled && (
           <View style={styles.badge}>
             <Text style={styles.badgeText}>{badge}</Text>
           </View>
         )}
       </View>
-      <Text style={styles.tileTitle} numberOfLines={2}>
+
+      <Text
+        style={[styles.tileTitle, disabled && styles.tileTitleDisabled]}
+        numberOfLines={2}
+      >
         {title}
       </Text>
     </Pressable>
   );
 }
+
 
 export default function TecnicoHome() {
   return (
@@ -66,6 +87,7 @@ export default function TecnicoHome() {
             icon={item.icon}
             badge={item.badge}
             onPress={item.onPress}
+            disabled={item.disabled}
           />
         )}
       />
@@ -139,4 +161,12 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
   },
+  tileDisabled: {
+  opacity: 0.45,
+},
+
+tileTitleDisabled: {
+  color: '#7A869A',
+},
+
 });

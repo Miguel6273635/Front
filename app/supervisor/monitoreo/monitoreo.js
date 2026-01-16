@@ -1,4 +1,4 @@
-// app/supervisor/monitoreo/index.js (o donde tengas esta pantalla)
+// app/supervisor/monitoreo/index.js
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   View,
@@ -10,8 +10,9 @@ import {
   TextInput,
   Platform,
 } from "react-native";
-import MapView, { Marker, PROVIDER_GOOGLE, UrlTile } from "react-native-maps";
+import MapView, { Marker, PROVIDER_GOOGLE } from "react-native-maps";
 import { Ionicons } from "@expo/vector-icons";
+
 import api from "../../../src/services/api";
 import Header from "../../../src/components/Header";
 import { useAuth } from "../../../src/context/AuthContext";
@@ -20,9 +21,6 @@ const BG = "#F4F6F9";
 const SAP_BLUE = "#0A6ED1";
 const SAP_RED = "#E74C3C";
 const CARD = "#FFFFFF";
-
-// 👇 MAPTILER KEY
-const MAPTILER_KEY = "xXsfDizxhemYIlweqX7X";
 
 const DEFAULT_REGION_MX = {
   latitude: 23.6345,
@@ -69,7 +67,6 @@ export default function Monitoreo() {
         return;
       }
 
-      // ✅ OData con filtro por supervisor (SAP devuelve solo asignados)
       const res = await api.get(
         "/api/odata/ZCS_GEOLOZACION_SRV/GeoLocalizacionSet",
         {
@@ -80,7 +77,6 @@ export default function Monitoreo() {
         }
       );
 
-      // SAP OData v2: { d: { results: [...] } }
       const rows = res?.data?.d?.results || [];
 
       const sane = rows
@@ -89,13 +85,10 @@ export default function Monitoreo() {
           const lon = parseFloat(r?.Longitud);
           const tsDate = sapDateToDate(r?.Timestamp);
 
-          // Si SAP te manda nombre/correo del técnico en otros campos,
-          // aquí los puedes mapear. Por ahora usamos Usuario.
           const nombre = String(r?.Nombre || r?.Usuario || "Técnico");
           const correo = String(r?.Correo || r?.Usuario || "");
 
           return {
-            // key estable:
             usuario_id: String(r?.Id || `${correo}-${idx}`),
             nombre,
             correo,
@@ -106,11 +99,7 @@ export default function Monitoreo() {
             orden: r?.Orden || "",
           };
         })
-        .filter(
-          (t) =>
-            Number.isFinite(t.latitud) &&
-            Number.isFinite(t.longitud)
-        );
+        .filter((t) => Number.isFinite(t.latitud) && Number.isFinite(t.longitud));
 
       setTecnicos(sane);
       setLastUpdated(new Date());
@@ -129,13 +118,14 @@ export default function Monitoreo() {
     return () => clearInterval(interval);
   }, [correoSupervisor]);
 
-  // Ajusta el mapa para que muestre todos los técnicos
+  // Ajusta el mapa a todos los técnicos
   useEffect(() => {
     if (mapRef.current && tecnicos.length > 0) {
       const coords = tecnicos.map((t) => ({
         latitude: t.latitud,
         longitude: t.longitud,
       }));
+
       requestAnimationFrame(() => {
         mapRef.current?.fitToCoordinates(coords, {
           edgePadding: {
@@ -194,6 +184,7 @@ export default function Monitoreo() {
           style={styles.map}
           provider={Platform.OS === "android" ? PROVIDER_GOOGLE : undefined}
           initialRegion={initialRegion}
+          loadingEnabled
           mapPadding={{
             top: 90,
             right: 10,
@@ -201,12 +192,6 @@ export default function Monitoreo() {
             left: 10,
           }}
         >
-          <UrlTile
-            urlTemplate={`https://api.maptiler.com/maps/streets/{z}/{x}/{y}.png?key=${MAPTILER_KEY}`}
-            maximumZ={19}
-            zIndex={0}
-          />
-
           {tecnicos.map((t) => (
             <Marker
               key={t.usuario_id}
@@ -234,10 +219,7 @@ export default function Monitoreo() {
               style={styles.searchInput}
             />
             {busqueda.length > 0 && (
-              <TouchableOpacity
-                onPress={() => setBusqueda("")}
-                style={styles.clearBtn}
-              >
+              <TouchableOpacity onPress={() => setBusqueda("")} style={styles.clearBtn}>
                 <Ionicons name="close-outline" size={16} color="#8390A6" />
               </TouchableOpacity>
             )}
@@ -272,20 +254,10 @@ export default function Monitoreo() {
               : "Sin actualización"}
           </Text>
         </View>
-
-        {/* Atribución */}
-        <View style={styles.attrBox}>
-          <Text style={styles.attrText}>© OpenStreetMap · © MapTiler</Text>
-        </View>
       </View>
 
       {/* BOTTOM SHEET */}
-      <View
-        style={[
-          styles.sheet,
-          sheetExpanded ? styles.sheetExpanded : styles.sheetCollapsed,
-        ]}
-      >
+      <View style={[styles.sheet, sheetExpanded ? styles.sheetExpanded : styles.sheetCollapsed]}>
         <TouchableOpacity
           style={styles.sheetHandle}
           activeOpacity={0.8}
@@ -303,18 +275,10 @@ export default function Monitoreo() {
 
         {tecnicos.length === 0 ? (
           <View style={styles.emptyBox}>
-            <Text style={styles.emptyTitle}>
-              No se encontraron ubicaciones
-            </Text>
+            <Text style={styles.emptyTitle}>No se encontraron ubicaciones</Text>
             <Text style={styles.emptySub}>Puedes reintentar la carga.</Text>
-            <TouchableOpacity
-              style={styles.retryBtn}
-              onPress={cargarUbicaciones}
-              disabled={loading}
-            >
-              <Text style={styles.retryText}>
-                {loading ? "Cargando…" : "Reintentar"}
-              </Text>
+            <TouchableOpacity style={styles.retryBtn} onPress={cargarUbicaciones} disabled={loading}>
+              <Text style={styles.retryText}>{loading ? "Cargando…" : "Reintentar"}</Text>
             </TouchableOpacity>
           </View>
         ) : (
@@ -324,17 +288,9 @@ export default function Monitoreo() {
             contentContainerStyle={{ paddingHorizontal: 14, paddingBottom: 16 }}
             ItemSeparatorComponent={() => <View style={styles.separator} />}
             renderItem={({ item }) => (
-              <TouchableOpacity
-                onPress={() => enfocarTecnico(item)}
-                style={styles.resultItem}
-                activeOpacity={0.7}
-              >
+              <TouchableOpacity onPress={() => enfocarTecnico(item)} style={styles.resultItem} activeOpacity={0.7}>
                 <View style={styles.avatar}>
-                  <Ionicons
-                    name="person-outline"
-                    size={18}
-                    color={SAP_BLUE}
-                  />
+                  <Ionicons name="person-outline" size={18} color={SAP_BLUE} />
                 </View>
 
                 <View style={{ flex: 1 }}>
@@ -359,18 +315,12 @@ export default function Monitoreo() {
                   <Text style={styles.coords}>
                     {item.latitud.toFixed(4)}, {item.longitud.toFixed(4)}
                   </Text>
-                  <Ionicons
-                    name="locate-outline"
-                    size={16}
-                    color={SAP_BLUE}
-                  />
+                  <Ionicons name="locate-outline" size={16} color={SAP_BLUE} />
                 </View>
               </TouchableOpacity>
             )}
             ListEmptyComponent={
-              <Text style={styles.emptyFilter}>
-                No hay coincidencias con “{busqueda}”.
-              </Text>
+              <Text style={styles.emptyFilter}>No hay coincidencias con “{busqueda}”.</Text>
             }
           />
         )}
@@ -382,7 +332,6 @@ export default function Monitoreo() {
 const styles = StyleSheet.create({
   map: { width: "100%", height: "100%" },
 
-  // PANEL SUPERIOR
   topPanel: {
     position: "absolute",
     top: 12,
@@ -403,20 +352,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 6,
   },
-  searchInput: {
-    flex: 1,
-    marginLeft: 5,
-    color: "#2F3349",
-    fontSize: 13,
-    paddingVertical: 0,
-  },
-  clearBtn: {
-    width: 24,
-    height: 24,
-    borderRadius: 999,
-    alignItems: "center",
-    justifyContent: "center",
-  },
+  searchInput: { flex: 1, marginLeft: 5, color: "#2F3349", fontSize: 13, paddingVertical: 0 },
+  clearBtn: { width: 24, height: 24, borderRadius: 999, alignItems: "center", justifyContent: "center" },
   infoPill: {
     flexDirection: "row",
     alignItems: "center",
@@ -428,23 +365,9 @@ const styles = StyleSheet.create({
     borderColor: "#E5E9F5",
     gap: 5,
   },
-  statusDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 999,
-    backgroundColor: "#4CAF50",
-  },
-  infoText: {
-    fontSize: 12,
-    color: "#43516A",
-    fontWeight: "500",
-  },
-  refreshBtn: {
-    backgroundColor: SAP_BLUE,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    borderRadius: 12,
-  },
+  statusDot: { width: 8, height: 8, borderRadius: 999, backgroundColor: "#4CAF50" },
+  infoText: { fontSize: 12, color: "#43516A", fontWeight: "500" },
+  refreshBtn: { backgroundColor: SAP_BLUE, paddingHorizontal: 10, paddingVertical: 8, borderRadius: 12 },
 
   statusPill: {
     position: "absolute",
@@ -462,59 +385,16 @@ const styles = StyleSheet.create({
   },
   statusText: { color: "#2F3349", fontSize: 11.5 },
 
-  attrBox: {
-    position: "absolute",
-    right: 8,
-    bottom: 8,
-    backgroundColor: "rgba(255,255,255,0.9)",
-    borderRadius: 6,
-    paddingHorizontal: 6,
-    paddingVertical: 3,
-  },
-  attrText: { fontSize: 10, color: "#333" },
-
-  // SHEET
-  sheet: {
-    backgroundColor: CARD,
-    borderTopLeftRadius: 16,
-    borderTopRightRadius: 16,
-    borderTopWidth: 1,
-    borderColor: "#E1E4F0",
-  },
+  sheet: { backgroundColor: CARD, borderTopLeftRadius: 16, borderTopRightRadius: 16, borderTopWidth: 1, borderColor: "#E1E4F0" },
   sheetCollapsed: { height: 145 },
   sheetExpanded: { height: 240 },
 
-  sheetHandle: {
-    alignItems: "center",
-    paddingTop: 8,
-    paddingBottom: 6,
-  },
-  handleBar: {
-    width: 32,
-    height: 3,
-    backgroundColor: "#D5D8E6",
-    borderRadius: 999,
-    marginBottom: 4,
-  },
+  sheetHandle: { alignItems: "center", paddingTop: 8, paddingBottom: 6 },
+  handleBar: { width: 32, height: 3, backgroundColor: "#D5D8E6", borderRadius: 999, marginBottom: 4 },
 
-  resultItem: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-    paddingVertical: 10,
-  },
-  separator: {
-    height: 1,
-    backgroundColor: "#EEF1F5",
-  },
-  avatar: {
-    width: 36,
-    height: 36,
-    borderRadius: 12,
-    backgroundColor: "#EAF2FB",
-    alignItems: "center",
-    justifyContent: "center",
-  },
+  resultItem: { flexDirection: "row", alignItems: "center", gap: 10, paddingVertical: 10 },
+  separator: { height: 1, backgroundColor: "#EEF1F5" },
+  avatar: { width: 36, height: 36, borderRadius: 12, backgroundColor: "#EAF2FB", alignItems: "center", justifyContent: "center" },
   name: { fontSize: 14.5, fontWeight: "700", color: "#2F3349" },
   sub: { color: "#687187", marginTop: 2, fontSize: 11.5 },
   sub2: { color: "#8B95A7", marginTop: 2, fontSize: 11 },
@@ -533,25 +413,9 @@ const styles = StyleSheet.create({
     marginBottom: 6,
   },
   emptyTitle: { fontWeight: "700", color: "#7a0000", marginBottom: 4 },
-  emptySub: {
-    color: "#7a0000",
-    marginBottom: 10,
-    textAlign: "center",
-  },
-  retryBtn: {
-    backgroundColor: SAP_BLUE,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 10,
-  },
+  emptySub: { color: "#7a0000", marginBottom: 10, textAlign: "center" },
+  retryBtn: { backgroundColor: SAP_BLUE, paddingHorizontal: 14, paddingVertical: 8, borderRadius: 10 },
   retryText: { color: "#fff", fontWeight: "700" },
-
   emptyFilter: { textAlign: "center", color: "#666", paddingVertical: 10 },
-
-  error: {
-    color: "#a10000",
-    marginBottom: 6,
-    fontSize: 12,
-    textAlign: "center",
-  },
+  error: { color: "#a10000", marginBottom: 6, fontSize: 12, textAlign: "center" },
 });
