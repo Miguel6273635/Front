@@ -1,4 +1,5 @@
-import React, { useEffect, useMemo, useRef } from 'react';
+// src/components/SideDrawer.js
+import React, { useEffect, useMemo, useRef } from "react";
 import {
   View,
   Text,
@@ -7,21 +8,22 @@ import {
   Modal,
   Pressable,
   Animated,
-  Image,
   Platform,
-} from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
-import { useAuth } from '../context/AuthContext';
-import { useDrawer } from '../context/DrawerContext';
+  Alert,
+} from "react-native";
+import { Ionicons } from "@expo/vector-icons";
+import { useRouter } from "expo-router";
+import { useAuth } from "../context/AuthContext";
+import { useDrawer } from "../context/DrawerContext";
 
 const FIORI = {
-  overlay: 'rgba(0,0,0,0.35)',
-  panelBg: '#FFFFFF',
-  border: '#E6E9EF',
-  ink: '#0B1F3B',
-  muted: '#63718B',
-  accent: '#0A6ED1',
+  overlay: "rgba(0,0,0,0.35)",
+  panelBg: "#FFFFFF",
+  border: "#E6E9EF",
+  ink: "#0B1F3B",
+  muted: "#63718B",
+  accent: "#0A6ED1",
+  danger: "#EB5757",
 };
 
 export default function SideDrawer() {
@@ -30,7 +32,7 @@ export default function SideDrawer() {
   const { user, logout } = useAuth();
 
   const homeRoute =
-    user?.rol_id === 1 ? '/admin' : user?.rol_id === 2 ? '/supervisor' : '/tecnico';
+    user?.rol_id === 1 ? "/admin" : user?.rol_id === 2 ? "/supervisor" : "/tecnico";
 
   const slideX = useRef(new Animated.Value(-320)).current;
 
@@ -40,20 +42,53 @@ export default function SideDrawer() {
       duration: 220,
       useNativeDriver: true,
     }).start();
-  }, [open]);
-
-  const items = useMemo(
-    () => [
-      { key: 'home', label: 'Inicio', icon: 'home-outline', onPress: () => router.push(homeRoute) },
-      { key: 'perfil', label: 'Perfil', icon: 'person-outline', onPress: () => router.push('/perfil') },
-    ],
-    [homeRoute]
-  );
+  }, [open, slideX]);
 
   const handleGo = async (fn) => {
     closeDrawer();
     setTimeout(() => fn?.(), 120);
   };
+
+  const handleLogout = () => {
+    // opcional: confirmación
+    Alert.alert("Cerrar sesión", "¿Deseas cerrar sesión?", [
+      { text: "Cancelar", style: "cancel" },
+      {
+        text: "Cerrar sesión",
+        style: "destructive",
+        onPress: () =>
+          handleGo(() => {
+            logout?.();
+          }),
+      },
+    ]);
+  };
+
+  // ✅ Ahora logout va en la lista, justo después de Perfil
+  const items = useMemo(
+    () => [
+      {
+        key: "home",
+        label: "Inicio",
+        icon: "home-outline",
+        onPress: () => router.push(homeRoute),
+      },
+      {
+        key: "perfil",
+        label: "Perfil",
+        icon: "person-outline",
+        onPress: () => router.push("/perfil"),
+      },
+      {
+        key: "logout",
+        label: "Cerrar sesión",
+        icon: "log-out-outline",
+        danger: true,
+        onPress: handleLogout,
+      },
+    ],
+    [homeRoute, router] // handleLogout usa Alert y logout; no pasa nada si queda estable
+  );
 
   return (
     <Modal visible={open} transparent animationType="none" onRequestClose={closeDrawer}>
@@ -66,16 +101,19 @@ export default function SideDrawer() {
           {/* header perfil */}
           <View style={styles.profile}>
             <View style={styles.avatarWrap}>
-              {/* Si no tienes avatar, puedes dejar solo el icon */}
               <Ionicons name="person-circle-outline" size={46} color={FIORI.accent} />
             </View>
 
             <View style={{ flex: 1 }}>
               <Text style={styles.name} numberOfLines={1}>
-                {user?.nombre || user?.name || 'Usuario'}
+                {user?.nombre || user?.name || "Usuario"}
               </Text>
               <Text style={styles.role} numberOfLines={1}>
-                {user?.rol_id === 1 ? 'Administrador' : user?.rol_id === 2 ? 'Supervisor' : 'Técnico'}
+                {user?.rol_id === 1
+                  ? "Administrador"
+                  : user?.rol_id === 2
+                  ? "Supervisor"
+                  : "Técnico"}
               </Text>
             </View>
           </View>
@@ -86,32 +124,23 @@ export default function SideDrawer() {
           {items.map((it) => (
             <TouchableOpacity
               key={it.key}
-              style={styles.item}
+              style={[styles.item, it.danger && styles.itemDanger]}
               activeOpacity={0.75}
               onPress={() => handleGo(it.onPress)}
             >
-              <Ionicons name={it.icon} size={22} color={FIORI.ink} style={{ width: 28 }} />
-              <Text style={styles.itemText}>{it.label}</Text>
+              <Ionicons
+                name={it.icon}
+                size={22}
+                color={it.danger ? FIORI.danger : FIORI.ink}
+                style={{ width: 28 }}
+              />
+              <Text style={[styles.itemText, it.danger && styles.itemTextDanger]}>
+                {it.label}
+              </Text>
             </TouchableOpacity>
           ))}
 
-          <View style={{ flex: 1 }} />
-
-          <View style={styles.divider} />
-
-          {/* logout */}
-          <TouchableOpacity
-            style={[styles.item, { marginBottom: 8 }]}
-            activeOpacity={0.75}
-            onPress={() =>
-              handleGo(() => {
-                logout?.();
-              })
-            }
-          >
-            <Ionicons name="log-out-outline" size={22} color={FIORI.ink} style={{ width: 28 }} />
-            <Text style={styles.itemText}>Cerrar sesión</Text>
-          </TouchableOpacity>
+          {/* ✅ ya NO hay <View style={{ flex: 1 }} /> */}
         </Animated.View>
       </View>
     </Modal>
@@ -121,8 +150,9 @@ export default function SideDrawer() {
 const styles = StyleSheet.create({
   root: { flex: 1 },
   overlay: { ...StyleSheet.absoluteFillObject, backgroundColor: FIORI.overlay },
+
   panel: {
-    position: 'absolute',
+    position: "absolute",
     left: 0,
     top: 0,
     bottom: 0,
@@ -133,35 +163,55 @@ const styles = StyleSheet.create({
     paddingTop: Platform.select({ ios: 54, android: 40 }),
     paddingHorizontal: 16,
     ...Platform.select({
-      ios: { shadowColor: '#000', shadowOpacity: 0.15, shadowRadius: 12, shadowOffset: { width: 4, height: 0 } },
+      ios: {
+        shadowColor: "#000",
+        shadowOpacity: 0.15,
+        shadowRadius: 12,
+        shadowOffset: { width: 4, height: 0 },
+      },
       android: { elevation: 10 },
     }),
   },
+
   profile: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     gap: 12,
     paddingBottom: 10,
   },
+
   avatarWrap: {
     width: 54,
     height: 54,
     borderRadius: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#F3F6FB',
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#F3F6FB",
     borderWidth: 1,
     borderColor: FIORI.border,
   },
-  name: { fontSize: 16, fontWeight: '700', color: FIORI.ink },
+
+  name: { fontSize: 16, fontWeight: "700", color: FIORI.ink },
   role: { marginTop: 2, fontSize: 13, color: FIORI.muted },
+
   divider: { height: 1, backgroundColor: FIORI.border, marginVertical: 10 },
+
   item: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     paddingVertical: 12,
     borderRadius: 14,
     paddingHorizontal: 10,
   },
-  itemText: { fontSize: 15, color: FIORI.ink, fontWeight: '600' },
+
+  itemText: { fontSize: 15, color: FIORI.ink, fontWeight: "600" },
+
+  // opcional: estilo “peligro” para logout
+  itemDanger: {
+    backgroundColor: "rgba(235,87,87,0.08)",
+  },
+  itemTextDanger: {
+    color: FIORI.danger,
+    fontWeight: "800",
+  },
 });

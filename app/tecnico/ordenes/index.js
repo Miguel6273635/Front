@@ -16,7 +16,7 @@ import {
   Image,
 } from "react-native";
 import DateTimePicker from "@react-native-community/datetimepicker";
-import { useFocusEffect, router } from "expo-router";
+import { router } from "expo-router"; // ✅ IMPORTANTE (arregla "Property 'router' doesn't exist")
 import * as ImagePicker from "expo-image-picker";
 
 import { useAuth } from "../../../src/context/AuthContext";
@@ -223,7 +223,12 @@ export default function ListaOrdenesTecnico() {
 
   const [allOrdenes, setAllOrdenes] = useState([]);
   const [ordenes, setOrdenes] = useState([]);
+
+  // ✅ loading: solo para 1ra carga o cuando cambian filtros (si aún no hay lista)
   const [loading, setLoading] = useState(true);
+
+  // ✅ refreshing: para pull-to-refresh y botón Recargar sin “tirar” la lista
+  const [refreshing, setRefreshing] = useState(false);
 
   const [query, setQuery] = useState("");
   const [dateMode, setDateMode] = useState("day");
@@ -296,53 +301,56 @@ export default function ListaOrdenesTecnico() {
     }
   };
 
-  const fetchOrdenes = async () => {
-    try {
-      setLoading(true);
+  // ✅ IMPORTANTE: NO debe causar doble carga
+  const fetchOrdenes = useCallback(
+    async ({ isRefresh = false } = {}) => {
+      try {
+        if (isRefresh) setRefreshing(true);
+        else setLoading(true);
 
-      const ok = await ensureValidToken();
-      if (!ok) return;
+        const ok = await ensureValidToken();
+        if (!ok) return;
 
-      const sStr = ymd(start);
-      const eStr = ymd(end);
+        const sStr = ymd(start);
+        const eStr = ymd(end);
 
-      const params = new URLSearchParams({
-        start: sStr,
-        end: eStr,
-        mode: dateMode === "day" ? "eq" : "range",
-      });
+        const params = new URLSearchParams({
+          start: sStr,
+          end: eStr,
+          mode: dateMode === "day" ? "eq" : "range",
+        });
 
-      const userEmail = user?.correo || user?.email || user?.username || null;
-      if (userEmail) params.set("user", userEmail);
+        const userEmail = user?.correo || user?.email || user?.username || null;
+        if (userEmail) params.set("user", userEmail);
 
-      const res = await api.get(`/api/ordenes/sap/list?${params.toString()}`);
-      const data = Array.isArray(res.data) ? res.data : [];
-      setAllOrdenes(data);
-    } catch (error) {
-      console.error("Error al cargar órdenes (SAP):", error?.response?.data || error);
-      const serverMsg = error?.response?.data?.error || "No se pudieron cargar las órdenes desde SAP";
-      Alert.alert("Error", serverMsg);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useFocusEffect(
-    useCallback(() => {
-      fetchOrdenes();
-    }, [dateMode, dayRef, weekStart, weekEnd, monthYear, yearOnly])
+        const res = await api.get(`/api/ordenes/sap/list?${params.toString()}`);
+        const data = Array.isArray(res.data) ? res.data : [];
+        setAllOrdenes(data);
+      } catch (error) {
+        console.error("Error al cargar órdenes (SAP):", error?.response?.data || error);
+        const serverMsg = error?.response?.data?.error || "No se pudieron cargar las órdenes desde SAP";
+        Alert.alert("Error", serverMsg);
+      } finally {
+        setLoading(false);
+        setRefreshing(false);
+      }
+    },
+    [ensureValidToken, start, end, dateMode, user]
   );
 
+  // ✅ 1) catálogo una vez
   useEffect(() => {
     fetchStatusCatalog();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // ✅ 2) órdenes solo cuando cambian filtros / 1ra carga (no al regresar de detalles)
   useEffect(() => {
     fetchOrdenes();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dateMode, dayRef, weekStart, weekEnd, monthYear, yearOnly]);
+  }, [fetchOrdenes]);
 
+  // ✅ 3) filtrar en memoria
   useEffect(() => {
     const filtered = (allOrdenes || []).filter((item) => {
       const okQuery = matchesQuery(item, query);
@@ -486,8 +494,8 @@ export default function ListaOrdenesTecnico() {
       setCheckinPhotoBase64(null);
       setCheckinPhotoUri(null);
 
-      // refresca lista para ver el estatus
-      fetchOrdenes();
+      // refresca lista sin tirar UI
+      fetchOrdenes({ isRefresh: true });
     } catch (e) {
       console.log("enviarCheckinCompletoASap ERROR:", e?.response?.data || e?.message || e);
       Alert.alert("Error SAP", "No se pudo completar el check-in (foto/estatus). Revisa logs.");
@@ -545,7 +553,7 @@ export default function ListaOrdenesTecnico() {
           </View>
         </View>
 
-        <View pointerEvents="box-none" style={{ flexDirection: "row", gap: 10, justifyContent: "flex-end", marginTop: 12 }}>
+        <View pointerEvents="box-none" style={{ flexDirection: "row", gap: 10, justifyContent: "flex-end", marginTop: 12, flexWrap: "wrap" }}>
           {lockAll ? (
             <Text style={{ color: FIORI.textMuted, fontSize: 12, fontStyle: "italic" }}>
               {st.type === "no_mantto"
@@ -555,17 +563,35 @@ export default function ListaOrdenesTecnico() {
                 : "Orden bloqueada por estatus."}
             </Text>
           ) : showCheckinBtn ? (
-            <TouchableOpacity style={[styles.boton, { backgroundColor: FIORI.accent }]} onPress={() => abrirModalCheckin(null, item.Orderid)}>
+            <TouchableOpacity
+              style={[styles.boton, { backgroundColor: FIORI.accent }]}
+              onPress={(e) => {
+                e?.stopPropagation?.();
+                abrirModalCheckin(null, item.Orderid);
+              }}
+            >
               <Text style={styles.botonTexto}>Check-in</Text>
             </TouchableOpacity>
           ) : showTbmBtn ? (
             <>
-              <TouchableOpacity style={[styles.boton, { backgroundColor: FIORI.neutralBtn }]} onPress={() => irAFormularioRiesgos(item.Orderid)}>
+              <TouchableOpacity
+                style={[styles.boton, { backgroundColor: FIORI.neutralBtn }]}
+                onPress={(e) => {
+                  e?.stopPropagation?.();
+                  irAFormularioRiesgos(item.Orderid);
+                }}
+              >
                 <Text style={[styles.botonTexto, { color: FIORI.ink }]}>TBM/KY</Text>
               </TouchableOpacity>
 
               {showNoMantBtn && (
-                <TouchableOpacity style={[styles.boton, styles.botonSecundario]} onPress={() => irACartaNoMantenimiento(item.Orderid)}>
+                <TouchableOpacity
+                  style={[styles.boton, styles.botonSecundario]}
+                  onPress={(e) => {
+                    e?.stopPropagation?.();
+                    irACartaNoMantenimiento(item.Orderid);
+                  }}
+                >
                   <Text style={[styles.botonTexto, { color: FIORI.accent }]}>No mantenimiento</Text>
                 </TouchableOpacity>
               )}
@@ -670,7 +696,7 @@ export default function ListaOrdenesTecnico() {
             <Text style={styles.clearBtnText}>Limpiar</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity style={styles.refreshBtn} onPress={fetchOrdenes} activeOpacity={0.85}>
+          <TouchableOpacity style={styles.refreshBtn} onPress={() => fetchOrdenes({ isRefresh: true })} activeOpacity={0.85}>
             <Text style={styles.refreshBtnText}>Recargar</Text>
           </TouchableOpacity>
         </View>
@@ -814,11 +840,7 @@ export default function ListaOrdenesTecnico() {
 
             {checkinPhotoUri ? (
               <View style={{ marginBottom: 12 }}>
-                <Image
-                  source={{ uri: checkinPhotoUri }}
-                  style={{ width: "100%", height: 180, borderRadius: 10, backgroundColor: "#EEE" }}
-                  resizeMode="cover"
-                />
+                <Image source={{ uri: checkinPhotoUri }} style={{ width: "100%", height: 180, borderRadius: 10, backgroundColor: "#EEE" }} resizeMode="cover" />
                 <Text style={{ marginTop: 6, color: FIORI.textMuted, fontSize: 12 }}>Base64 listo ✅</Text>
               </View>
             ) : (
@@ -828,11 +850,7 @@ export default function ListaOrdenesTecnico() {
             )}
 
             <View style={{ flexDirection: "row", justifyContent: "flex-end", gap: 10, flexWrap: "wrap" }}>
-              <TouchableOpacity
-                style={[styles.smallBtn, { backgroundColor: FIORI.neutralBtn }]}
-                onPress={() => setShowCheckinModal(false)}
-                disabled={isSending}
-              >
+              <TouchableOpacity style={[styles.smallBtn, { backgroundColor: FIORI.neutralBtn }]} onPress={() => setShowCheckinModal(false)} disabled={isSending}>
                 <Text style={styles.smallBtnText}>Cancelar</Text>
               </TouchableOpacity>
 
@@ -840,11 +858,7 @@ export default function ListaOrdenesTecnico() {
                 <Text style={styles.smallBtnText}>Tomar foto</Text>
               </TouchableOpacity>
 
-              <TouchableOpacity
-                style={[styles.smallBtn, { backgroundColor: FIORI.accent }]}
-                onPress={enviarCheckinCompletoASap}
-                disabled={isSending}
-              >
+              <TouchableOpacity style={[styles.smallBtn, { backgroundColor: FIORI.accent }]} onPress={enviarCheckinCompletoASap} disabled={isSending}>
                 <Text style={[styles.smallBtnText, { color: "#fff" }]}>{isSending ? "Enviando..." : "Enviar a SAP"}</Text>
               </TouchableOpacity>
             </View>
@@ -852,14 +866,16 @@ export default function ListaOrdenesTecnico() {
         </View>
       </Modal>
 
-      {loading ? (
+      {loading && allOrdenes.length === 0 ? (
         <ActivityIndicator style={{ marginTop: 40 }} size="large" color={FIORI.accent} />
       ) : (
         <FlatList
           data={ordenes}
-          keyExtractor={(item) => item.Orderid?.toString?.() ?? String(Math.random())}
+          keyExtractor={(item, idx) => String(item?.Orderid ?? `row-${idx}`)} // ✅ estable
           renderItem={renderItem}
           contentContainerStyle={{ padding: 20, paddingTop: 6 }}
+          refreshing={refreshing}
+          onRefresh={() => fetchOrdenes({ isRefresh: true })}
           ListEmptyComponent={
             <Text style={{ textAlign: "center", marginTop: 24, color: FIORI.textMuted }}>
               No hay órdenes con los filtros actuales.

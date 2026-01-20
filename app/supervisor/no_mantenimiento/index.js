@@ -1,5 +1,5 @@
-// app/supervisor/no_mantenimiento/index.js  (o la ruta donde tengas esta vista)
-import React, { useEffect, useState, useCallback, useMemo } from 'react';
+// app/supervisor/no_mantenimiento/index.js
+import React, { useEffect, useState, useCallback, useMemo } from "react";
 import {
   View,
   Text,
@@ -10,33 +10,34 @@ import {
   ActivityIndicator,
   RefreshControl,
   Alert,
-} from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
-import { useLocalSearchParams, router } from 'expo-router';
+} from "react-native";
+import { Ionicons } from "@expo/vector-icons";
+import { useLocalSearchParams, router } from "expo-router";
 
-import Header from '../../../src/components/Header';
-import api from '../../../src/services/api';
+import Header from "../../../src/components/Header";
+import api from "../../../src/services/api";
+import { useAuth } from "../../../src/context/AuthContext";
 
 const COLORS = {
-  pageBg: '#F4F6F9',
-  cardBg: '#FFFFFF',
-  border: '#E4E9F0',
-  title: '#0B1F3B',
-  text: '#52616B',
-  accent: '#0A6ED1',
+  pageBg: "#F4F6F9",
+  cardBg: "#FFFFFF",
+  border: "#E4E9F0",
+  title: "#0B1F3B",
+  text: "#52616B",
+  accent: "#0A6ED1",
 };
+
+const safeStr = (v) => (v == null ? "" : String(v));
 
 const parseSapDate = (v) => {
-  // "/Date(1768262400000)/"
+  // "/Date(1768262400000)/" (soporta negativos por si acaso)
   if (!v) return null;
-  const m = String(v).match(/\/Date\((\d+)\)\//);
+  const m = String(v).match(/\/Date\((\-?\d+)\)\//);
   if (!m) return null;
   const ms = Number(m[1]);
-  if (Number.isNaN(ms)) return null;
+  if (!Number.isFinite(ms)) return null;
   return new Date(ms);
 };
-
-const safeStr = (v) => (v == null ? '' : String(v));
 
 // ✅ No mantenimiento: Userstatus contiene códigos y TODOS están entre 0001..0011
 function isNoMantenimientoByUserstatus(userstatusRaw) {
@@ -48,29 +49,41 @@ function isNoMantenimientoByUserstatus(userstatusRaw) {
 
   return codes.every((c) => {
     const n = Number(c);
-    return n >= 1 && n <= 11;
+    return n >= 1 && n <= 11; // 0001..0011
   });
 }
 
 export default function NoMantenimientoIndex() {
+  const { user } = useAuth();
+
+  // ✅ correo del usuario loggeado (NO fijo)
+  const correo = useMemo(() => {
+    return safeStr(user?.email || user?.correo || user?.upn || user?.username).trim();
+  }, [user]);
+
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState([]);
-  const [q, setQ] = useState('');
+  const [q, setQ] = useState("");
   const [refreshing, setRefreshing] = useState(false);
 
   const params = useLocalSearchParams();
   const { refresh } = params;
 
-  // Si ya lo manejas con AuthContext, cámbialo ahí.
-  const correo = safeStr(params?.correo) || 'miguel.hernandez@tellus-technologies.com';
-
   const fetchLista = useCallback(async () => {
     try {
+      // ✅ si no hay correo, no podemos filtrar por usuario
+      if (!correo) {
+        setRows([]);
+        setLoading(false);
+        Alert.alert("Sin correo", "No se detectó el correo del usuario loggeado.");
+        return;
+      }
+
       setLoading(true);
 
-      // ✅ MISMA URL base que tu ejemplo correcto: TODO 2026
-      const from = '2026-01-01T00:00:00';
-      const to = '2026-12-31T23:59:59';
+      // ✅ Rango 2026 (tu ejemplo)
+      const from = "2026-01-01T00:00:00";
+      const to = "2026-12-31T23:59:59";
 
       const filter =
         `StartDate ge datetime'${from}' and ` +
@@ -82,18 +95,15 @@ export default function NoMantenimientoIndex() {
         `?$filter=${encodeURIComponent(filter)}` +
         `&$format=json`;
 
-      console.log('[NO_MANTTO] ODATA URL =>', `${api.defaults.baseURL}${url}`);
+      console.log("[NO_MANTTO] correo loggeado =>", correo);
+      console.log("[NO_MANTTO] ODATA URL =>", `${api.defaults.baseURL}${url}`);
 
       const { data } = await api.get(url);
       const results = Array.isArray(data?.d?.results) ? data.d.results : [];
 
-      // Debug útil (puedes quitarlo luego)
-      console.log('[NO_MANTTO] TOTAL RESULTS:', results.length);
-      console.log('[NO_MANTTO] SAMPLE USERSTATUS:', results?.[0]?.Userstatus);
-
-      // ✅ FILTRO CORRECTO: por Userstatus (0001..0011)
+      // ✅ FILTRO: por Userstatus (0001..0011)
       const filtradas = results.filter((it) => {
-        const us = it?.Userstatus || it?.UserStatus || '';
+        const us = it?.Userstatus || it?.UserStatus || "";
         return isNoMantenimientoByUserstatus(us);
       });
 
@@ -102,31 +112,26 @@ export default function NoMantenimientoIndex() {
       const buscadas = !s
         ? filtradas
         : filtradas.filter((it) => {
-            const order =
-              safeStr(it?.Orderid || it?.OrderId || it?.OrderID).toLowerCase();
+            const order = safeStr(it?.Orderid || it?.OrderId || it?.OrderID).toLowerCase();
             const equip = safeStr(it?.Equipment || it?.Equipo).toLowerCase();
             const text = safeStr(it?.ShortText || it?.Description || it?.Descripcion).toLowerCase();
             const us = safeStr(it?.Userstatus || it?.UserStatus).toLowerCase();
 
-            return (
-              order.includes(s) ||
-              equip.includes(s) ||
-              text.includes(s) ||
-              us.includes(s)
-            );
+            return order.includes(s) || equip.includes(s) || text.includes(s) || us.includes(s);
           });
 
       setRows(buscadas);
     } catch (e) {
-      console.error('Error lista no mantenimiento (ODATA):', e?.response?.data || e.message);
+      console.error("Error lista no mantenimiento (ODATA):", e?.response?.data || e?.message);
       setRows([]);
-      Alert.alert('Error', 'No se pudo cargar la lista (OData). Revisa la consola.');
+      Alert.alert("Error", "No se pudo cargar la lista (OData). Revisa la consola.");
     } finally {
       setLoading(false);
     }
   }, [q, correo]);
 
   useEffect(() => {
+    // cuando ya haya user/correo, cargar
     fetchLista();
   }, [fetchLista]);
 
@@ -144,13 +149,13 @@ export default function NoMantenimientoIndex() {
   };
 
   const openDetalle = (item) => {
-    const orderId = safeStr(item?.Orderid || item?.OrderId || item?.OrderID);
+    const orderId = safeStr(item?.Orderid || item?.OrderId || item?.OrderID).trim();
 
     router.push({
-      pathname: '/supervisor/no_mantenimiento/detalles',
+      pathname: "/supervisor/no_mantenimiento/detalles",
       params: {
         id: orderId,
-        correo,
+        // ✅ YA NO mandamos correo; detalles lo toma del usuario loggeado
       },
     });
   };
@@ -160,12 +165,12 @@ export default function NoMantenimientoIndex() {
     const startDate = parseSapDate(item?.StartDate);
     const finishDate = parseSapDate(item?.FinishDate);
 
-    const userstatus = safeStr(item?.Userstatus || item?.UserStatus || '—');
+    const userstatus = safeStr(item?.Userstatus || item?.UserStatus || "—");
 
     return (
       <TouchableOpacity style={styles.card} onPress={() => openDetalle(item)} activeOpacity={0.75}>
         <View style={styles.rowBetween}>
-          <Text style={styles.title}>Orden {orderId || '—'}</Text>
+          <Text style={styles.title}>Orden {orderId || "—"}</Text>
 
           <View style={[styles.pill, styles.pillPending]}>
             <Text style={styles.pillText}>No mantenimiento</Text>
@@ -174,12 +179,12 @@ export default function NoMantenimientoIndex() {
 
         <Text style={styles.line}>
           <Text style={styles.label}>Equipo: </Text>
-          {safeStr(item?.Equipment || item?.Equipo || '—')}
+          {safeStr(item?.Equipment || item?.Equipo || "—")}
         </Text>
 
         <Text style={styles.line}>
           <Text style={styles.label}>Texto: </Text>
-          {safeStr(item?.ShortText || item?.Description || item?.Descripcion || '—')}
+          {safeStr(item?.ShortText || item?.Description || item?.Descripcion || "—")}
         </Text>
 
         <Text style={styles.line}>
@@ -189,10 +194,15 @@ export default function NoMantenimientoIndex() {
 
         <Text style={[styles.line, { marginTop: 6, fontSize: 12 }]}>
           <Text style={styles.label}>Inicio: </Text>
-          {startDate ? startDate.toLocaleString() : '—'}
-          {'  ·  '}
+          {startDate ? startDate.toLocaleString() : "—"}
+          {"  ·  "}
           <Text style={styles.label}>Fin: </Text>
-          {finishDate ? finishDate.toLocaleString() : '—'}
+          {finishDate ? finishDate.toLocaleString() : "—"}
+        </Text>
+
+        <Text style={[styles.line, { marginTop: 6, fontSize: 12 }]}>
+          <Text style={styles.label}>Usuario: </Text>
+          {correo || "—"}
         </Text>
       </TouchableOpacity>
     );
@@ -215,13 +225,17 @@ export default function NoMantenimientoIndex() {
             returnKeyType="search"
             autoCapitalize="none"
           />
-          <TouchableOpacity onPress={fetchLista} style={styles.searchBtn}>
+          <TouchableOpacity onPress={fetchLista} style={styles.searchBtn} disabled={!correo}>
             <Ionicons name="arrow-forward" size={18} color="#FFF" />
           </TouchableOpacity>
         </View>
 
-        {loading ? (
-          <View style={{ paddingTop: 24, alignItems: 'center' }}>
+        {!correo ? (
+          <Text style={{ color: COLORS.text, textAlign: "center", marginTop: 14 }}>
+            No se detectó el correo del usuario loggeado.
+          </Text>
+        ) : loading ? (
+          <View style={{ paddingTop: 24, alignItems: "center" }}>
             <ActivityIndicator size="large" color={COLORS.accent} />
             <Text style={{ marginTop: 8, color: COLORS.text }}>Cargando…</Text>
           </View>
@@ -233,7 +247,7 @@ export default function NoMantenimientoIndex() {
             contentContainerStyle={{ paddingBottom: 90 }}
             refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onPullRefresh} />}
             ListEmptyComponent={
-              <Text style={{ color: COLORS.text, textAlign: 'center', marginTop: 20 }}>
+              <Text style={{ color: COLORS.text, textAlign: "center", marginTop: 20 }}>
                 No hay órdenes con Userstatus únicamente entre 0001–0011.
               </Text>
             }
@@ -249,9 +263,9 @@ const styles = StyleSheet.create({
   content: { flex: 1, padding: 14 },
 
   searchBox: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#FFF',
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#FFF",
     borderWidth: 1,
     borderColor: COLORS.border,
     borderRadius: 16,
@@ -270,12 +284,12 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.border,
   },
-  rowBetween: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  title: { fontSize: 15, fontWeight: '900', color: COLORS.title },
+  rowBetween: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  title: { fontSize: 15, fontWeight: "900", color: COLORS.title },
   line: { marginTop: 4, color: COLORS.text, fontSize: 13 },
-  label: { fontWeight: '900', color: COLORS.title },
+  label: { fontWeight: "900", color: COLORS.title },
 
   pill: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 999 },
-  pillPending: { backgroundColor: '#FFF3CD' },
-  pillText: { fontSize: 11, fontWeight: '900', color: COLORS.title },
+  pillPending: { backgroundColor: "#FFF3CD" },
+  pillText: { fontSize: 11, fontWeight: "900", color: COLORS.title },
 });

@@ -41,7 +41,11 @@ export default function AvisoAveriaSapScreen() {
   const params = useLocalSearchParams();
   const rawId = params.id || params.orderid || params.Orderid || params.ordenId || null;
   const orderid = rawId ? String(rawId).trim() : null;
-  const { token } = useAuth();
+
+  const { token, user } = useAuth();
+  const emailUsuario =
+  String(user?.email || user?.correo || user?.preferred_username || '').trim() || null;
+
 
   const [loading, setLoading] = useState(true);
   const [meta, setMeta] = useState(null);
@@ -50,16 +54,16 @@ export default function AvisoAveriaSapScreen() {
   const [catS, setCatS] = useState([]);
   const [catT, setCatT] = useState([]);
 
-  // 👉 daños y causas son ARREGLOS (máx 2)
-  const [selR, setSelR] = useState([]);   // daños (R)
+  // daños y causas son ARREGLOS (máx 2)
+  const [selR, setSelR] = useState([]); // daños (R)
   const [selS, setSelS] = useState(null); // localización (S) única
-  const [selT, setSelT] = useState([]);   // causas (T)
+  const [selT, setSelT] = useState([]); // causas (T)
 
   const [shortText, setShortText] = useState('');
-  const [itemDescript, setItemDescript] = useState(''); // Descript para NotificationItemsSet
+  const [itemDescript, setItemDescript] = useState(''); // falla (ItemsSet[].Descript)
   const [causaText, setCausaText] = useState('');
 
-  // ✅ NUEVO: descripción de la pieza para NotificationTextSet.TextLine
+  // descripción pieza (NotificationTextSet[].TextLine)
   const [piezaDescripcion, setPiezaDescripcion] = useState('');
 
   const [saving, setSaving] = useState(false);
@@ -69,6 +73,7 @@ export default function AvisoAveriaSapScreen() {
 
   useEffect(() => {
     let alive = true;
+
     (async () => {
       try {
         setLoading(true);
@@ -90,12 +95,13 @@ export default function AvisoAveriaSapScreen() {
         ]);
 
         if (!alive) return;
-        setMeta(metaRes);
-        setCatR(r);
-        setCatS(s);
-        setCatT(t);
 
-        setShortText(metaRes.ShortTextDefault || '');
+        setMeta(metaRes);
+        setCatR(Array.isArray(r) ? r : []);
+        setCatS(Array.isArray(s) ? s : []);
+        setCatT(Array.isArray(t) ? t : []);
+
+        setShortText(metaRes?.ShortTextDefault || '');
       } catch (e) {
         console.error('Error cargando aviso de avería:', e?.response?.data || e);
         Alert.alert('Error', 'No se pudo cargar la información del aviso.');
@@ -109,6 +115,16 @@ export default function AvisoAveriaSapScreen() {
     };
   }, [orderid, token]);
 
+  const toggleMultiWithLimit = (prev, item, max = 2) => {
+    const exists = prev.some((sel) => sel.Codigo === item.Codigo);
+    if (exists) return prev.filter((sel) => sel.Codigo !== item.Codigo);
+    if (prev.length >= max) {
+      Alert.alert('Límite alcanzado', `Sólo puedes seleccionar hasta ${max} opciones en este grupo.`);
+      return prev;
+    }
+    return [...prev, item];
+  };
+
   const onGuardar = async () => {
     if (saving) return;
     if (!meta) return;
@@ -116,7 +132,6 @@ export default function AvisoAveriaSapScreen() {
     if (!shortText.trim())
       return Alert.alert('Falta información', 'Captura la descripción breve (ShortText).');
 
-    // ✅ NUEVO: requerido para mandarlo a NotificationTextSet.TextLine
     if (!piezaDescripcion.trim())
       return Alert.alert('Falta información', 'Captura la descripción de la pieza.');
 
@@ -133,57 +148,48 @@ export default function AvisoAveriaSapScreen() {
       );
     }
 
-    if (!meta.ReportedByPersNo || meta.ReportedByPersNo.trim() === '') {
-      return Alert.alert(
-        'Aviso',
-        'Esta orden no tiene un número de persona (PersNo) asignado en las operaciones de SAP.\n\nNo se puede crear el aviso automáticamente porque falta el ReportedBy.'
-      );
-    }
+    // ✅ YA NO pedimos PersNo / ReportedBy
 
     const payload = {
       equipment: meta.Equipment,
       docNumber: meta.DocNumber,
       itmNumber: meta.ItmNumber,
       shortText,
-
-      // ✅ se usa en ItemsSet[].Descript (falla)
       itemDescript,
-
-      // ✅ NUEVO: se usa en NotificationTextSet[].TextLine (descripción pieza)
       piezaDescripcion,
-
       causaText,
 
-      // daños/causas
+      // ✅ NUEVO: email del técnico/loggeado
+      email: emailUsuario,
+
       piezaCircList: selR,
       lugarCirc: selS,
       causasCirc: selT,
-
-      reportedBy: meta.ReportedByPersNo,
-      // evidenceUri
     };
+
+    if (!emailUsuario) {
+      return Alert.alert('Falta usuario', 'No se encontró el email del usuario loggeado.');
+    }
 
     try {
       setSaving(true);
-      console.log("=======================================");
-      console.log("[AVISO-AVERIA] JSON ARMADO (payload):");
-      console.log(JSON.stringify(payload, null, 2));
-      console.log("=======================================");
 
+      console.log('=======================================');
+      console.log('[AVISO-AVERIA] JSON ARMADO (payload):');
+      console.log(JSON.stringify(payload, null, 2));
+      console.log('=======================================');
 
       const res = await crearAvisoAveriaSap(payload, token);
       console.log('[AVISO-AVERIA] respuesta backend crearAvisoAveriaSap:', res);
 
-      if (res.ok) {
+      if (res?.ok) {
         const notifNo =
           res?.notifNo ||
           res?.raw?.NotifNo ||
           res?.raw?.NotificationNo ||
           (Array.isArray(res?.raw?.Return?.results)
             ? (() => {
-                const msgs = res.raw.Return.results
-                  .map((x) => String(x?.Message || ''))
-                  .join(' | ');
+                const msgs = res.raw.Return.results.map((x) => String(x?.Message || '')).join(' | ');
                 const nums = msgs.match(/\d{6,}/g);
                 return nums?.sort((a, b) => b.length - a.length)[0] || null;
               })()
@@ -201,7 +207,7 @@ export default function AvisoAveriaSapScreen() {
       } else {
         Alert.alert(
           'Aviso no creado',
-          res.error ||
+          res?.error ||
             'Hubo un problema al crear el aviso en SAP. Revisa conexión o intenta más tarde.'
         );
       }
@@ -210,6 +216,7 @@ export default function AvisoAveriaSapScreen() {
       const msg =
         e?.response?.data?.error ||
         e?.response?.data?.sapMessage ||
+        e?.message ||
         'No se pudo crear el aviso en SAP.';
       Alert.alert('Error', msg);
     } finally {
@@ -239,28 +246,28 @@ export default function AvisoAveriaSapScreen() {
     }
   };
 
-  const toggleMultiWithLimit = (prev, item, max = 2) => {
-    const exists = prev.some((sel) => sel.Codigo === item.Codigo);
-    if (exists) return prev.filter((sel) => sel.Codigo !== item.Codigo);
-    if (prev.length >= max) {
-      Alert.alert('Límite alcanzado', `Sólo puedes seleccionar hasta ${max} opciones en este grupo.`);
-      return prev;
-    }
-    return [...prev, item];
-  };
-
   if (loading) {
     return (
-      <View style={styles.center}>
-        <ActivityIndicator size="large" color={FIORI.primary} />
+      <View style={{ flex: 1, backgroundColor: FIORI.bg }}>
+        <Header title="Aviso de avería (SAP)" />
+        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+          <ActivityIndicator size="large" color={FIORI.primary} />
+          <Text style={{ marginTop: 10, color: FIORI.textMuted, fontWeight: '700' }}>
+            Cargando información…
+          </Text>
+        </View>
       </View>
     );
   }
 
+
   if (!meta) {
     return (
-      <View style={styles.center}>
-        <Text>No se pudo obtener la información de la orden.</Text>
+      <View style={{ flex: 1, backgroundColor: FIORI.bg }}>
+        <Header title="Aviso de avería (SAP)" />
+        <View style={styles.center}>
+          <Text style={{ color: FIORI.text }}>No se pudo obtener la información de la orden.</Text>
+        </View>
       </View>
     );
   }
@@ -268,6 +275,7 @@ export default function AvisoAveriaSapScreen() {
   return (
     <View style={{ flex: 1, backgroundColor: FIORI.bg }}>
       <Header title="Aviso de avería (SAP)" />
+
       <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 140 }}>
         <Text style={styles.section}>Datos base</Text>
         <View style={styles.card}>
@@ -283,12 +291,7 @@ export default function AvisoAveriaSapScreen() {
           <Text style={styles.label}>ItmNumber (SOrdItem)</Text>
           <Text style={styles.value}>{meta.ItmNumber}</Text>
 
-          {meta.ReportedByPersNo ? (
-            <>
-              <Text style={styles.label}>ReportedBy (PersNo de operación)</Text>
-              <Text style={styles.value}>{meta.ReportedByPersNo}</Text>
-            </>
-          ) : null}
+          {/* ✅ Ya NO mostramos ReportedBy aquí */}
         </View>
 
         <Text style={styles.section}>Encabezado del aviso</Text>
@@ -296,11 +299,12 @@ export default function AvisoAveriaSapScreen() {
           <Text style={styles.label}>Descripción breve (ShortText)</Text>
           <TextInput
             style={styles.input}
+            value={shortText}
             onChangeText={setShortText}
             placeholder="Breve descripción del aviso"
           />
 
-          <Text style={styles.label}>Descripción de la pieza (se manda a SAP en NotificationTextSet)</Text>
+          <Text style={styles.label}>Descripción de la pieza (NotificationTextSet)</Text>
           <TextInput
             style={styles.input}
             value={piezaDescripcion}
@@ -322,6 +326,7 @@ export default function AvisoAveriaSapScreen() {
           <Text style={[styles.label, { marginTop: 10 }]}>
             Código de daño (Catálogo = R) – máx 2
           </Text>
+
           <View style={styles.chipsWrap}>
             {catR.map((c) => {
               const isActive = selR.some((sel) => sel.Codigo === c.Codigo);
@@ -364,6 +369,7 @@ export default function AvisoAveriaSapScreen() {
           <Text style={[styles.label, { marginTop: 10 }]}>
             Código de causa (Catálogo = T) – máx 2
           </Text>
+
           <View style={styles.chipsWrap}>
             {catT.map((c) => {
               const isActive = selT.some((sel) => sel.Codigo === c.Codigo);
@@ -404,7 +410,11 @@ export default function AvisoAveriaSapScreen() {
           onPress={onGuardar}
           disabled={saving}
         >
-          {saving ? <ActivityIndicator color="#FFFFFF" /> : <Text style={styles.btnPrimaryText}>Crear aviso en SAP</Text>}
+          {saving ? (
+            <ActivityIndicator color="#FFFFFF" />
+          ) : (
+            <Text style={styles.btnPrimaryText}>Crear aviso en SAP</Text>
+          )}
         </TouchableOpacity>
       </ScrollView>
     </View>
@@ -413,7 +423,9 @@ export default function AvisoAveriaSapScreen() {
 
 const styles = StyleSheet.create({
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+
   section: { marginTop: 18, fontSize: 18, fontWeight: '800', color: FIORI.text },
+
   card: {
     backgroundColor: FIORI.card,
     borderRadius: 14,
@@ -422,8 +434,10 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: FIORI.border,
   },
+
   label: { fontSize: 12, color: FIORI.textMuted, marginTop: 6 },
   value: { fontSize: 15, color: FIORI.text, fontWeight: '600' },
+
   input: {
     borderWidth: 1,
     borderColor: FIORI.border,
@@ -435,7 +449,9 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     marginTop: 4,
   },
+
   chipsWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8 },
+
   chip: {
     borderWidth: 1,
     borderColor: FIORI.border,
@@ -447,6 +463,7 @@ const styles = StyleSheet.create({
   chipOn: { backgroundColor: FIORI.primary, borderColor: FIORI.primary },
   chipText: { fontSize: 11, color: FIORI.text, fontWeight: '700' },
   chipTextOn: { color: '#FFFFFF' },
+
   btnPrimary: {
     marginTop: 20,
     backgroundColor: FIORI.danger,
@@ -456,6 +473,12 @@ const styles = StyleSheet.create({
   },
   btnPrimaryDisabled: { opacity: 0.7 },
   btnPrimaryText: { color: '#FFFFFF', fontWeight: '900', fontSize: 16 },
-  btnSecondary: { backgroundColor: '#111827', paddingVertical: 10, borderRadius: 12, alignItems: 'center' },
+
+  btnSecondary: {
+    backgroundColor: '#111827',
+    paddingVertical: 10,
+    borderRadius: 12,
+    alignItems: 'center',
+  },
   btnSecondaryText: { color: '#FFFFFF', fontWeight: '700', fontSize: 14 },
 });

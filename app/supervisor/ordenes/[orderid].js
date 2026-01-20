@@ -29,12 +29,118 @@ const COLORS = {
   danger: "#E76565",
 };
 
+/* ======================
+   Helpers SAP Date
+   ====================== */
+const sapDateToMs = (value) => {
+  if (value === null || value === undefined) return null;
+  if (value instanceof Date) return value.getTime();
+  if (typeof value === "number") return value;
+
+  const s = String(value);
+  const m = s.match(/\/Date\((\-?\d+)\)\//);
+  if (m) return Number(m[1]);
+
+  // por si llega ISO string
+  const d = new Date(s);
+  return Number.isNaN(d.getTime()) ? null : d.getTime();
+};
+
 const formatDate = (value) => {
-  if (!value) return "—";
-  const d = new Date(value);
+  const ms = sapDateToMs(value);
+  if (ms === null) return "—";
+  const d = new Date(ms);
   if (Number.isNaN(d.getTime())) return "—";
   return d.toLocaleDateString();
 };
+
+/* =========================
+   ✅ Reglas Userstatus (igual que técnicos)
+   ========================= */
+function normalizeCode(code) {
+  if (code === null || code === undefined) return "";
+  const s = String(code).trim();
+  if (!s) return "";
+  const n = parseInt(s, 10);
+  if (Number.isNaN(n)) return s;
+  return String(n).padStart(4, "0");
+}
+
+function isNoManttoCode(code) {
+  const n = parseInt(code, 10);
+  return !Number.isNaN(n) && n >= 1 && n <= 11;
+}
+
+const PRIORITY = ["0500", "0400", "0300", "0200", "0100"];
+
+function resolveUserstatus(rawUserstatus, catalogMap = {}, itemFromApi = null) {
+  const code = normalizeCode(rawUserstatus || itemFromApi?.estatus_code);
+
+  if (!code) return { code: "", label: "Sin empezar", type: "start", color: "#6A7381" };
+
+  for (const p of PRIORITY) {
+    if (code === p) {
+      if (p === "0100") return { code: p, label: "PENDIENTE", type: "pendiente", color: "#D64545" };
+      if (p === "0200") return { code: p, label: "PROCESO", type: "proceso", color: "#D49C00" };
+      if (p === "0300") return { code: p, label: "FINALIZADA", type: "final", color: "#27AE60" };
+      if (p === "0400") return { code: p, label: "PENDIENTE DE FIRMA", type: "firma", color: "#2D9CDB" };
+      if (p === "0500") return { code: p, label: "FINALIZADA C/PENDIENTES", type: "final_pend", color: "#2D9CDB" };
+    }
+  }
+
+  if (code === "0012") return { code, label: catalogMap?.["0012"] || "Sin empezar", type: "start", color: "#6A7381" };
+
+  if (isNoManttoCode(code)) {
+    const cause = catalogMap?.[code] || `No mantenimiento (${code})`;
+    return { code, label: cause, type: "no_mantto", color: "#9E9E9E" };
+  }
+
+  return { code, label: catalogMap?.[code] || `Estatus ${code}`, type: "unknown", color: "#6A7381" };
+}
+
+/* ======================
+   ✅ Normaliza detalle (SAP vs normalizado)
+   ====================== */
+function normalizeDetalle(det) {
+  if (!det) return null;
+
+  const orderid = det.orderid ?? det.Orderid ?? "";
+  const equipment = det.equipment ?? det.Equipment ?? "";
+  const nombre_orden = det.nombre_orden ?? det.ShortText ?? det.order_type ?? det.OrderType ?? "";
+
+  const userstatus = det.userstatus ?? det.Userstatus ?? "";
+
+  // ✅ aquí estaba el problema: cubrir todas las llaves reales
+  const startRaw =
+    det.start_date ??
+    det.startdate ??
+    det.StartDate ??
+    det.Basicstart ??
+    det.BasicStart ??
+    det.BasStaDate ??
+    null;
+
+  const finishRaw =
+    det.finish_date ??
+    det.finishdate ??
+    det.FinishDate ??
+    det.BasicFin ??
+    det.BasicFinish ??
+    det.BasFinDate ??
+    null;
+
+  return {
+    ...det,
+    orderid: String(orderid),
+    equipment: String(equipment),
+    nombre_orden: String(nombre_orden || "—"),
+    userstatus: String(userstatus || ""),
+
+    // ✅ guardar normalizado a ms para render confiable
+    start_date: sapDateToMs(startRaw),
+    finish_date: sapDateToMs(finishRaw),
+  };
+}
 
 export default function DetalleOrdenSupervisor() {
   const { orderid } = useLocalSearchParams();
@@ -46,17 +152,9 @@ export default function DetalleOrdenSupervisor() {
 
   const [openOps, setOpenOps] = useState({});
   const [componentsByAct, setComponentsByAct] = useState({});
-  const [loadingComponents, setLoadingComponents] = useState({}); // { [activity]: true/false }
+  const [loadingComponents, setLoadingComponents] = useState({});
 
   const goBack = () => router.back();
-
-  const getStatusColor = (status) => {
-    const s = (status || "").toLowerCase();
-    if (!s || s === "pendiente") return COLORS.danger;
-    if (s === "en_proceso") return "#F5C044";
-    if (s === "finalizada_con_pendientes") return "#F39C12";
-    return "#6FCF97";
-  };
 
   const cargarDetalle = async () => {
     try {
@@ -66,7 +164,7 @@ export default function DetalleOrdenSupervisor() {
       const detalle = await fetchOrdenDetalleSupervisor(orderid);
       const ops = await fetchOperacionesSupervisor(orderid);
 
-      setData(detalle || null);
+      setData(normalizeDetalle(detalle));
       setOperaciones(Array.isArray(ops) ? ops : []);
     } catch (err) {
       console.error("Error supervisor detalle:", err?.response?.data || err);
@@ -86,15 +184,12 @@ export default function DetalleOrdenSupervisor() {
   const toggleOp = async (op, idx) => {
     const activity = String(op?.Activity || "").padStart(4, "0");
     const sub = String(op?.SubActivity || "");
-    const opId = `${activity}-${sub}-${idx}`; // ✅ mismo ID que en render
+    const opId = `${activity}-${sub}-${idx}`;
 
     const willOpen = !openOps[opId];
     setOpenOps((prev) => ({ ...prev, [opId]: willOpen }));
 
-    // si ya estaba cargado, no vuelvas a pedir
     if (componentsByAct[activity]) return;
-
-    // si se está cerrando, no hacer nada
     if (!willOpen) return;
 
     try {
@@ -109,7 +204,9 @@ export default function DetalleOrdenSupervisor() {
     }
   };
 
-  const statusColor = useMemo(() => getStatusColor(data?.estatus), [data]);
+  const headerStatus = useMemo(() => {
+    return resolveUserstatus(data?.userstatus ?? "", {}, data);
+  }, [data]);
 
   if (loading) {
     return (
@@ -153,19 +250,20 @@ export default function DetalleOrdenSupervisor() {
         <View style={styles.card}>
           <View style={styles.cardHeaderRow}>
             <View style={{ flex: 1 }}>
-              <Text style={styles.orderIdText}>Orden #{data.Orderid || data.orderid}</Text>
-              <Text style={styles.orderTypeText}>{data.order_type || data.nombre_orden || "—"}</Text>
+              <Text style={styles.orderIdText}>Orden #{data.orderid}</Text>
+              <Text style={styles.orderTypeText}>{data.nombre_orden || "—"}</Text>
             </View>
 
             <View
               style={[
                 styles.statusPill,
-                { borderColor: statusColor, backgroundColor: statusColor + "22" },
+                { borderColor: headerStatus.color, backgroundColor: headerStatus.color + "22" },
               ]}
             >
-              <View style={[styles.statusDot, { backgroundColor: statusColor }]} />
+              <View style={[styles.statusDot, { backgroundColor: headerStatus.color }]} />
               <Text style={styles.statusPillText}>
-                {(data.estatus || "pendiente").replace(/_/g, " ")}
+                {headerStatus.label}
+                {headerStatus.code ? ` (${headerStatus.code})` : ""}
               </Text>
             </View>
           </View>
@@ -176,6 +274,7 @@ export default function DetalleOrdenSupervisor() {
             <Text style={styles.rowValue}>{data.equipment || "—"}</Text>
           </View>
 
+          {/* ✅ Ya se pintan porque start_date/finish_date están normalizados a ms */}
           <View style={styles.row}>
             <Ionicons name="calendar-outline" size={16} color={COLORS.muted} />
             <Text style={styles.rowLabel}>Inicio:</Text>
@@ -187,24 +286,6 @@ export default function DetalleOrdenSupervisor() {
             <Text style={styles.rowLabel}>Fin:</Text>
             <Text style={styles.rowValue}>{formatDate(data.finish_date)}</Text>
           </View>
-
-          {!!(data.partner_name || data.cliente) && (
-            <View style={styles.row}>
-              <Ionicons name="person-outline" size={16} color={COLORS.muted} />
-              <Text style={styles.rowLabel}>Cliente:</Text>
-              <Text style={styles.rowValue}>{data.partner_name || data.cliente}</Text>
-            </View>
-          )}
-
-          {!!(data.partner_address || data.direccion) && (
-            <View style={[styles.row, { alignItems: "flex-start" }]}>
-              <Ionicons name="location-outline" size={16} color={COLORS.muted} />
-              <Text style={styles.rowLabel}>Dirección:</Text>
-              <Text style={[styles.rowValue, { flex: 1 }]} numberOfLines={3}>
-                {data.partner_address || data.direccion}
-              </Text>
-            </View>
-          )}
         </View>
 
         {/* Operaciones */}
@@ -220,8 +301,8 @@ export default function DetalleOrdenSupervisor() {
               const opId = `${activity}-${sub}-${idx}`;
               const isOpen = !!openOps[opId];
 
-              const est = String(op?.estatus || "pendiente");
-              const opColor = getStatusColor(est);
+              const opRawStatus = op?.userstatus ?? op?.Userstatus ?? op?.estatus ?? "0100";
+              const opStatus = resolveUserstatus(opRawStatus, {}, op);
 
               const comps = componentsByAct[activity];
               const compsLoading = !!loadingComponents[activity];
@@ -240,8 +321,16 @@ export default function DetalleOrdenSupervisor() {
                       </Text>
 
                       <View style={{ flexDirection: "row", alignItems: "center", marginTop: 4, gap: 8 }}>
-                        <View style={[styles.opBadge, { borderColor: opColor, backgroundColor: opColor + "22" }]}>
-                          <Text style={styles.opBadgeText}>{est.replace(/_/g, " ")}</Text>
+                        <View
+                          style={[
+                            styles.opBadge,
+                            { borderColor: opStatus.color, backgroundColor: opStatus.color + "22" },
+                          ]}
+                        >
+                          <Text style={styles.opBadgeText}>
+                            {opStatus.label}
+                            {opStatus.code ? ` (${opStatus.code})` : ""}
+                          </Text>
                         </View>
 
                         <Text style={styles.operationSub}>
@@ -276,9 +365,6 @@ export default function DetalleOrdenSupervisor() {
                               <Text style={styles.componentMeta}>
                                 ResItem: {c.ResItem || "—"} · Req: {c.RequirementQuantity ?? 0}{" "}
                                 {c.RequirementQuantityUnit || ""} · Ret: {c.WithdQuan ?? 0}
-                              </Text>
-                              <Text style={styles.componentMeta}>
-                                Planta: {c.Plant || "—"} · Almacén: {c.StgeLoc || "—"}
                               </Text>
                             </View>
                           </View>
@@ -322,9 +408,9 @@ const styles = StyleSheet.create({
 
   statusPill: { flexDirection: "row", alignItems: "center", borderRadius: 20, borderWidth: 1, paddingHorizontal: 10, paddingVertical: 4 },
   statusDot: { width: 10, height: 10, borderRadius: 5, marginRight: 6 },
-  statusPillText: { fontSize: 12, fontWeight: "600", color: COLORS.title, textTransform: "capitalize" },
+  statusPillText: { fontSize: 12, fontWeight: "600", color: COLORS.title },
 
-  row: { flexDirection: "row", alignItems: "center", marginTop: 4, columnGap: 6 },
+  row: { flexDirection: "row", alignItems: "center", marginTop: 6, columnGap: 6 },
   rowLabel: { fontSize: 13, color: COLORS.muted, fontWeight: "600" },
   rowValue: { fontSize: 13, color: COLORS.text },
 

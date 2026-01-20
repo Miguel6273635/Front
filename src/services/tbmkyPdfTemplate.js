@@ -10,20 +10,12 @@ const esc = (s) =>
 
 const xBox = (cond) => (cond ? `<span class="xb">X</span>` : `<span class="xb"></span>`);
 
-const pick = (obj, path, fallback = "") => {
-  try {
-    return path.split(".").reduce((a, k) => (a ? a[k] : undefined), obj) ?? fallback;
-  } catch {
-    return fallback;
-  }
-};
-
-// Mapea equipo seleccionado a “X” en el bloque de Identificación de área
-const equipoChecks = (equipoId) => ({
-  elevadores: equipoId === "elevadores",
-  escaleras: equipoId === "escaleras",
-  oficinas: equipoId === "oficinas",
-  almacen: equipoId === "almacen",
+// ✅ equipo fijo elevadores
+const equipoChecks = (_equipoId) => ({
+  elevadores: true,
+  escaleras: false,
+  oficinas: false,
+  almacen: false,
 });
 
 // Lista EPP en el mismo orden de tu formato
@@ -63,6 +55,92 @@ function eppMark(eppSeleccionado, key, col /* 'M' | 'A' */) {
   return !!v?.[col];
 }
 
+// ✅ Round 1: "X" (no cuadrito) como tu formato
+function xMark(cond) {
+  return cond ? "X" : "";
+}
+
+function renderEppBlock(eppSel) {
+  const first = EPP_ORDER.slice(0, 9);
+  const second = EPP_ORDER.slice(9);
+
+  const renderCell = (idx, key) => {
+    const num = idx + 1;
+    return `
+      <table style="margin: 5px; width: 10%">
+        <tr>
+          <th rowspan="2" style="width: 40%; border: none"></th>
+          <th style="width: 25%">M</th>
+          <th style="width: 25%">A</th>
+        </tr>
+        <tr>
+          <th style="height: 20px">${eppMark(eppSel, key, "M") ? "X" : ""}</th>
+          <th>${eppMark(eppSel, key, "A") ? "X" : ""}</th>
+        </tr>
+        <tr>
+          <th colspan="3" style="border: none; text-align: left">
+            <br /> ${num}.${key}
+          </th>
+        </tr>
+      </table>
+    `;
+  };
+
+  return `
+    <div style="display: flex">${first.map((k, i) => renderCell(i, k)).join("")}</div>
+    <div style="display: flex">${second.map((k, i) => renderCell(i + 9, k)).join("")}</div>
+  `;
+}
+
+function renderRound1(hasRiesgo) {
+  const row = (a, b, c, d) => `
+    <tr>
+      <th style="width: 15px">${xMark(hasRiesgo(a))}</th>
+      <th style="background-color: #c4bfbf">${esc(a)}</th>
+
+      <th style="width: 15px">${xMark(hasRiesgo(b))}</th>
+      <th style="background-color: #c4bfbf">${esc(b)}</th>
+
+      <th style="width: 15px">${xMark(hasRiesgo(c))}</th>
+      <th style="background-color: #c4bfbf">${esc(c)}</th>
+
+      <th style="width: 15px">${xMark(hasRiesgo(d))}</th>
+      <th style="background-color: #c4bfbf">${esc(d)}</th>
+    </tr>
+  `;
+
+  return `
+    ${row("CAIDAS AL MISMO NIVEL", "PROYECCION DE PARTICULAS QUIMICAS", "SOBRE EXPOSICION AL RUIDO", "POSTURAS INADECUADAS")}
+    ${row("CAIDAS A DISTINTO NIVEL", "PROYECCION DE PARTICULAS INCANDECENTES", "GOLPES,CORTES CON OBJETO MOVIL", "DESLUBRAMIENTO/POCA ILUMINACIÓN")}
+    ${row("CAIDAS OBJETOS MANIPULACION/DESPLOME", "PROYECCION PARTICULAS SOLIDAS", "GOLPES,CORTES CON OBJETO INMOVIL", "HORARIOS LARGOS / TRABAJO NOCTURNO")}
+    ${row("DESPLOME DE MATERIALES/CARGAS", "ATROPELLAMIENTO POR VEHICULOS", "TRANSMISION MICROORGANISMOS COVID", "FATIGA MOVIMIENTOS REPETITIVOS")}
+    ${row("CONTACTO CON SUPERFICIE CORTANTE", "ATRAPAMIENTO POR MAQUINARIA", "PERDIDA DEL EQUILIBRIO", "GASES Y VAPORES TOXICOS")}
+    ${row("CONTACTO CON SUSTANCIAS QUIMICAS", "MOVIMIENTOS REPENTINOS DE MAQUINARIA", "GOLPE DE CALOR / DESMAYOS", "SOBREXPOSICION RADIACION IONIZANTE")}
+    ${row("ELECTROCUCION", "SOBRE ESFUERZO", "PICADURAS DE INSECTO", "CONDICIONES CLIMATICAS")}
+    <tr>
+      <th style="width: 15px">${xMark(hasRiesgo("OTROS"))}</th>
+      <th colspan="7" style="text-align: left">OTROS:</th>
+    </tr>
+  `;
+}
+
+function renderMedidasAcciones(medidas, acciones) {
+  const m = (i, j) => esc((medidas?.[i]?.[j] ?? "").toString());
+  const a = (i) => esc((acciones?.[i] ?? "").toString());
+
+  const block = (idx) => `
+    <tr>
+      <th rowspan="3">${idx + 1}</th>
+      <th colspan="2" class="left">${m(idx, 0)}</th>
+      <th rowspan="3" style="height: 30px" class="left">${a(idx)}</th>
+    </tr>
+    <tr><th colspan="2" class="left">${m(idx, 1)}</th></tr>
+    <tr><th colspan="2" class="left">${m(idx, 2)}</th></tr>
+  `;
+
+  return `${block(0)}${block(1)}${block(2)}`;
+}
+
 export function buildTbmkyHtml(payload) {
   const orderid = esc(payload.orderid);
   const fecha = esc(payload.fecha);
@@ -75,7 +153,8 @@ export function buildTbmkyHtml(payload) {
   const t1 = trabajadores[0] || {};
   const t2 = trabajadores[1] || {};
 
-  const equipoId = payload.equipoId || payload.equipoSeleccionado; // por si guardas id/label
+  // ✅ fijo elevadores
+  const equipoId = payload.equipoId || payload.equipoSeleccionado;
   const eq = equipoChecks(equipoId);
 
   const rutinaria = !!payload.rutinaria;
@@ -87,17 +166,18 @@ export function buildTbmkyHtml(payload) {
   // TOP 3
   const topR = payload.riesgosTopText || ["", "", ""];
   const causas = payload.causasTop || ["", "", ""];
-  const medidas = payload.medidasTop || [["", "", ""], ["", "", ""], ["", "", ""]];
+  const medidas = payload.medidasTop || [
+    ["", "", ""],
+    ["", "", ""],
+    ["", "", ""],
+  ];
   const acciones = payload.acciones || ["", "", ""];
 
-  // Firmas (base64 sin data:)
+  // ✅ SOLO firma técnico (sin supervisor)
   const firmaTecnico = payload.firmaTecnico ? String(payload.firmaTecnico) : "";
-  const firmaSupervisor = payload.firmaSupervisor ? String(payload.firmaSupervisor) : "";
 
-  // Round 1: riesgos presentes (si quieres marcarlos en “otros”, etc.)
-  const riesgosSeleccionadosIds = Array.isArray(payload.riesgosSeleccionadosIds)
-    ? payload.riesgosSeleccionadosIds
-    : [];
+  // Round 1
+  const riesgosSeleccionadosIds = Array.isArray(payload.riesgosSeleccionadosIds) ? payload.riesgosSeleccionadosIds : [];
   const riesgosBD = Array.isArray(payload.riesgosBD) ? payload.riesgosBD : [];
   const selectedRiesgosText = new Set(
     riesgosBD
@@ -107,7 +187,6 @@ export function buildTbmkyHtml(payload) {
 
   const hasRiesgo = (txt) => selectedRiesgosText.has(String(txt).toUpperCase().trim());
 
-  // CSS: @page letter + 2 páginas
   return `<!DOCTYPE html>
 <html lang="es">
 <head>
@@ -197,21 +276,19 @@ export function buildTbmkyHtml(payload) {
     </div>
 
     <div style="display: flex">
+      <!-- ✅ SIN NÓMINA -->
       <table style="margin: 5px; width: 60%">
         <tr>
           <th>NOMBRE COMPLETO DE QUIEN REALIZA TBM-KY</th>
-          <th style="width: 20%">CARGO</th>
-          <th style="width: 20%">NOMINA</th>
+          <th style="width: 25%">CARGO</th>
         </tr>
         <tr>
           <th class="left">1.- ${esc(t1.nombre || "")}</th>
           <th>${esc(t1.cargo || "")}</th>
-          <th>${esc(t1.nomina || "")}</th>
         </tr>
         <tr>
           <th class="left">2.- ${esc(t2.nombre || "")}</th>
           <th>${esc(t2.cargo || "")}</th>
-          <th>${esc(t2.nomina || "")}</th>
         </tr>
       </table>
 
@@ -294,7 +371,6 @@ export function buildTbmkyHtml(payload) {
       <tr><td colspan="2" style="background-color: black; color: white">EQUIPO DE PROTECCION PERSONAL:SELECCIONE LOS NECESARIOS PARA LA ACTIVIDAD</td></tr>
     </table>
 
-    <!-- EPP rows (tal cual tu formato, con X) -->
     ${renderEppBlock(eppSel)}
 
     <table>
@@ -366,15 +442,37 @@ export function buildTbmkyHtml(payload) {
       ${renderMedidasAcciones(medidas, acciones)}
     </table>
 
+    <!-- ✅ ROUND 4 + FIRMAS: SOLO TECNICO -->
     <table>
       <tr>
         <td colspan="2" style="background-color: black; color: white; width: 50%">ROUND 4 (ACCIONES A REALIZAR, SEÑALAR Y LLAMAR)</td>
         <th rowspan="4" style="width: 10%"></th>
-        <td colspan="2" style="background-color: black; color: white">FIRMAS COMPROMISO</td>
+        <td colspan="2" style="background-color: black; color: white">FIRMA TECNICO</td>
       </tr>
-      <tr><th style="width: 5%">1</th><th class="left">${esc(acciones?.[0] || "")}</th><th colspan="2">${firmaTecnico ? `<img class="sig" src="data:image/png;base64,${firmaTecnico}" />` : `<div class="sig"></div>`}</th></tr>
-      <tr><th style="width: 5%">2</th><th class="left">${esc(acciones?.[1] || "")}</th><th colspan="2">${firmaSupervisor ? `<img class="sig" src="data:image/png;base64,${firmaSupervisor}" />` : `<div class="sig"></div>`}</th></tr>
-      <tr><th style="width: 5%">3</th><th class="left">${esc(acciones?.[2] || "")}</th><th colspan="2"></th></tr>
+
+      <tr>
+        <th style="width: 5%">1</th>
+        <th class="left">${esc(acciones?.[0] || "")}</th>
+        <th colspan="2">
+          ${
+            firmaTecnico
+              ? `<img class="sig" src="data:image/png;base64,${firmaTecnico}" />`
+              : `<div class="sig"></div>`
+          }
+        </th>
+      </tr>
+
+      <tr>
+        <th style="width: 5%">2</th>
+        <th class="left">${esc(acciones?.[1] || "")}</th>
+        <th colspan="2"></th>
+      </tr>
+
+      <tr>
+        <th style="width: 5%">3</th>
+        <th class="left">${esc(acciones?.[2] || "")}</th>
+        <th colspan="2"></th>
+      </tr>
     </table>
 
     <div style="display: flex">
@@ -405,87 +503,4 @@ export function buildTbmkyHtml(payload) {
   </div>
 </body>
 </html>`;
-}
-
-// ---------- helpers HTML ----------
-
-function renderEppBlock(eppSel) {
-  // Tu formato lo imprime en 2 filas de 9 (1..9) y 9 (10..18)
-  const first = EPP_ORDER.slice(0, 9);
-  const second = EPP_ORDER.slice(9);
-
-  const renderCell = (idx, key) => {
-    const num = idx + 1;
-    return `
-      <table style="margin: 5px; width: 10%">
-        <tr>
-          <th rowspan="2" style="width: 40%; border: none"></th>
-          <th style="width: 25%">M</th>
-          <th style="width: 25%">A</th>
-        </tr>
-        <tr>
-          <th style="height: 20px">${eppMark(eppSel, key, "M") ? "X" : ""}</th>
-          <th>${eppMark(eppSel, key, "A") ? "X" : ""}</th>
-        </tr>
-        <tr>
-          <th colspan="3" style="border: none; text-align: left">
-            <br /> ${num}.${key}
-          </th>
-        </tr>
-      </table>
-    `;
-  };
-
-  return `
-    <div style="display: flex">${first.map((k, i) => renderCell(i, k)).join("")}</div>
-    <div style="display: flex">${second.map((k, i) => renderCell(i + 9, k)).join("")}</div>
-  `;
-}
-
-function renderRound1(hasRiesgo) {
-  // Tabla EXACTA como tu formato (solo le metemos X en el primer th “chiquito”)
-  const row = (a, b, c, d) => `
-    <tr>
-      <th style="width: 15px">${xMark(hasRiesgo(a))}</th>
-      <th style="background-color: #c4bfbf">${a}</th>
-      <th style="width: 15px">${xMark(hasRiesgo(b))}</th>
-      <th style="background-color: #c4bfbf">${b}</th>
-      <th style="width: 15px">${xMark(hasRiesgo(c))}</th>
-      <th style="background-color: #c4bfbf">${c}</th>
-      <th style="width: 15px">${xMark(hasRiesgo(d))}</th>
-      <th style="background-color: #c4bfbf">${d}</th>
-    </tr>
-  `;
-
-  return `
-    ${row("CAIDAS AL MISMO NIVEL", "PROYECCION DE PARTICULAS QUIMICAS", "SOBRE EXPOSICION AL RUIDO", "POSTURAS INADECUADAS")}
-    ${row("CAIDAS A DISTINTO NIVEL", "PROYECCION DE PARTICULAS INCANDECENTES", "GOLPES,CORTES CON OBJETO MOVIL", "DESLUBRAMIENTO/POCA ILUMINACIÓN")}
-    ${row("CAIDAS OBJETOS MANIPULACION/DESPLOME", "PROYECCION PARTICULAS SOLIDAS", "GOLPES,CORTES CON OBJETO INMOVIL", "HORARIOS LARGOS / TRABAJO NOCTURNO")}
-    ${row("DESPLOME DE MATERIALES/CARGAS", "ATROPELLAMIENTO POR VEHICULOS", "TRANSMISION MICROORGANISMOS COVID", "FATIGA MOVIMIENTOS REPETITIVOS")}
-    ${row("CONTACTO CON SUPERFICIE CORTANTE", "ATRAPAMIENTO POR MAQUINARIA", "PERDIDA DEL EQUILIBRIO", "GASES Y VAPORES TOXICOS")}
-    ${row("CONTACTO CON SUSTANCIAS QUIMICAS", "MOVIMIENTOS REPENTINOS DE MAQUINARIA", "GOLPE DE CALOR / DESMAYOS", "SOBREXPOSICION RADIACION IONIZANTE")}
-    ${row("ELECTROCUCION", "SOBRE ESFUERZO", "PICADURAS DE INSECTO", "CONDICIONES CLIMATICAS")}
-    <tr><th style="width: 15px">${xMark(hasRiesgo("OTROS"))}</th><th colspan="7" style="text-align: left">OTROS:</th></tr>
-  `;
-}
-
-function xMark(cond) {
-  return cond ? "X" : "";
-}
-
-function renderMedidasAcciones(medidas, acciones) {
-  const m = (i, j) => esc((medidas?.[i]?.[j] ?? "").toString());
-  const a = (i) => esc((acciones?.[i] ?? "").toString());
-
-  const block = (idx) => `
-    <tr>
-      <th rowspan="3">${idx + 1}</th>
-      <th colspan="2" class="left">${m(idx, 0)}</th>
-      <th rowspan="3" style="height: 30px" class="left">${a(idx)}</th>
-    </tr>
-    <tr><th colspan="2" class="left">${m(idx, 1)}</th></tr>
-    <tr><th colspan="2" class="left">${m(idx, 2)}</th></tr>
-  `;
-
-  return `${block(0)}${block(1)}${block(2)}`;
 }

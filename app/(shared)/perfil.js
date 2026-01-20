@@ -23,7 +23,7 @@ export default function PerfilScreen() {
             <Text style={styles.value}>{getNombreRol(user?.rol_id)}</Text>
           </View>
 
-          <View style={styles.row}>
+          {/*<View style={styles.row}>
             <Text style={styles.label}>Cargo:</Text>
             <Text style={styles.value}>{user?.cargo || '—'}</Text>
           </View>
@@ -31,7 +31,7 @@ export default function PerfilScreen() {
           <View style={styles.row}>
             <Text style={styles.label}>Nómina:</Text>
             <Text style={styles.value}>{user?.nomina || '—'}</Text>
-          </View>
+          </View>*/}
         </View>
       </ScrollView>
 
