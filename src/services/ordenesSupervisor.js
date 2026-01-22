@@ -9,13 +9,16 @@ import { isOnline } from "../offline/net";
    Helpers: SAP /Date(…)/ -> ms
    ====================== */
 function sapDateToMs(value) {
-  if (!value) return null;
+  if (value === null || value === undefined) return null;
   if (value instanceof Date) return value.getTime();
   if (typeof value === "number") return value;
 
   const s = String(value);
   const m = s.match(/\/Date\((\-?\d+)\)\//);
-  if (!m) return null;
+  if (!m) {
+    const d = new Date(s);
+    return Number.isNaN(d.getTime()) ? null : d.getTime();
+  }
   return Number(m[1]);
 }
 
@@ -23,19 +26,37 @@ function sapDateToMs(value) {
    Normaliza OData/Array a Array
    ====================== */
 function extractArray(payload) {
-  // 1) ya viene como array
   if (Array.isArray(payload)) return payload;
-
-  // 2) OData típico: { d: { results: [...] } }
   const odata = payload?.d?.results;
   if (Array.isArray(odata)) return odata;
-
-  // 3) variante: { results: [...] }
   const results = payload?.results;
   if (Array.isArray(results)) return results;
-
-  // 4) si el backend te manda algo raro
   return [];
+}
+
+/* ======================
+   Lee userKey estable desde AsyncStorage("user")
+   ====================== */
+async function getUserKeyFromStorage() {
+  try {
+    // Tú guardas esto en AuthContext
+    const userStr = await AsyncStorage.getItem("user");
+    const u = userStr ? JSON.parse(userStr) : null;
+
+    // Usa el campo más estable que tengas.
+    // Si tu user trae email/correo -> perfecto.
+    return (
+      u?.correo ||
+      u?.email ||
+      u?.upn ||
+      u?.username ||
+      u?.userPrincipalName ||
+      u?.oid ||
+      "unknown"
+    );
+  } catch {
+    return "unknown";
+  }
 }
 
 /* ======================
@@ -43,14 +64,12 @@ function extractArray(payload) {
    - si ya viene normalizado, también lo respeta
    ====================== */
 function mapOrdenToUi(o) {
-  // Caso A: ya viene normalizado (tu backend anterior)
-  // ej: { orderid, equipment, startdate, finishdate, estatus, ... }
+  // Caso A: ya viene normalizado (backend)
   if (o && (o.orderid || o.Orderid)) {
     const orderid = o.orderid ?? o.Orderid ?? "";
     const equipment = o.equipment ?? o.Equipment ?? "";
     const nombre_orden = o.nombre_orden ?? o.ShortText ?? o.shortText ?? "";
 
-    // fechas: si ya vienen como ms/ISO, o si vienen /Date(...)/
     const startMs =
       typeof o.startdate === "number"
         ? o.startdate
@@ -61,21 +80,20 @@ function mapOrdenToUi(o) {
         ? o.finishdate
         : sapDateToMs(o.finishdate ?? o.FinishDate);
 
-    // userstatus: preferimos el de SAP si existe
     const userstatus = o.userstatus ?? o.Userstatus ?? "";
 
     return {
       ...o,
       orderid: String(orderid),
       equipment: String(equipment),
-      nombre_orden: String(nombre_orden),
+      nombre_orden: String(nombre_orden || ""),
       startdate: startMs,
       finishdate: finishMs,
       userstatus: String(userstatus || ""),
     };
   }
 
-  // Caso B: objeto SAP crudo (OData)
+  // Caso B: SAP crudo (OData)
   return {
     orderid: String(o?.Orderid ?? ""),
     equipment: String(o?.Equipment ?? ""),
@@ -83,7 +101,7 @@ function mapOrdenToUi(o) {
     startdate: sapDateToMs(o?.StartDate),
     finishdate: sapDateToMs(o?.FinishDate),
     userstatus: String(o?.Userstatus ?? ""),
-    _raw: o, // opcional por si ocupas luego algo
+    _raw: o,
   };
 }
 
@@ -91,13 +109,9 @@ function mapOrdenToUi(o) {
    Export
    ====================== */
 export async function fetchOrdenesSupervisor(startDate, endDate, mode = "range") {
-  const correo =
-    (await AsyncStorage.getItem("correo")) ||
-    (await AsyncStorage.getItem("email")) ||
-    (await AsyncStorage.getItem("userEmail")) ||
-    "";
+  // ✅ userKey real (no depende de "correo" inexistente)
+  const userKey = await getUserKeyFromStorage();
 
-  const userKey = correo || "unknown";
   const key = cacheKeys.ordenesSupervisor({
     userKey,
     start: startDate,
@@ -119,16 +133,19 @@ export async function fetchOrdenesSupervisor(startDate, endDate, mode = "range")
   // 3) hay red: fetch + cache
   try {
     const url = "/api/ordenes/sap/list";
-    const params = { start: startDate, end: endDate, mode, user: correo };
+
+    // ⚠️ tu backend pide "user". Antes tú mandabas "correo".
+    // Aquí mandamos userKey (email/correo/oid). Ajusta si tu API exige otra cosa.
+    const params = { start: startDate, end: endDate, mode, user: userKey };
 
     console.log("[ORDENES SUP URL]", `${api.defaults?.baseURL || ""}${url}`, params);
 
     const res = await api.get(url, { params });
 
-    // ✅ soporta array o OData
+    // soporta array u OData
     const rawArr = extractArray(res?.data);
 
-    // ✅ normaliza SIEMPRE (para que la vista no tenga que adivinar)
+    // normaliza SIEMPRE
     const mapped = rawArr.map(mapOrdenToUi).filter((x) => x?.orderid);
 
     // cachea lo normalizado

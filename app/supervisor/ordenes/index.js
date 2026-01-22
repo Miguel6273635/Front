@@ -90,7 +90,7 @@ async function fetchStatusCatalogMap() {
   const results = res?.data?.d?.results || [];
   const map = {};
   for (const r of results) {
-    const code = String(r?.Status1 || "").trim(); // "0001", "0100", etc.
+    const code = String(r?.Status1 || "").trim();
     const label = String(r?.Status2 || "").trim();
     if (code) map[code] = label || code;
   }
@@ -111,7 +111,7 @@ function normalizeCode(code) {
 
 function isNoManttoCode(code) {
   const n = parseInt(code, 10);
-  return !Number.isNaN(n) && n >= 1 && n <= 11; // 0001..0011
+  return !Number.isNaN(n) && n >= 1 && n <= 11;
 }
 
 const PRIORITY = ["0500", "0400", "0300", "0200", "0100"];
@@ -170,7 +170,6 @@ function mapOrdenSapToUi(o) {
 function normalizeOrdenItem(item) {
   if (!item) return null;
 
-  // ya normalizado (service nuevo)
   if (item.orderid || item.equipment || item.userstatus || item.startdate) {
     return {
       ...item,
@@ -189,9 +188,7 @@ function normalizeOrdenItem(item) {
     };
   }
 
-  // SAP crudo
   if (isSapRaw(item)) return mapOrdenSapToUi(item);
-
   return null;
 }
 
@@ -217,9 +214,7 @@ async function prefetchDetallesDeOrdenes(orderIds = []) {
       try {
         await fetchOrdenDetalleSupervisor(id);
         await fetchOperacionesSupervisor(id);
-      } catch (e) {
-        // silencio
-      }
+      } catch (e) {}
     }
   };
 
@@ -245,11 +240,9 @@ export default function ListaOrdenesSupervisor() {
   const [monthYear, setMonthYear] = useState({ month: now.getMonth(), year: now.getFullYear() });
   const [yearOnly, setYearOnly] = useState(now.getFullYear());
 
-  // ✅ usamos MODAL para que se cierre tocando fuera
   const [showMonthPicker, setShowMonthPicker] = useState(false);
   const [showYearPicker, setShowYearPicker] = useState(false);
 
-  // ✅ catálogo de causas/status
   const [statusCatalog, setStatusCatalog] = useState({});
   const [loadingCatalog, setLoadingCatalog] = useState(false);
 
@@ -291,7 +284,6 @@ export default function ListaOrdenesSupervisor() {
     return "";
   }, [dateMode, dayRef, weekStart, weekEnd, monthYear, yearOnly]);
 
-  // ✅ cargar catálogo 1 vez (si hay red)
   useEffect(() => {
     let mounted = true;
     (async () => {
@@ -310,7 +302,6 @@ export default function ListaOrdenesSupervisor() {
     return () => { mounted = false; };
   }, []);
 
-  // ✅ Prefetch de lista al entrar (solo 1 vez)
   const didPrefetchRef = useRef(false);
   useEffect(() => {
     if (didPrefetchRef.current) return;
@@ -329,7 +320,6 @@ export default function ListaOrdenesSupervisor() {
     })();
   }, []);
 
-  // ✅ cargar órdenes + prefetch detalles
   const lastPrefetchKeyRef = useRef("");
   const cargar = useCallback(async () => {
     try {
@@ -341,18 +331,12 @@ export default function ListaOrdenesSupervisor() {
 
       const data = await fetchOrdenesSupervisor(sStr, eStr, modeParam);
 
-      // ✅ data ya debe venir como array normalizado desde el service
-      // pero por si te llega SAP crudo, lo soportamos
       let arr = [];
       if (Array.isArray(data)) arr = data;
       else if (Array.isArray(data?.d?.results)) arr = data.d.results;
       else if (Array.isArray(data?.results)) arr = data.results;
 
-      // ✅ normalizamos SIN romper (si ya viene normalizado, se conserva)
-      const normalized = arr
-        .map(normalizeOrdenItem)
-        .filter(Boolean);
-
+      const normalized = arr.map(normalizeOrdenItem).filter(Boolean);
       setOrdenes(normalized);
 
       const online = await isOnline();
@@ -379,7 +363,7 @@ export default function ListaOrdenesSupervisor() {
   const onRefresh = () => cargar();
 
   const renderItem = ({ item }) => {
-    const st = resolveUserstatus(item?.userstatus, statusCatalog);
+    const st = resolveUserstatus(item?.userstatus ?? item?.Userstatus, statusCatalog);
     const color = st.color;
 
     const icon =
@@ -390,6 +374,10 @@ export default function ListaOrdenesSupervisor() {
       st.type === "final" ? "checkmark-circle-outline" :
       st.type === "no_mantto" ? "close-circle-outline" :
       "ellipse-outline";
+
+    // ✅ AQUÍ ESTÁ LA CLAVE: toma startdate normalizado o StartDate crudo
+    const startMs = sapDateToMs(item?.startdate ?? item?.StartDate);
+    const finishMs = sapDateToMs(item?.finishdate ?? item?.FinishDate);
 
     return (
       <TouchableOpacity
@@ -423,18 +411,19 @@ export default function ListaOrdenesSupervisor() {
             </View>
           </View>
 
+          {/* ✅ FECHAS */}
           <View style={styles.metaRow}>
             <View style={styles.metaItem}>
               <Ionicons name="calendar-outline" size={14} color={COLORS.text} />
               <Text style={styles.metaText}>
-                {item.startdate ? new Date(item.startdate).toLocaleDateString() : "—"}
+                Inicio: {startMs ? new Date(startMs).toLocaleDateString() : "—"}
               </Text>
             </View>
 
             <View style={styles.metaItem}>
-              <Ionicons name="information-circle-outline" size={14} color={COLORS.text} />
-              <Text style={styles.metaText} numberOfLines={1}>
-                Userstatus: {item.userstatus ? String(item.userstatus) : "—"}
+              <Ionicons name="calendar-outline" size={14} color={COLORS.text} />
+              <Text style={styles.metaText}>
+                Fin: {finishMs ? new Date(finishMs).toLocaleDateString() : "—"}
               </Text>
             </View>
           </View>
@@ -492,7 +481,6 @@ export default function ListaOrdenesSupervisor() {
             <Text style={[styles.chipText, dateMode === "year" && styles.chipTextActive]}>Año</Text>
           </TouchableOpacity>
 
-          {/* ✅ Recargar */}
           <TouchableOpacity style={styles.refreshBtn} onPress={onRefresh} activeOpacity={0.85}>
             <Ionicons name="refresh" size={16} color="#fff" />
             <Text style={styles.refreshBtnText}>Recargar</Text>
@@ -556,7 +544,6 @@ export default function ListaOrdenesSupervisor() {
         )}
       </View>
 
-      {/* ✅ Modal Mes: cierra tocando fuera */}
       <Modal
         visible={showMonthPicker && dateMode === "month"}
         transparent
@@ -592,7 +579,7 @@ export default function ListaOrdenesSupervisor() {
                     style={[styles.monthCell, active && styles.monthCellActive]}
                     onPress={() => {
                       setMonthYear({ month: idx, year: monthYear.year });
-                      setShowMonthPicker(false); // ✅ se cierra al elegir
+                      setShowMonthPicker(false);
                     }}
                   >
                     <Text style={[styles.monthCellText, active && styles.monthCellTextActive]}>{m}</Text>
@@ -604,7 +591,6 @@ export default function ListaOrdenesSupervisor() {
         </Pressable>
       </Modal>
 
-      {/* ✅ Modal Año: cierra tocando fuera */}
       <Modal
         visible={showYearPicker && dateMode === "year"}
         transparent
@@ -713,7 +699,6 @@ const styles = StyleSheet.create({
 
   emptyText: { textAlign: "center", marginTop: 24, color: COLORS.text },
 
-  // ✅ Modal styles
   backdrop: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.35)",

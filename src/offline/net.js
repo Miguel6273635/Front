@@ -3,14 +3,13 @@ import NetInfo from "@react-native-community/netinfo";
 export async function isOnline() {
   const st = await NetInfo.fetch();
 
-  // ✅ estricto: SOLO online si reachability es TRUE
-  // (en muchos phones es null aunque no haya internet)
-  return !!(st.isConnected && st.isInternetReachable === true);
+  // ✅ Online si está conectado y reachability NO es false (true o null)
+  return !!st.isConnected && st.isInternetReachable !== false;
 }
 
 export function subscribeOnline(cb) {
   return NetInfo.addEventListener((st) => {
-    const online = !!(st.isConnected && st.isInternetReachable === true);
+    const online = !!st.isConnected && st.isInternetReachable !== false;
     cb(online);
   });
 }

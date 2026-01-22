@@ -94,10 +94,11 @@ function normItemNumberByIndex(index) {
 }
 
 /**
- * ✅ Extrae OrderId y Aviso del Return:
- * - Orden = MessageV2
- * - Aviso = MessageV3
- * - Fallback: regex desde el texto Message
+ * ✅ Extrae OrderId, Aviso y Oferta del Return:
+ * - Orden = MessageV2 (típico IWO_BAPI2/126)
+ * - Aviso = MessageV3 (típico IWO_BAPI2/126)
+ * - Oferta = desde mensaje "Oferta creada: XXXXX" (típico ZSD/002)
+ * - Fallbacks: regex desde Message
  */
 function extractOrderFromReturn(dataOrD) {
   const d = dataOrD?.d ? dataOrD.d : dataOrD;
@@ -107,26 +108,46 @@ function extractOrderFromReturn(dataOrD) {
     return {
       orderId: null,
       notifNo: null,
+      offerNo: null,
+      offerMessage: null,
       successItem: null,
+      offerItem: null,
       errors: [],
       warnings: [],
       message: null,
+      successMessages: [],
     };
   }
 
   const upperType = (x) => String(x?.Type || "").toUpperCase();
+  const isSuccess = (r) => upperType(r) === "S";
+  const isError = (r) => upperType(r) === "E";
+  const isWarning = (r) => upperType(r) === "W" || upperType(r) === "A";
 
-  const errors = returns.filter((r) => upperType(r) === "E");
-  const warnings = returns.filter((r) => upperType(r) === "W" || upperType(r) === "A");
+  const errors = returns.filter(isError);
+  const warnings = returns.filter(isWarning);
 
+  // ✅ mensajes de éxito (para mostrar en UI si quieres)
+  const successMessages = returns
+    .filter(isSuccess)
+    .map((r) => String(r?.Message || "").trim())
+    .filter(Boolean);
+
+  // ✅ renglón típico de creación de orden (OrderId y Aviso)
   const successItem =
-    returns.find((r) => upperType(r) === "S" && String(r?.MessageV2 || "").trim().match(/^\d+$/)) ||
     returns.find(
       (r) =>
-        upperType(r) === "S" &&
+        isSuccess(r) &&
+        String(r?.MessageV2 || "")
+          .trim()
+          .match(/^\d+$/)
+    ) ||
+    returns.find(
+      (r) =>
+        isSuccess(r) &&
         String(r?.Message || "").toLowerCase().includes("se ha grabado con número")
     ) ||
-    returns.find((r) => upperType(r) === "S") ||
+    returns.find(isSuccess) ||
     null;
 
   const message = successItem?.Message ? String(successItem.Message) : null;
@@ -134,15 +155,50 @@ function extractOrderFromReturn(dataOrD) {
   let orderId = successItem?.MessageV2 ? String(successItem.MessageV2).trim() : null;
   let notifNo = successItem?.MessageV3 ? String(successItem.MessageV3).trim() : null;
 
-  // Fallback por texto
+  // ✅ Oferta creada (ZSD o texto "Oferta creada")
+  const offerItem =
+    returns.find(
+      (r) =>
+        isSuccess(r) &&
+        (String(r?.Id || "").toUpperCase() === "ZSD" ||
+          String(r?.Message || "").toLowerCase().includes("oferta creada"))
+    ) || null;
+
+  const offerMessage = offerItem?.Message ? String(offerItem.Message).trim() : null;
+
+  let offerNo = null;
+  if (offerMessage) {
+    // Caso ideal: "Oferta creada: 0020000114"
+    const m = offerMessage.match(/oferta creada:\s*([0-9]+)/i);
+    if (m?.[1]) offerNo = m[1];
+    // Fallback: primer número largo
+    if (!offerNo) {
+      const nums = offerMessage.match(/\b\d{6,15}\b/g) || [];
+      offerNo = nums[0] || null;
+    }
+  }
+
+  // Fallback por texto para orderId/notifNo si no vinieron en V2/V3
   if ((!orderId || !notifNo) && message) {
     const numbers = message.match(/\b\d{6,12}\b/g) || [];
     if (!orderId && numbers.length >= 1) orderId = numbers[0];
     if (!notifNo && numbers.length >= 2) notifNo = numbers[1];
   }
 
-  return { orderId, notifNo, successItem, errors, warnings, message };
+  return {
+    orderId,
+    notifNo,
+    offerNo,
+    offerMessage,
+    successItem,
+    offerItem,
+    errors,
+    warnings,
+    message,
+    successMessages,
+  };
 }
+
 
 /**
  * ✅ Fallback: extrae #orden / #aviso desde sap-message header.
@@ -761,6 +817,9 @@ export default function CrearOrdenMantto() {
       const parsed = extractOrderFromReturn(res?.data);
       let orderId = parsed?.orderId || null;
       let avisoCreado = parsed?.notifNo || null;
+      let ofertaNo = parsed?.offerNo || null;
+      let ofertaMsg = parsed?.offerMessage || null;
+
 
       // ✅ 2) Fallback: sap-message
       if (!orderId) {
@@ -780,8 +839,12 @@ export default function CrearOrdenMantto() {
       }
 
       const baseMsg = orderId
-        ? `✅ Orden creada: ${orderId}\n📌 Aviso original: ${avisoOriginal || "—"}\n📩 Mensaje/Aviso SAP: ${avisoCreado || "—"}`
-        : "✅ Orden creada (no pude leer el número desde Return/sap-message).";
+          ? `✅ Orden creada: ${orderId}
+        📌 Aviso original: ${avisoOriginal || "—"}
+        📩 Aviso SAP (retorno): ${avisoCreado || "—"}
+        💰 Oferta: ${ofertaNo ? ofertaNo : "—"}${ofertaMsg ? `\n🧾 ${ofertaMsg}` : ""}`
+          : "✅ Orden creada (no pude leer el número desde Return/sap-message).";
+
 
       Alert.alert("Orden creada", baseMsg, [
         { text: "OK", onPress: () => router.replace("/supervisor/averia") },
