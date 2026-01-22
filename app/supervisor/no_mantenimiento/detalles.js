@@ -1,5 +1,5 @@
 // app/supervisor/no_mantenimiento/detalles.js
-import React, { useEffect, useMemo, useState, useCallback } from "react";
+import React, { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import {
   View,
   Text,
@@ -16,9 +16,17 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams, router } from "expo-router";
 import DateTimePicker from "@react-native-community/datetimepicker";
+import Signature from "react-native-signature-canvas";
+
+import * as Print from "expo-print";
+import * as FileSystem from "expo-file-system/legacy";
 
 import Header from "../../../src/components/Header";
 import api from "../../../src/services/api";
+import { useAuth } from "../../../src/context/AuthContext";
+
+// ✅ tu template ya está en src/services
+import { buildCartaNoMantenimientoHtml } from "../../../src/services/noMantenimientoPdfTemplate";
 
 const COLORS = {
   pageBg: "#F4F6F9",
@@ -30,15 +38,21 @@ const COLORS = {
   disabled: "#B7C2CF",
 };
 
+const safeStr = (v) => (v == null ? "" : String(v));
 const pad2 = (n) => String(n).padStart(2, "0");
 
 const parseSapDate = (v) => {
   if (!v) return null;
-  const m = String(v).match(/\/Date\((\d+)\)\//);
+  const m = String(v).match(/\/Date\((\-?\d+)\)\//);
   if (!m) return null;
   const ms = Number(m[1]);
   if (!Number.isFinite(ms)) return null;
   return new Date(ms);
+};
+
+const formatDateOnly = (d) => {
+  if (!(d instanceof Date)) return "—";
+  return `${pad2(d.getDate())}/${pad2(d.getMonth() + 1)}/${d.getFullYear()}`;
 };
 
 const formatDateTime = (d) => {
@@ -64,25 +78,73 @@ const toYYYYMMDD = (d) => {
   return `${y}${m}${day}`;
 };
 
-// ====== ODATA PATHS CORRECTOS ======
+// ====== ODATA PATHS ======
 const WORKORDER_DETAIL_PATH = "/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet";
 const STATUS_CATALOGO_PATH = "/api/odata/ZSD_CATALOGOS_SRV/StatusWorkOrderSet";
-
-// (ya lo tienes funcionando)
 const CHANGE_STATUS_PATH = "/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet";
-
-// ✅ RESCHEDULE
 const RESCHEDULE_PATH = "/api/odata/ZCS_RESCHEDULE_WORKORDER_SRV/WorkOrderHeaderSet";
+
+/* ===================== HELPERS SAP RETURNS (para evitar falso error) ===================== */
+const pickSapReturns = (sapData) => {
+  const arr =
+    sapData?.ReturnSet?.results ||
+    sapData?.Return?.results ||
+    sapData?.ReturnSet ||
+    sapData?.Return ||
+    [];
+  return Array.isArray(arr) ? arr : [];
+};
+
+const normalizeSapMsg = (r) => {
+  const type = String(r?.Type || r?.type || "").toUpperCase();
+  const msg =
+    String(r?.Message || r?.message || r?.Text || r?.text || "").trim() ||
+    JSON.stringify(r);
+  return { type, msg };
+};
+
+const summarizeSapMessages = (returns) => {
+  const msgs = (Array.isArray(returns) ? returns : []).map(normalizeSapMsg);
+  const errors = msgs.filter((m) => m.type === "E" || m.type === "A");
+  const warns = msgs.filter((m) => m.type === "W");
+  const success = msgs.filter((m) => m.type === "S");
+  const info = msgs.filter((m) => m.type === "I");
+  return { msgs, errors, warns, success, info };
+};
+
+// Regla práctica: si hay S, no tratamos E como fatal (en estos servicios suele venir un E “no fatal”)
+const isFatalSapReturn = (returns) => {
+  const { errors, success } = summarizeSapMessages(returns);
+  return errors.length > 0 && success.length === 0;
+};
+
+const formatSapMessages = (returns, max = 4) => {
+  const { msgs } = summarizeSapMessages(returns);
+  return msgs
+    .slice(0, max)
+    .map((m) => `• [${m.type}] ${m.msg}`)
+    .join("\n");
+};
 
 export default function DetallesNoMantenimiento() {
   const params = useLocalSearchParams();
-  const id = String(params?.id || ""); // OrderId
-  const correo = String(params?.correo || "miguel.hernandez@tellus-technologies.com");
+  const id = safeStr(params?.id).trim(); // OrderId
+
+  const { user } = useAuth();
+  const correo = useMemo(() => {
+    return safeStr(user?.email || user?.correo || user?.upn || user?.username).trim();
+  }, [user]);
+
+  const nombreUsuario = useMemo(() => {
+    return safeStr(user?.nombre || user?.name || correo).trim();
+  }, [user, correo]);
+
+  const signatureRef = useRef(null);
 
   const [loading, setLoading] = useState(true);
   const [wo, setWo] = useState(null);
 
-  // ====== catálogo status (0001..0011) ======
+  // catálogo status (0001..0011)
   const [modal, setModal] = useState(false);
   const [loadingStatus, setLoadingStatus] = useState(false);
   const [savingStatus, setSavingStatus] = useState(false);
@@ -92,10 +154,23 @@ export default function DetallesNoMantenimiento() {
   const [selectedStatus, setSelectedStatus] = useState(null);
   const [statusEnviado, setStatusEnviado] = useState(false);
 
-  // ====== reprogramación ======
-  const [savingReprog, setSavingReprog] = useState(false);
+  // ✅ descripción concreta + mes afecto
+  const [descripcionConcreta, setDescripcionConcreta] = useState("");
+  const [mesAfecto, setMesAfecto] = useState("");
 
-  // NOTA: lo de “motivo” lo dejo en estado/UI tal cual, pero NO se valida ni se manda.
+  // ✅ firma supervisor
+  const [firmaModal, setFirmaModal] = useState(false);
+  const [firmaBase64Png, setFirmaBase64Png] = useState("");
+  const [firmaDibujada, setFirmaDibujada] = useState(false);
+
+  // ✅ para evitar lag: bloquear scroll mientras firma
+  const [isSigning, setIsSigning] = useState(false);
+
+  // flags UI
+  const [sendingPdf, setSendingPdf] = useState(false);
+
+  // reprogramación
+  const [savingReprog, setSavingReprog] = useState(false);
   const [motivoReprog, setMotivoReprog] = useState("");
 
   const [showDatePicker, setShowDatePicker] = useState(false);
@@ -112,7 +187,7 @@ export default function DetallesNoMantenimiento() {
     return d;
   }, [fecha, hora]);
 
-  // ========= DETALLE (WORKORDER) =========
+  // ========= DETALLE =========
   const fetchDetalle = useCallback(async () => {
     if (!id) return;
 
@@ -123,7 +198,28 @@ export default function DetallesNoMantenimiento() {
       console.log("[NO_MANTTO DETALLE] ODATA URL =>", `${api.defaults.baseURL}${url}`);
 
       const { data } = await api.get(url, { params: { $format: "json" } });
-      setWo(data?.d || null);
+      const d = data?.d || null;
+      setWo(d);
+
+      // Autollenar mes afecto con StartDate
+      const sd = parseSapDate(d?.StartDate);
+      if (sd && !mesAfecto) {
+        const months = [
+          "Enero",
+          "Febrero",
+          "Marzo",
+          "Abril",
+          "Mayo",
+          "Junio",
+          "Julio",
+          "Agosto",
+          "Septiembre",
+          "Octubre",
+          "Noviembre",
+          "Diciembre",
+        ];
+        setMesAfecto(months[sd.getMonth()]);
+      }
     } catch (e) {
       console.error("Error detalle (WORKORDER ODATA):", e?.response?.data || e?.message);
       setWo(null);
@@ -131,23 +227,15 @@ export default function DetallesNoMantenimiento() {
     } finally {
       setLoading(false);
     }
-  }, [id]);
+  }, [id, mesAfecto]);
 
-  // ========= CATÁLOGO STATUS (ZSD_CATALOGOS_SRV) =========
+  // ========= CATÁLOGO STATUS =========
   const fetchStatusOptions = useCallback(async () => {
     try {
       setLoadingStatus(true);
 
-      console.log(
-        "[STATUS CATALOGO] URL =>",
-        `${api.defaults.baseURL}${STATUS_CATALOGO_PATH}?$filter=${encodeURIComponent("Stsma eq 'CS000001'")}`
-      );
-
       const { data } = await api.get(STATUS_CATALOGO_PATH, {
-        params: {
-          $filter: "Stsma eq 'CS000001'",
-          $format: "json",
-        },
+        params: { $filter: "Stsma eq 'CS000001'", $format: "json" },
       });
 
       const results = Array.isArray(data?.d?.results) ? data.d.results : [];
@@ -176,7 +264,7 @@ export default function DetallesNoMantenimiento() {
     fetchDetalle();
   }, [fetchDetalle]);
 
-  // ========= UI helpers =========
+  // UI helpers
   const filteredOptions = useMemo(() => {
     const s = q.trim().toLowerCase();
     if (!s) return statusOptions;
@@ -185,12 +273,115 @@ export default function DetallesNoMantenimiento() {
 
   const openModal = async () => {
     setQ("");
-    setSelectedStatus(null);
     setModal(true);
     await fetchStatusOptions();
   };
 
-  // ========= GUARDAR STATUS (0001..0011) =========
+  // ========= Generar + enviar PDF =========
+  const generarYEnviarPdf = useCallback(async () => {
+    if (!wo) return Alert.alert("Sin datos", "No hay datos de la orden.");
+    if (!id) return Alert.alert("Sin orden", "Falta OrderId.");
+    if (!selectedStatus?.code) return Alert.alert("Falta causa", "Selecciona una causa (0001–0011).");
+    if (!firmaBase64Png) return Alert.alert("Falta firma", "Primero presiona “Guardar firma”.");
+    if (!String(descripcionConcreta || "").trim()) {
+      return Alert.alert("Falta descripción", "Describe la causa (texto obligatorio).");
+    }
+
+    try {
+      setSendingPdf(true);
+
+      const startDate = parseSapDate(wo?.StartDate);
+      const finishDate = parseSapDate(wo?.FinishDate);
+
+      const mx = safeStr(wo?.DocNumber || wo?.SalesOrd || wo?.SalesOrder || wo?.DocNum || "").trim();
+      const equipo = safeStr(wo?.Equipment || "").trim();
+      const fechaProgramada =
+        startDate ? formatDateOnly(startDate) : finishDate ? formatDateOnly(finishDate) : "—";
+
+      // Si tu wo NO trae razón social/dirección, luego lo conectamos a ToAddresses como TBMKY
+      const razonSocial = safeStr(wo?.PartnerName || wo?.Name1 || wo?.RazonSocial || "").trim();
+      const direccion = safeStr(wo?.PartnerAddress || wo?.Stras || wo?.Ort01 || wo?.Direccion || "").trim();
+
+      const mecanico = safeStr(wo?.Technician || wo?.Mecanico || nombreUsuario).trim();
+      const causaCode = String(selectedStatus.code).padStart(4, "0");
+
+      const html = buildCartaNoMantenimientoHtml({
+        orderId: id,
+        causaCode,
+        razonSocial: razonSocial || "—",
+        direccion: direccion || "—",
+        equipo: equipo || "—",
+        fechaProgramada: fechaProgramada || "—",
+        mx: mx || "—",
+        mesAfecto: mesAfecto || "—",
+        mecanico: mecanico || "—",
+        descripcionConcreta: descripcionConcreta || "",
+        firmaSupervisorBase64Png: firmaBase64Png,
+      });
+
+      // 1) HTML -> PDF
+      const file = await Print.printToFileAsync({ html, base64: false });
+
+      // 2) PDF -> base64
+      const pdfBase64 = await FileSystem.readAsStringAsync(file.uri, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+
+      if (!pdfBase64 || pdfBase64.length < 200) {
+        throw new Error("No se pudo leer el PDF en base64.");
+      }
+
+      // 3) Enviar a SAP
+      const fileName = `carta_no_mantenimiento_${id}.pdf`;
+
+      const payload = {
+        WorkOrderHeader: { Orderid: String(id) },
+        Attachments: [
+          {
+            DocId: String(id),
+            FileName: fileName,
+            MimeType: "application/pdf", // ✅ FIX
+            Base64: String(pdfBase64 || ""), // sin trim agresivo
+          },
+        ],
+        Return: [],
+      };
+
+      console.log(
+        "[NO_MANTTO][PDF] payload (sin base64):",
+        JSON.stringify(
+          {
+            ...payload,
+            Attachments: [{ ...payload.Attachments[0], Base64: `<<base64 ${pdfBase64.length}>>` }],
+          },
+          null,
+          2
+        )
+      );
+
+      const resp = await api.post(CHANGE_STATUS_PATH, payload);
+      const sapData = resp?.data?.d || resp?.data;
+      const returns = pickSapReturns(sapData);
+
+      console.log("[NO_MANTTO][PDF] SAP returns:", JSON.stringify(returns, null, 2));
+
+      if (isFatalSapReturn(returns)) {
+        throw new Error(formatSapMessages(returns) || "SAP regresó error al adjuntar el PDF.");
+      }
+
+      const msg = formatSapMessages(returns, 4);
+      Alert.alert("Listo", msg ? `PDF adjuntado.\n\n${msg}` : "PDF generado y adjuntado a SAP.");
+      setFirmaModal(false);
+    } catch (e) {
+      console.error("[NO_MANTTO][PDF] ERROR:", e?.response?.data || e?.message);
+      const serverMsg = e?.response?.data?.error?.message?.value || e?.response?.data?.error || "";
+      Alert.alert("Error", serverMsg || e?.message || "No se pudo generar/enviar el PDF.");
+    } finally {
+      setSendingPdf(false);
+    }
+  }, [wo, id, selectedStatus, firmaBase64Png, descripcionConcreta, mesAfecto, nombreUsuario]);
+
+  // ========= GUARDAR STATUS =========
   const guardarStatus = async () => {
     if (!selectedStatus?.code) {
       Alert.alert("Falta selección", "Selecciona un status (0001–0011).");
@@ -207,43 +398,48 @@ export default function DetallesNoMantenimiento() {
         Return: [],
       };
 
-      console.log("[NO_MANTTO][GUARDAR STATUS] url:", CHANGE_STATUS_PATH);
       console.log("[NO_MANTTO][GUARDAR STATUS] payload:", JSON.stringify(changePayload, null, 2));
-
       const resp = await api.post(CHANGE_STATUS_PATH, changePayload);
 
       const sapData = resp?.data?.d || resp?.data;
-      const returns =
-        sapData?.ReturnSet?.results || sapData?.Return?.results || sapData?.ReturnSet || sapData?.Return || [];
+      const returns = pickSapReturns(sapData);
 
-      const hasError =
-        Array.isArray(returns) &&
-        returns.some((r) => String(r?.Type || r?.type || "").toUpperCase() === "E");
+      console.log("[NO_MANTTO][GUARDAR STATUS] SAP returns:", JSON.stringify(returns, null, 2));
 
-      if (hasError) {
-        console.log("[NO_MANTTO][GUARDAR STATUS] SAP returns:", JSON.stringify(returns, null, 2));
-        throw new Error("SAP regresó error al guardar status.");
+      if (isFatalSapReturn(returns)) {
+        throw new Error(formatSapMessages(returns) || "SAP regresó error al guardar status.");
       }
 
       setModal(false);
       setStatusEnviado(true);
 
-      Alert.alert("Listo", `Se guardó el status ${selectedStatus.code}. Ya puedes reprogramar.`);
+      // abrir modal firma + limpiar campos
+      setDescripcionConcreta("");
+      setFirmaBase64Png("");
+      setFirmaDibujada(false);
+
+      try {
+        signatureRef.current?.clearSignature?.();
+      } catch {}
+
+      setFirmaModal(true);
     } catch (e) {
       console.error("[NO_MANTTO][GUARDAR STATUS] ERROR:", e?.response?.data || e?.message);
-      Alert.alert("Error", e?.response?.data?.error || e?.message || "No se pudo guardar el status.");
+      const serverMsg = e?.response?.data?.error?.message?.value || e?.response?.data?.error || "";
+      Alert.alert("Error", serverMsg || e?.message || "No se pudo guardar el status.");
     } finally {
       setSavingStatus(false);
     }
   };
 
-  // ========= REPROGRAMACIÓN (solo habilitar si statusEnviado) =========
-  // ✅ ÚNICO AJUSTE PEDIDO: además de RESCHEDULE, mandar también CHANGE_WORKORDER con:
-  // - 0012 activo (reprogramación)
-  // - 0011 inactivo (X) para quitar el no mantenimiento original
+  // ========= REPROGRAMACIÓN =========
   const guardarReprogramacion = async () => {
     if (!statusEnviado) {
       Alert.alert("Aún no", "Primero selecciona y guarda un status (0001–0011).");
+      return;
+    }
+    if (!correo) {
+      Alert.alert("Sin correo", "No se detectó el correo del usuario loggeado.");
       return;
     }
 
@@ -253,84 +449,58 @@ export default function DetallesNoMantenimiento() {
       const FechaIni = toYYYYMMDD(fechaHora);
       const FechaFin = toYYYYMMDD(fechaHora);
 
-      // 1) RESCHEDULE (fechas)
+      // 1) RESCHEDULE
       const payloadReschedule = {
         WorkOrderHeader: { Supervisor: correo },
         WorkOrderItemsSet: [{ OrderId: String(id), OrderItem: "", FechaIni, FechaFin }],
         ReturnSet: [],
       };
 
-      console.log("[NO_MANTTO][REPROGRAMAR] url:", `${api.defaults.baseURL}${RESCHEDULE_PATH}`);
       console.log("[NO_MANTTO][REPROGRAMAR] payload RESCHEDULE:", JSON.stringify(payloadReschedule, null, 2));
-
       const respReschedule = await api.post(RESCHEDULE_PATH, payloadReschedule);
 
-      // Validación simple de retorno
       {
         const sapData = respReschedule?.data?.d || respReschedule?.data;
-        const returns =
-          sapData?.ReturnSet?.results || sapData?.Return?.results || sapData?.ReturnSet || sapData?.Return || [];
-        const hasError =
-          Array.isArray(returns) &&
-          returns.some((r) => String(r?.Type || r?.type || "").toUpperCase() === "E");
-        if (hasError) {
-          console.log("[NO_MANTTO][REPROGRAMAR] RESCHEDULE returns:", JSON.stringify(returns, null, 2));
-          throw new Error("SAP regresó error al reprogramar (RESCHEDULE).");
+        const returns = pickSapReturns(sapData);
+
+        console.log("[NO_MANTTO][REPROGRAMAR] RESCHEDULE returns:", JSON.stringify(returns, null, 2));
+
+        if (isFatalSapReturn(returns)) {
+          throw new Error(formatSapMessages(returns) || "SAP regresó error al reprogramar (RESCHEDULE).");
         }
       }
 
-      // 2) CHANGE WORKORDER (códigos)
+      // 2) CHANGE WORKORDER
       const payloadChange = {
         OrderId: String(id),
-        WorkOrderHeader: {
-          Orderid: String(id),
-        },
+        WorkOrderHeader: { Orderid: String(id) },
         WorkOrderUserStatusSet: [
-          {
-            UserStText: "0012", // ✅ clave reprogramación
-            Langu: "ES",
-            Inactive: "",
-          },
-          {
-            UserStText: "0011", // ✅ quitar código original de no mantenimiento
-            Langu: "ES",
-            Inactive: "X",
-          },
+          { UserStText: "0012", Langu: "ES", Inactive: "" },
+          { UserStText: "0011", Langu: "ES", Inactive: "X" },
         ],
         Return: [],
       };
 
-      console.log("[NO_MANTTO][REPROGRAMAR] url CHANGE:", `${api.defaults.baseURL}${CHANGE_STATUS_PATH}`);
       console.log("[NO_MANTTO][REPROGRAMAR] payload CHANGE:", JSON.stringify(payloadChange, null, 2));
-
       const respChange = await api.post(CHANGE_STATUS_PATH, payloadChange);
 
-      // Validación simple de retorno
       {
         const sapData = respChange?.data?.d || respChange?.data;
-        const returns =
-          sapData?.ReturnSet?.results || sapData?.Return?.results || sapData?.ReturnSet || sapData?.Return || [];
-        const hasError =
-          Array.isArray(returns) &&
-          returns.some((r) => String(r?.Type || r?.type || "").toUpperCase() === "E");
-        if (hasError) {
-          console.log("[NO_MANTTO][REPROGRAMAR] CHANGE returns:", JSON.stringify(returns, null, 2));
-          throw new Error("SAP regresó error al actualizar códigos (CHANGE_WORKORDER).");
+        const returns = pickSapReturns(sapData);
+
+        console.log("[NO_MANTTO][REPROGRAMAR] CHANGE returns:", JSON.stringify(returns, null, 2));
+
+        if (isFatalSapReturn(returns)) {
+          throw new Error(formatSapMessages(returns) || "SAP regresó error al actualizar códigos (CHANGE_WORKORDER).");
         }
       }
 
       Alert.alert("Listo", "Reprogramación enviada (fechas + código 0012 y baja de 0011).");
-
-      router.replace({
-        pathname: "/supervisor/no_mantenimiento",
-        params: { refresh: String(Date.now()), correo },
-      });
+      router.replace({ pathname: "/supervisor/no_mantenimiento", params: { refresh: String(Date.now()) } });
     } catch (e) {
       console.error("[NO_MANTTO][REPROGRAMAR] ERROR:", e?.response?.data || e?.message);
-      Alert.alert(
-        "Error",
-        e?.response?.data?.error || e?.message || "No se pudo guardar la reprogramación."
-      );
+      const serverMsg = e?.response?.data?.error?.message?.value || e?.response?.data?.error || "";
+      Alert.alert("Error", serverMsg || e?.message || "No se pudo guardar la reprogramación.");
     } finally {
       setSavingReprog(false);
     }
@@ -379,22 +549,27 @@ export default function DetallesNoMantenimiento() {
 
         <View style={styles.card}>
           <Text style={styles.h}>Datos</Text>
+
           <Text style={styles.line}>
             <Text style={styles.b}>OrderId: </Text>
-            {id}
+            {id || "—"}
           </Text>
+
           <Text style={styles.line}>
             <Text style={styles.b}>Equipo: </Text>
             {wo?.Equipment || "—"}
           </Text>
+
           <Text style={styles.line}>
             <Text style={styles.b}>Texto: </Text>
             {wo?.ShortText || "—"}
           </Text>
+
           <Text style={styles.line}>
             <Text style={styles.b}>Userstatus: </Text>
             {wo?.Userstatus || "—"}
           </Text>
+
           <Text style={[styles.line, { fontSize: 12, marginTop: 8 }]}>
             <Text style={styles.b}>StartDate: </Text>
             {startDate ? startDate.toLocaleString() : "—"}
@@ -402,21 +577,23 @@ export default function DetallesNoMantenimiento() {
             <Text style={styles.b}>FinishDate: </Text>
             {finishDate ? finishDate.toLocaleString() : "—"}
           </Text>
+
+          <Text style={[styles.line, { fontSize: 12, marginTop: 8 }]}>
+            <Text style={styles.b}>Usuario loggeado: </Text>
+            {correo || "—"}
+          </Text>
         </View>
 
-        {/* ===== SELECCIÓN STATUS (0001..0011) ===== */}
+        {/* ===== SELECCIÓN STATUS ===== */}
         <View style={styles.card}>
           <Text style={styles.h}>Motivo No mantenimiento (0001–0011)</Text>
           <Text style={[styles.line, { marginTop: 8 }]}>
-            Selecciona un motivo del catálogo (ZSD_CATALOGOS_SRV) y guárdalo.
+            Selecciona un motivo y guárdalo. Luego firma y genera el PDF para adjuntar a SAP.
           </Text>
 
           <Pressable
             onPress={openModal}
-            style={({ pressed }) => [
-              styles.btn,
-              pressed && { transform: [{ scale: 0.99 }], opacity: 0.95 },
-            ]}
+            style={({ pressed }) => [styles.btn, pressed && { transform: [{ scale: 0.99 }], opacity: 0.95 }]}
           >
             <Ionicons name="list-outline" size={18} color="#FFF" />
             <Text style={styles.btnText}>Elegir motivo</Text>
@@ -426,17 +603,13 @@ export default function DetallesNoMantenimiento() {
             <Text style={styles.b}>Seleccionado: </Text>
             {statusEnviado
               ? `${selectedStatus?.code || "—"} · ${selectedStatus?.text || ""}`
-              : "— (aún no guardado)"}
+              : selectedStatus
+              ? `${selectedStatus.code} · ${selectedStatus.text}`
+              : "—"}
           </Text>
-
-          {!statusEnviado && (
-            <Text style={[styles.line, { marginTop: 6, fontSize: 12, color: COLORS.text }]}>
-              *La reprogramación estará deshabilitada hasta guardar un status 0001–0011.
-            </Text>
-          )}
         </View>
 
-        {/* ===== REPROGRAMACIÓN (DESHABILITADA HASTA statusEnviado) ===== */}
+        {/* ===== REPROGRAMACIÓN ===== */}
         <View style={[styles.card, !statusEnviado && styles.cardDisabled]}>
           <Text style={styles.h}>Reprogramación</Text>
 
@@ -451,14 +624,8 @@ export default function DetallesNoMantenimiento() {
               style={[styles.btnOutline, { flex: 1 }, !statusEnviado && styles.btnOutlineDisabled]}
               disabled={!statusEnviado || savingReprog}
             >
-              <Ionicons
-                name="calendar-outline"
-                size={18}
-                color={!statusEnviado ? COLORS.disabled : COLORS.accent}
-              />
-              <Text style={[styles.btnOutlineText, !statusEnviado && { color: COLORS.disabled }]}>
-                Fecha
-              </Text>
+              <Ionicons name="calendar-outline" size={18} color={!statusEnviado ? COLORS.disabled : COLORS.accent} />
+              <Text style={[styles.btnOutlineText, !statusEnviado && { color: COLORS.disabled }]}>Fecha</Text>
             </Pressable>
 
             <Pressable
@@ -466,14 +633,8 @@ export default function DetallesNoMantenimiento() {
               style={[styles.btnOutline, { flex: 1 }, !statusEnviado && styles.btnOutlineDisabled]}
               disabled={!statusEnviado || savingReprog}
             >
-              <Ionicons
-                name="time-outline"
-                size={18}
-                color={!statusEnviado ? COLORS.disabled : COLORS.accent}
-              />
-              <Text style={[styles.btnOutlineText, !statusEnviado && { color: COLORS.disabled }]}>
-                Hora
-              </Text>
+              <Ionicons name="time-outline" size={18} color={!statusEnviado ? COLORS.disabled : COLORS.accent} />
+              <Text style={[styles.btnOutlineText, !statusEnviado && { color: COLORS.disabled }]}>Hora</Text>
             </Pressable>
           </View>
 
@@ -483,7 +644,7 @@ export default function DetallesNoMantenimiento() {
               mode="date"
               display={Platform.OS === "ios" ? "inline" : "default"}
               onChange={(event, selectedDate) => {
-                setShowDatePicker(Platform.OS === "ios");
+                if (Platform.OS !== "ios") setShowDatePicker(false);
                 if (selectedDate) setFecha(selectedDate);
               }}
             />
@@ -496,13 +657,12 @@ export default function DetallesNoMantenimiento() {
               is24Hour
               display={Platform.OS === "ios" ? "spinner" : "default"}
               onChange={(event, selectedTime) => {
-                setShowTimePicker(Platform.OS === "ios");
+                if (Platform.OS !== "ios") setShowTimePicker(false);
                 if (selectedTime) setHora(selectedTime);
               }}
             />
           )}
 
-          {/* UI de motivo se queda, pero NO se valida ni se manda */}
           <Text style={[styles.line, { marginTop: 10 }]}>
             <Text style={styles.b}>Motivo:</Text>
           </Text>
@@ -511,7 +671,7 @@ export default function DetallesNoMantenimiento() {
             onChangeText={setMotivoReprog}
             placeholder="(Opcional)"
             placeholderTextColor="#8A96A3"
-            style={[styles.textArea, !statusEnviado && { opacity: 0.75 }]}
+            style={[styles.textArea, { marginTop: 8, minHeight: 90 }, !statusEnviado && { opacity: 0.75 }]}
             editable={statusEnviado && !savingReprog}
             multiline
           />
@@ -537,7 +697,7 @@ export default function DetallesNoMantenimiento() {
         </View>
       </ScrollView>
 
-      {/* ===== MODAL STATUS OPTIONS ===== */}
+      {/* ===== MODAL STATUS ===== */}
       <Modal visible={modal} transparent animationType="fade" onRequestClose={() => setModal(false)}>
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
@@ -572,10 +732,7 @@ export default function DetallesNoMantenimiento() {
                 renderItem={({ item }) => {
                   const active = String(selectedStatus?.code) === String(item.code);
                   return (
-                    <Pressable
-                      onPress={() => setSelectedStatus(item)}
-                      style={[styles.option, active && styles.optionActive]}
-                    >
+                    <Pressable onPress={() => setSelectedStatus(item)} style={[styles.option, active && styles.optionActive]}>
                       <View style={{ flex: 1 }}>
                         <Text style={{ fontWeight: "900", color: COLORS.title }}>
                           {item.code} · {item.text}
@@ -592,11 +749,6 @@ export default function DetallesNoMantenimiento() {
                     </Pressable>
                   );
                 }}
-                ListEmptyComponent={
-                  <Text style={{ color: COLORS.text, textAlign: "center", marginTop: 10 }}>
-                    No hay resultados (0001–0011).
-                  </Text>
-                }
               />
             )}
 
@@ -618,9 +770,183 @@ export default function DetallesNoMantenimiento() {
               </Pressable>
             </View>
 
-            <Text style={{ marginTop: 10, color: COLORS.text, fontSize: 11.5 }}>
-              *Se listan únicamente códigos 0001–0011 desde StatusWorkOrderSet (Stsma='CS000001').
-            </Text>
+            <Text style={{ marginTop: 10, color: COLORS.text, fontSize: 11.5 }}>*Solo códigos 0001–0011.</Text>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ===== MODAL FIRMA ===== */}
+      <Modal
+        visible={firmaModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => (sendingPdf ? null : setFirmaModal(false))}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalCard, { maxHeight: "90%" }]}>
+            <ScrollView
+              scrollEnabled={!isSigning}
+              showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+              contentContainerStyle={{ paddingBottom: 10 }}
+            >
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>Firma supervisor + descripción</Text>
+                <Pressable onPress={() => (sendingPdf ? null : setFirmaModal(false))} hitSlop={10}>
+                  <Ionicons name="close" size={22} color={sendingPdf ? "#AAA" : COLORS.title} />
+                </Pressable>
+              </View>
+
+              <Text style={{ color: COLORS.text, fontSize: 12 }}>
+                1) Firma dentro del recuadro{"\n"}
+                2) Presiona <Text style={{ fontWeight: "900" }}>Guardar firma</Text>{"\n"}
+                3) Luego “Generar PDF y enviar”.
+              </Text>
+
+              <Text style={[styles.line, { marginTop: 10 }]}>
+                <Text style={styles.b}>Causa seleccionada:</Text>{" "}
+                {selectedStatus?.code || "—"} · {selectedStatus?.text || ""}
+              </Text>
+
+              <Text style={[styles.line, { marginTop: 10 }]}>
+                <Text style={styles.b}>Mes afecto:</Text>
+              </Text>
+              <TextInput
+                value={mesAfecto}
+                onChangeText={setMesAfecto}
+                placeholder="Ej: Marzo"
+                placeholderTextColor="#8A96A3"
+                style={[styles.input, { marginTop: 6 }]}
+                editable={!sendingPdf}
+              />
+
+              <Text style={[styles.line, { marginTop: 10 }]}>
+                <Text style={styles.b}>Descripción concreta (obligatoria):</Text>
+              </Text>
+              <TextInput
+                value={descripcionConcreta}
+                onChangeText={setDescripcionConcreta}
+                placeholder="Describe la causa…"
+                placeholderTextColor="#8A96A3"
+                style={[styles.textArea, { marginTop: 6, minHeight: 90 }]}
+                editable={!sendingPdf}
+                multiline
+              />
+
+              <Text style={[styles.line, { marginTop: 10 }]}>
+                <Text style={styles.b}>Firma (supervisor):</Text>
+              </Text>
+
+              <View
+                style={{
+                  height: 220,
+                  borderWidth: 1,
+                  borderColor: COLORS.border,
+                  borderRadius: 14,
+                  overflow: "hidden",
+                  marginTop: 8,
+                  backgroundColor: "#FFF",
+                }}
+              >
+                <Signature
+                  ref={signatureRef}
+                  onBegin={() => {
+                    setIsSigning(true);
+                    setFirmaDibujada(true);
+                  }}
+                  onEnd={() => {
+                    setIsSigning(false);
+                    setFirmaDibujada(true);
+                  }}
+                  onOK={(sig) => {
+                    const s = String(sig || "");
+                    const pure = s.includes("base64,") ? s.split("base64,")[1] : s;
+                    const clean = String(pure || "");
+                    setFirmaBase64Png(clean);
+                    setFirmaDibujada(!!(clean && clean.length > 50));
+                    Alert.alert("Listo", "Firma guardada ✅");
+                  }}
+                  onEmpty={() => {
+                    setFirmaBase64Png("");
+                    setFirmaDibujada(false);
+                  }}
+                  descriptionText=""
+                  clearText="Limpiar"
+                  confirmText="Guardar"
+                  webStyle={`
+                    * { -webkit-user-select:none; -webkit-touch-callout:none; }
+                    html, body { height:100%; width:100%; margin:0; padding:0; background:#fff; overflow:hidden; }
+                    .m-signature-pad { box-shadow:none; border:none; height:100%; width:100%; }
+                    .m-signature-pad--body { border:none; height:100%; }
+                    canvas { width:100% !important; height:100% !important; touch-action:none; }
+                    .m-signature-pad--footer { display:none !important; }
+                  `}
+                />
+              </View>
+
+              <View style={{ flexDirection: "row", gap: 10, marginTop: 10 }}>
+                <Pressable
+                  style={[styles.btnGhost, { flex: 1 }]}
+                  disabled={sendingPdf}
+                  onPress={() => {
+                    try {
+                      signatureRef.current?.clearSignature?.();
+                    } catch {}
+                    setFirmaBase64Png("");
+                    setFirmaDibujada(false);
+                  }}
+                >
+                  <Text style={styles.btnGhostText}>Limpiar</Text>
+                </Pressable>
+
+                <Pressable
+                  style={[
+                    styles.btnSave,
+                    { flex: 1, minWidth: 0 },
+                    (!firmaDibujada || sendingPdf) && { opacity: 0.6 },
+                  ]}
+                  disabled={!firmaDibujada || sendingPdf}
+                  onPress={() => {
+                    try {
+                      signatureRef.current?.readSignature?.();
+                    } catch {
+                      Alert.alert("No disponible", "Tu firma no soporta readSignature().");
+                    }
+                  }}
+                >
+                  <Text style={styles.btnSaveText}>Guardar firma</Text>
+                </Pressable>
+              </View>
+
+              <View style={styles.modalFooter}>
+                <Pressable
+                  style={[styles.btnGhost, sendingPdf && { opacity: 0.6 }]}
+                  onPress={() => setFirmaModal(false)}
+                  disabled={sendingPdf}
+                >
+                  <Text style={styles.btnGhostText}>Cancelar</Text>
+                </Pressable>
+
+                <Pressable
+                  style={[
+                    styles.btnSave,
+                    (sendingPdf || !String(descripcionConcreta || "").trim() || !firmaBase64Png) && { opacity: 0.6 },
+                  ]}
+                  disabled={sendingPdf || !String(descripcionConcreta || "").trim() || !firmaBase64Png}
+                  onPress={generarYEnviarPdf}
+                >
+                  {sendingPdf ? (
+                    <ActivityIndicator size="small" color="#FFF" />
+                  ) : (
+                    <Text style={styles.btnSaveText}>Generar PDF y enviar</Text>
+                  )}
+                </Pressable>
+              </View>
+
+              <Text style={{ marginTop: 8, color: COLORS.text, fontSize: 11.5 }}>
+                *La firma se guarda con el botón “Guardar firma” (nativo).
+              </Text>
+            </ScrollView>
           </View>
         </View>
       </Modal>
@@ -643,9 +969,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.border,
   },
-  cardDisabled: {
-    opacity: 0.88,
-  },
+  cardDisabled: { opacity: 0.88 },
 
   h: { fontSize: 15, fontWeight: "900", color: COLORS.title },
   line: { color: COLORS.text, marginTop: 6, fontSize: 13 },
@@ -674,23 +998,27 @@ const styles = StyleSheet.create({
     gap: 8,
     backgroundColor: "#F2F8FF",
   },
-  btnOutlineDisabled: {
-    borderColor: COLORS.border,
-    backgroundColor: "#F6F7F9",
-  },
+  btnOutlineDisabled: { borderColor: COLORS.border, backgroundColor: "#F6F7F9" },
   btnOutlineText: { color: COLORS.accent, fontWeight: "900" },
 
   textArea: {
-    marginTop: 8,
     borderWidth: 1,
     borderColor: COLORS.border,
     borderRadius: 14,
     paddingHorizontal: 12,
     paddingVertical: 10,
-    minHeight: 90,
     color: COLORS.title,
     backgroundColor: "#FFF",
     textAlignVertical: "top",
+  },
+  input: {
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    color: COLORS.title,
+    backgroundColor: "#FFF",
   },
 
   modalOverlay: {
@@ -748,6 +1076,8 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     borderWidth: 1,
     borderColor: COLORS.border,
+    alignItems: "center",
+    justifyContent: "center",
   },
   btnGhostText: { color: COLORS.title, fontWeight: "900" },
   btnSave: {
@@ -755,8 +1085,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     borderRadius: 14,
     backgroundColor: COLORS.accent,
-    minWidth: 110,
+    minWidth: 160,
     alignItems: "center",
+    justifyContent: "center",
   },
   btnSaveText: { color: "#FFF", fontWeight: "900" },
 });

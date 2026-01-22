@@ -1,5 +1,5 @@
 // app/ordenes/[id]/index.js
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -8,22 +8,25 @@ import {
   TouchableOpacity,
   Alert,
   Platform,
-  Modal,
   FlatList,
-  ScrollView,
-  TextInput,
 } from 'react-native';
+
 import Header from '../../../../src/components/Header';
 import api from '../../../../src/services/api';
 import { useAuth } from '../../../../src/context/AuthContext';
 import { useLocalSearchParams, router } from 'expo-router';
+
 import { Audio } from 'expo-av';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { WebView } from 'react-native-webview';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
-import Signature from 'react-native-signature-canvas';
+
+// ✅ Secciones (segmentación)
+import EncabezadoDetalleOrden from './secciones/EncabezadoDetalleOrden';
+import ModalesDetalleOrden from './secciones/ModalesDetalleOrden';
+import { ListaOperacionesAgrupadas } from './secciones/ListaOperacionesDetalle';
+import PieDetalleOrden from './secciones/PieDetalleOrden';
 
 /* ====================== Paleta SAP Fiori (Horizon) ====================== */
 const FIORI = {
@@ -65,16 +68,6 @@ function fmtDMY(val) {
 // (lo sigues usando para timers y marcas de tiempo)
 function toMs(val) {
   return parseSapDateToMs(val);
-}
-
-function fmtHMS(ms) {
-  if (!Number.isFinite(ms)) return '00:00:00';
-  if (ms < 0) ms = 0;
-  const total = Math.floor(ms / 1000);
-  const hh = String(Math.floor(total / 3600)).padStart(2, '0');
-  const mm = String(Math.floor((total % 3600) / 60)).padStart(2, '0');
-  const ss = String(total % 60).padStart(2, '0');
-  return `${hh}:${mm}:${ss}`;
 }
 
 function durationToMinutes(normal, unit) {
@@ -278,6 +271,28 @@ function normalizeOpsFromBackend(ops = []) {
   });
 }
 
+/* ====================== Helpers batch ====================== */
+const padOp4 = (v) => String(v || '').trim().padStart(4, '0');
+
+function pickEarliestResumeMsForGroup(orderId, opsDelGrupo, state) {
+  const now = Date.now();
+  let earliest = null;
+
+  for (const op of opsDelGrupo || []) {
+    const opId = op.id || opKey(orderId, op);
+    const cur = state?.[opId] || {};
+    const resumeISO = cur.last_resume_at || cur.started_at || null;
+    const resumeMs = resumeISO ? new Date(resumeISO).getTime() : null;
+
+    if (Number.isFinite(resumeMs)) {
+      earliest = earliest == null ? resumeMs : Math.min(earliest, resumeMs);
+    }
+  }
+
+  // fallback: no hay starts
+  return earliest == null ? now - 1000 : earliest;
+}
+
 /* ====================== Componente ====================== */
 export default function DetalleOrden() {
   const { id } = useLocalSearchParams();
@@ -303,6 +318,10 @@ export default function DetalleOrden() {
   const [cantidadesConsumidas, setCantidadesConsumidas] = useState({});
   const [finalizandoOp, setFinalizandoOp] = useState(false);
 
+  // ✅ selección de grupo (ITEM) para batch
+  const [selectedGroup, setSelectedGroup] = useState(null);
+  // { categoria, item, opsDelGrupo }
+
   // modal materiales orden
   const [showAllMaterialsModal, setShowAllMaterialsModal] = useState(false);
 
@@ -322,11 +341,10 @@ export default function DetalleOrden() {
   const [signatureData, setSignatureData] = useState(null);
   const [savingSignature, setSavingSignature] = useState(false);
 
-  // ✅ NUEVO: modal motivo pausa
+  // modal motivo pausa
   const [showPauseModal, setShowPauseModal] = useState(false);
   const [pauseMotivo, setPauseMotivo] = useState('');
   const [sendingPause, setSendingPause] = useState(false);
-
 
   // ===== estatus orden / bloqueo (incluye checkin) =====
   const statusCode = String(orden?.estatus_code || orden?.userstatus || '').trim(); // "0100", "0200", etc.
@@ -492,6 +510,7 @@ export default function DetalleOrden() {
   // Abrir modal de componentes
   const openComponentsModal = async (op, mode = 'view') => {
     try {
+      setSelectedGroup(null);
       setSelectedOp(op);
       setModalMode(mode);
       setConsumioMaterial(false);
@@ -535,18 +554,29 @@ export default function DetalleOrden() {
     } catch {}
   };
 
-  // ✅ NUEVO: abrir/cerrar modal motivo pausa
+  // ✅ abrir/cerrar modal motivo pausa (individual)
   const openPauseModal = (op) => {
+    setSelectedGroup(null);
     setSelectedOp(op);
     setPauseMotivo('');
     setShowPauseModal(true);
   };
-  const closePauseModal = () => {
-    if (sendingPause) return; // ✅ no cerrar mientras envía
-    setShowPauseModal(false);
+
+  // ✅ abrir modal motivo pausa (ITEM/grupo)
+  const pausarItem = ({ categoria, item, opsDelGrupo }) => {
+    setSelectedOp(null);
+    setSelectedGroup({ categoria, item, opsDelGrupo: opsDelGrupo || [] });
     setPauseMotivo('');
+    setShowPauseModal(true);
   };
 
+  const closePauseModal = () => {
+    if (sendingPause) return;
+    setShowPauseModal(false);
+    setPauseMotivo('');
+    setSelectedOp(null);
+    setSelectedGroup(null);
+  };
 
   // ======= Iniciar / Reanudar (SIN BD) =======
   const iniciarOperacion = (op) => {
@@ -629,10 +659,215 @@ export default function DetalleOrden() {
     ]);
   };
 
-  // ✅ NUEVO: confirmar pausa con motivo (manda ConfText)
+
+  // ✅ INICIAR / REANUDAR ITEM (GRUPO)
+// Backend no tiene /grupo/iniciar, así que hacemos iniciar por cada op (ping)
+// y actualizamos localState para todas.
+const iniciarItem = ({ categoria, item, opsDelGrupo }) => {
+  const orderId = String(orden?.Orderid || id);
+  const opsArr = Array.isArray(opsDelGrupo) ? opsDelGrupo : [];
+  if (!opsArr.length) return;
+
+  if (isOpsLocked) {
+    Alert.alert('No permitido', 'La orden está bloqueada por estatus / check-in.');
+    return;
+  }
+
+  const hayPausadas = opsArr.some((o) => String(o.estatus || '').toLowerCase() === 'pausada');
+  const titulo = hayPausadas ? 'Reanudar ITEM' : 'Iniciar ITEM';
+  const n = opsArr.length;
+
+  Alert.alert(
+    titulo,
+    `¿Deseas ${hayPausadas ? 'reanudar' : 'iniciar'} TODAS las operaciones del ITEM ${item}? (${n} actividad(es))`,
+    [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: hayPausadas ? 'Reanudar' : 'Iniciar',
+        onPress: async () => {
+          try {
+            const st = await loadOpState(orderId);
+            const nowMs = Date.now();
+            const nowISO = new Date(nowMs).toISOString();
+
+            // 1) Ping iniciar por cada operación (sin SAP, solo OK)
+            // (Si alguna falla, igual seguimos con las demás)
+            await Promise.allSettled(
+              opsArr.map((op) => {
+                const opId = op.id || opKey(orderId, op);
+                return api.put(
+                  `/api/operaciones/${opId}/iniciar`,
+                  {},
+                  { headers: { Authorization: `Bearer ${token}` } }
+                );
+              })
+            );
+
+            // 2) Local state: marcar TODAS en proceso
+            for (const op of opsArr) {
+              const opId = op.id || opKey(orderId, op);
+              const prev = st[opId] || {};
+
+              st[opId] = {
+                ...prev,
+                estatus: 'en_proceso',
+                started_at: prev.started_at || nowISO,
+                last_resume_at: nowISO,
+                worked_ms: Number(prev.worked_ms || 0),
+                finished_at: null,
+                paused_at: null,
+                pause_motivo: null,
+              };
+
+              // fallback local start
+              clientStartsRef.current[opId] = nowMs;
+              await saveStartMs(opId, nowMs);
+            }
+
+            await saveOpState(orderId, st);
+
+            // 3) Refrescar UI sin recargar SAP
+            setOrden((prevOrden) => ({
+              ...prevOrden,
+              operaciones: (prevOrden.operaciones || []).map((x) => {
+                const xid = x.id || opKey(orderId, x);
+                return st[xid] ? { ...x, ...st[xid] } : x;
+              }),
+            }));
+
+            Alert.alert(
+              hayPausadas ? 'ITEM reanudado' : 'ITEM iniciado',
+              'Se registró el inicio en el dispositivo para todas las actividades del ITEM.'
+            );
+          } catch (e) {
+            console.error('Error iniciar ITEM:', e?.response?.data || e);
+            Alert.alert('Error', 'No se pudo iniciar/reanudar el ITEM.');
+          }
+        },
+      },
+    ]
+  );
+};
+
+  // ✅ FINALIZAR ITEM (GRUPO) -> /api/operaciones/grupo/finalizar
+  const finalizarGrupoAhora = async ({ categoria, item, opsDelGrupo }) => {
+    const orderId = String(orden?.Orderid || id);
+    const opsArr = Array.isArray(opsDelGrupo) ? opsDelGrupo : [];
+    if (!opsArr.length) return;
+
+    if (isOpsLocked) {
+      Alert.alert('No permitido', 'La orden está bloqueada por estatus / check-in.');
+      return;
+    }
+
+    try {
+      setFinalizandoOp(true);
+
+      const st = await loadOpState(orderId);
+
+      const tzOffsetMin = new Date().getTimezoneOffset();
+      const finishedMs = Date.now();
+      const finishedISO = new Date(finishedMs).toISOString();
+
+      // operations[]: puedes mandar compuestas; backend normaliza Activity
+      const operations = opsArr.map((o) => o.id || opKey(orderId, o));
+
+      // workedMsTotalByOp: { "0010": ms, ... }
+      const workedMsTotalByOp = {};
+      for (const op of opsArr) {
+        const opId = op.id || opKey(orderId, op);
+        const cur = st[opId] || {};
+
+        const lastResumeISO = cur.last_resume_at;
+        const extraMs = lastResumeISO
+          ? Math.max(0, finishedMs - new Date(lastResumeISO).getTime())
+          : 0;
+
+        const totalMs = Number(cur.worked_ms || 0) + extraMs;
+
+        const opNum = padOp4(op.activity || op.Activity || '');
+        if (opNum) workedMsTotalByOp[opNum] = totalMs;
+      }
+
+      const startedMs = pickEarliestResumeMsForGroup(orderId, opsArr, st); // 👈 igual que pausa
+      const startedISO = new Date(startedMs).toISOString();
+
+      const payload = {
+        orderId,
+        operations,
+        startedMs,
+        finishedMs,
+        startedISO,
+        finishedISO,
+        tzOffsetMin,
+        workedMsTotalByOp,
+        materialConsumptionByOp: {}, // luego lo conectas si quieres
+      };
+
+
+      console.log('[BATCH FINALIZAR ITEM] payload:', payload);
+
+      const res = await api.put(`/api/operaciones/grupo/finalizar`, payload, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      // marcar localmente finalizadas
+      for (const op of opsArr) {
+        const opId = op.id || opKey(orderId, op);
+        const cur = st[opId] || {};
+        st[opId] = {
+          ...cur,
+          estatus: 'finalizada',
+          last_resume_at: null,
+          finished_at: finishedISO,
+          paused_at: null,
+        };
+
+        delete clientStartsRef.current[opId];
+        await removeStartMs(opId);
+      }
+
+      await saveOpState(orderId, st);
+
+      setOrden((prevOrden) => ({
+        ...prevOrden,
+        operaciones: (prevOrden.operaciones || []).map((x) => {
+          const xid = x.id || opKey(orderId, x);
+          return st[xid] ? { ...x, ...st[xid] } : x;
+        }),
+      }));
+
+      const conf = res?.data?.confirmacion;
+      Alert.alert(
+        'ITEM finalizado',
+        conf?.ok ? 'Se confirmó en SAP.' : 'Se finalizó, pero SAP no confirmó (revisar conexión).'
+      );
+    } catch (e) {
+      console.error('Error finalizar ITEM:', e?.response?.data || e);
+      Alert.alert('Error', 'No se pudo finalizar el ITEM.');
+    } finally {
+      setFinalizandoOp(false);
+    }
+  };
+
+  const finalizarItem = ({ categoria, item, opsDelGrupo }) => {
+    const n = Array.isArray(opsDelGrupo) ? opsDelGrupo.length : 0;
+    Alert.alert(
+      'Finalizar ITEM',
+      `¿Deseas finalizar TODAS las operaciones del ITEM ${item}? (${n} actividad(es))`,
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Finalizar',
+          onPress: async () => finalizarGrupoAhora({ categoria, item, opsDelGrupo }),
+        },
+      ]
+    );
+  };
+
+  // ✅ confirmar pausa con motivo (individual o ITEM batch)
   const confirmarPausaConMotivo = async () => {
     if (!orden?.Orderid) return;
-    if (!selectedOp) return;
 
     const motivo = String(pauseMotivo || '').trim();
     if (!motivo) {
@@ -641,22 +876,124 @@ export default function DetalleOrden() {
     }
 
     const orderId = String(orden?.Orderid || id);
+    const tzOffsetMin = new Date().getTimezoneOffset();
+    const nowMs = Date.now();
+    const nowISO = new Date(nowMs).toISOString();
+
+    // ======================
+    // A) PAUSA ITEM (BATCH)
+    // ======================
+    if (selectedGroup?.opsDelGrupo?.length) {
+      if (isOpsLocked) {
+        Alert.alert('No permitido', 'La orden está bloqueada por estatus / check-in.');
+        return;
+      }
+
+      const opsArr = selectedGroup.opsDelGrupo;
+
+      Alert.alert('Pausar ITEM', '¿Confirmas pausar todas las actividades del ITEM con el motivo?', [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Pausar',
+          onPress: async () => {
+            setSendingPause(true);
+            try {
+              const st = await loadOpState(orderId);
+
+              // payload segment: usa el earliest last_resume_at del grupo (para SAP)
+              const segStartMs = pickEarliestResumeMsForGroup(orderId, opsArr, st);
+              const segEndMs = nowMs;
+
+              const payload = {
+                orderId,
+                operations: opsArr.map((o) => o.id || opKey(orderId, o)),
+                segStartMs,
+                segEndMs,
+                tzOffsetMin,
+                ConfText: motivo,
+              };
+
+              console.log('[BATCH PAUSAR ITEM] payload:', payload);
+
+              const resp = await api.put(`/api/operaciones/grupo/pausar`, payload, {
+                headers: { Authorization: `Bearer ${token}` },
+              });
+
+              // ✅ local state por operación (cada una suma su tramo real)
+              for (const op of opsArr) {
+                const opId = op.id || opKey(orderId, op);
+                const cur = st[opId] || {};
+
+                const resumeISO = cur.last_resume_at || cur.started_at || nowISO;
+                const resumeMs = new Date(resumeISO).getTime();
+                const segWorkedMs = Number.isFinite(resumeMs) ? Math.max(0, nowMs - resumeMs) : 0;
+
+                st[opId] = {
+                  ...cur,
+                  estatus: 'pausada',
+                  worked_ms: Number(cur.worked_ms || 0) + segWorkedMs,
+                  last_resume_at: null,
+                  paused_at: nowISO,
+                  pause_motivo: motivo,
+                };
+
+                delete clientStartsRef.current[opId];
+                await removeStartMs(opId);
+              }
+
+              await saveOpState(orderId, st);
+
+              setOrden((prevOrden) => ({
+                ...prevOrden,
+                operaciones: (prevOrden.operaciones || []).map((x) => {
+                  const xid = x.id || opKey(orderId, x);
+                  return st[xid] ? { ...x, ...st[xid] } : x;
+                }),
+              }));
+
+              closePauseModal();
+
+              Alert.alert(
+                'ITEM pausado',
+                resp?.data?.confirmacion?.ok
+                  ? 'Se pausó y se confirmó en SAP.'
+                  : 'Se pausó, pero SAP no confirmó (revisar conexión).'
+              );
+            } catch (error) {
+              console.error('Error al pausar ITEM:', error?.response?.data || error);
+              Alert.alert('Error', 'No se pudo pausar el ITEM');
+            } finally {
+              setSendingPause(false);
+            }
+          },
+        },
+      ]);
+
+      return;
+    }
+
+    // ======================
+    // B) PAUSA INDIVIDUAL
+    // ======================
+    if (!selectedOp) return;
+
     const op = selectedOp;
     const opId = op.id || opKey(orderId, op);
+
+    if (isOpsLocked) {
+      Alert.alert('No permitido', 'La orden está bloqueada por estatus / check-in.');
+      return;
+    }
 
     Alert.alert('Pausar operación', '¿Confirmas pausar esta actividad con el motivo capturado?', [
       { text: 'Cancelar', style: 'cancel' },
       {
         text: 'Pausar',
         onPress: async () => {
-          setSendingPause(true);                 // ✅ AQUI (antes del try)
+          setSendingPause(true);
           try {
             const st = await loadOpState(orderId);
             const cur = st[opId] || {};
-
-            const tzOffsetMin = new Date().getTimezoneOffset();
-            const nowMs = Date.now();
-            const nowISO = new Date(nowMs).toISOString();
 
             const segStartISO = cur.last_resume_at || cur.started_at || nowISO;
             const segStartMs = new Date(segStartISO).getTime();
@@ -709,126 +1046,119 @@ export default function DetalleOrden() {
             console.error('Error al pausar operación:', error?.response?.data || error);
             Alert.alert('Error', 'No se pudo pausar la operación');
           } finally {
-            setSendingPause(false);              // ✅ AQUI (siempre se apaga)
+            setSendingPause(false);
           }
         },
-
       },
     ]);
   };
 
   // ======= Finalizar operación (con materiales) =======
-  // ======= Finalizar operación (con materiales) =======
-const finalizarOperacionConMaterial = async () => {
-  if (!selectedOp || !orden?.Orderid) return;
+  const finalizarOperacionConMaterial = async () => {
+    if (!selectedOp || !orden?.Orderid) return;
 
-  const orderId = String(orden.Orderid);
-  const opId = selectedOp.id || opKey(orderId, selectedOp);
+    const orderId = String(orden.Orderid);
+    const opId = selectedOp.id || opKey(orderId, selectedOp);
 
-  const materialConsumption = (compList || []).map((c) => {
-    const qty = consumioMaterial ? Number(cantidadesConsumidas[c.ResItem] || 0) : 0;
-    return {
-      Material: c.Material,
-      Cantidad: String(qty),
-      Unidad: c.RequirementQuantityUnitIso || c.RequirementQuantityUnit || c.Unit || '',
-      Centro: c.Plant,
-      Almacen: c.StgeLoc || '',
-    };
-  });
-
-  try {
-    setFinalizandoOp(true);
-
-    const st = await loadOpState(orderId);
-    const cur = st[opId] || {};
-
-    // ✅ hora del DISPOSITIVO (+ ajuste -5 min)
-    const tzOffsetMin = new Date().getTimezoneOffset();
-    //const finishedMs = Date.now() - 5 * 60 * 1000;
-    //const finishedISO = new Date(finishedMs).toISOString();
-    const finishedMs = Date.now();
-    const finishedISO = new Date(finishedMs).toISOString();
-
-
-    // started: usa lo guardado; si no hay nada, usa finished
-    const startedISO = cur.started_at || cur.last_resume_at || finishedISO;
-    const startedMs = new Date(startedISO).getTime();
-
-    // si estaba en proceso, sumamos tramo actual (usando finishedMs ya ajustado)
-    const lastResumeISO = cur.last_resume_at;
-    const extraMs = lastResumeISO
-      ? Math.max(0, finishedMs - new Date(lastResumeISO).getTime())
-      : 0;
-
-    const workedMsTotal = Number(cur.worked_ms || 0) + extraMs;
-
-    // ✅ LOG correcto (ya no usa nowISO/nowMs)
-    console.log('[TIME DEVICE]', {
-      tzOffsetMin,
-      finishedISO,
-      finishedMs,
-      local: new Date(finishedMs).toString(),
-      startedISO,
-      startedMs,
-      workedMsTotal,
+    const materialConsumption = (compList || []).map((c) => {
+      const qty = consumioMaterial ? Number(cantidadesConsumidas[c.ResItem] || 0) : 0;
+      return {
+        Material: c.Material,
+        Cantidad: String(qty),
+        Unidad: c.RequirementQuantityUnitIso || c.RequirementQuantityUnit || c.Unit || '',
+        Centro: c.Plant,
+        Almacen: c.StgeLoc || '',
+      };
     });
 
-    const res = await api.put(
-      `/api/operaciones/${opId}/finalizar`,
-      {
-        startedISO,
+    try {
+      setFinalizandoOp(true);
+
+      const st = await loadOpState(orderId);
+      const cur = st[opId] || {};
+
+      // ✅ hora del DISPOSITIVO
+      const tzOffsetMin = new Date().getTimezoneOffset();
+      const finishedMs = Date.now();
+      const finishedISO = new Date(finishedMs).toISOString();
+
+      // started: usa lo guardado; si no hay nada, usa finished
+      const startedISO = cur.started_at || cur.last_resume_at || finishedISO;
+      const startedMs = new Date(startedISO).getTime();
+
+      // si estaba en proceso, sumamos tramo actual
+      const lastResumeISO = cur.last_resume_at;
+      const extraMs = lastResumeISO
+        ? Math.max(0, finishedMs - new Date(lastResumeISO).getTime())
+        : 0;
+
+      const workedMsTotal = Number(cur.worked_ms || 0) + extraMs;
+
+      console.log('[TIME DEVICE]', {
+        tzOffsetMin,
         finishedISO,
-        startedMs,     // ✅ NUEVO
-        finishedMs,    // ✅ NUEVO
-        tzOffsetMin,   // ✅ NUEVO
+        finishedMs,
+        local: new Date(finishedMs).toString(),
+        startedISO,
+        startedMs,
         workedMsTotal,
-        materialConsumption,
-      },
-      { headers: { Authorization: `Bearer ${token}` } }
-    );
+      });
 
-    // guardar estado final
-    st[opId] = {
-      ...cur,
-      estatus: 'finalizada',
-      worked_ms: workedMsTotal,
-      last_resume_at: null,
-      finished_at: finishedISO,
-      paused_at: null,
-    };
-    await saveOpState(orderId, st);
+      const res = await api.put(
+        `/api/operaciones/${opId}/finalizar`,
+        {
+          startedISO,
+          finishedISO,
+          startedMs,
+          finishedMs,
+          tzOffsetMin,
+          workedMsTotal,
+          materialConsumption,
+        },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
 
-    // UI
-    setOrden((prevOrden) => ({
-      ...prevOrden,
-      operaciones: (prevOrden.operaciones || []).map((x) =>
-        x.id === opId ? { ...x, ...st[opId] } : x
-      ),
-    }));
+      // guardar estado final
+      st[opId] = {
+        ...cur,
+        estatus: 'finalizada',
+        worked_ms: workedMsTotal,
+        last_resume_at: null,
+        finished_at: finishedISO,
+        paused_at: null,
+      };
+      await saveOpState(orderId, st);
 
-    // limpiar fallback start
-    delete clientStartsRef.current[opId];
-    await removeStartMs(opId);
+      // UI
+      setOrden((prevOrden) => ({
+        ...prevOrden,
+        operaciones: (prevOrden.operaciones || []).map((x) =>
+          x.id === opId ? { ...x, ...st[opId] } : x
+        ),
+      }));
 
-    const conf = res?.data?.confirmacion;
-    if (conf?.ok) {
-      Alert.alert('Finalizada y confirmada', 'Se creó la confirmación en SAP.');
-    } else if (conf && conf.ok === false) {
-      Alert.alert('Finalizada (con aviso)', 'Se finalizó, pero SAP no confirmó. Reintenta.');
-      console.warn('Confirmación SAP falló:', conf?.error);
-    } else {
-      Alert.alert('Finalizada', 'La operación se marcó como finalizada.');
+      // limpiar fallback start
+      delete clientStartsRef.current[opId];
+      await removeStartMs(opId);
+
+      const conf = res?.data?.confirmacion;
+      if (conf?.ok) {
+        Alert.alert('Finalizada y confirmada', 'Se creó la confirmación en SAP.');
+      } else if (conf && conf.ok === false) {
+        Alert.alert('Finalizada (con aviso)', 'Se finalizó, pero SAP no confirmó. Reintenta.');
+        console.warn('Confirmación SAP falló:', conf?.error);
+      } else {
+        Alert.alert('Finalizada', 'La operación se marcó como finalizada.');
+      }
+
+      closeComponentsModal();
+    } catch (error) {
+      console.error('Error al finalizar operación:', error?.response?.data || error);
+      Alert.alert('Error', 'No se pudo finalizar la operación');
+    } finally {
+      setFinalizandoOp(false);
     }
-
-    closeComponentsModal();
-  } catch (error) {
-    console.error('Error al finalizar operación:', error?.response?.data || error);
-    Alert.alert('Error', 'No se pudo finalizar la operación');
-  } finally {
-    setFinalizandoOp(false);
-  }
-};
-
+  };
 
   // ===== Navegaciones a formularios =====
   const buildPrefillParams = () => {
@@ -1040,10 +1370,12 @@ const finalizarOperacionConMaterial = async () => {
 
   useEffect(() => {
     let mounted = true;
+    let localSound = null;
+
     (async () => {
       try {
-        // ✅ Ajusta ruta de assets (evita warning)
         const { sound } = await Audio.Sound.createAsync(require('../../../../assets/alert.mp3'));
+        localSound = sound;
         if (mounted) setSoundObj(sound);
       } catch (e) {
         console.warn('No se pudo cargar el sonido de alerta:', e);
@@ -1052,16 +1384,11 @@ const finalizarOperacionConMaterial = async () => {
 
     return () => {
       mounted = false;
-      soundObj?.unloadAsync?.();
+      try {
+        localSound?.unloadAsync?.();
+      } catch {}
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  const anyOpInProcess = useMemo(
-    () =>
-      Array.isArray(orden?.operaciones) && orden.operaciones.some((o) => o.estatus === 'en_proceso'),
-    [orden]
-  );
 
   // ================== Render ==================
   if (loading) {
@@ -1077,7 +1404,6 @@ const finalizarOperacionConMaterial = async () => {
       </View>
     );
   }
-
 
   if (!orden) {
     return (
@@ -1110,305 +1436,96 @@ const finalizarOperacionConMaterial = async () => {
 
       <FlatList
         style={{ flex: 1 }}
-        data={orden.operaciones || []}
-        keyExtractor={(op, idx) => String(op.id || opKey(orden.Orderid, op) || idx)}
+        data={[{ _k: 'single' }]} // 👈 un solo item para usar FlatList con header+footer
+        keyExtractor={(x) => x._k}
         contentContainerStyle={[styles.content, { paddingBottom: 140 }]}
         ListHeaderComponent={
-          <>
-            <View style={styles.headerBox}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.titulo}>
-                  #{orden.Orderid} · {orden.order_type}
-                </Text>
-              </View>
-              <View style={[styles.statusBadge, { backgroundColor: estatusColor }]}>
-                <Text style={styles.statusBadgeText}>
-                  {orden?.estatus_label || orden?.estatus_code || '—'}
-                </Text>
-              </View>
-            </View>
-
-            {isNoMant && (
-              <View style={styles.noMantBanner}>
-                <Ionicons
-                  name="document-text-outline"
-                  size={22}
-                  color={FIORI.text}
-                  style={{ marginRight: 10 }}
-                />
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.noMantTitle}>Orden marcada como "No mantenimiento"</Text>
-                  <Text style={styles.noMantText}>
-                    Consulta la carta de no mantenimiento en PDF. Las operaciones se muestran solo para
-                    referencia y no se pueden iniciar.
-                  </Text>
-                </View>
-                <TouchableOpacity style={styles.btnNoMantBanner} onPress={abrirModalNoMantPdf}>
-                  <Text style={styles.btnNoMantBannerText}>Ver PDF</Text>
-                </TouchableOpacity>
-              </View>
-            )}
-
-            {!isNoMant && !checkinDone && !isOrderFinished && (
-              <View style={styles.noMantBanner}>
-                <Ionicons
-                  name="lock-closed-outline"
-                  size={22}
-                  color={FIORI.text}
-                  style={{ marginRight: 10 }}
-                />
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.noMantTitle}>Operaciones bloqueadas</Text>
-                  <Text style={styles.noMantText}>
-                    Primero debes hacer Check-in para habilitar iniciar/pausar/finalizar operaciones.
-                  </Text>
-                </View>
-              </View>
-            )}
-
-            {isOrderFinished && !isNoMant && (
-              <View style={styles.noMantBanner}>
-                <Ionicons
-                  name="checkmark-done-outline"
-                  size={22}
-                  color={FIORI.text}
-                  style={{ marginRight: 10 }}
-                />
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.noMantTitle}>Orden finalizada</Text>
-                  <Text style={styles.noMantText}>
-                    Las operaciones se muestran solo como referencia y ya no se pueden modificar.
-                  </Text>
-                </View>
-              </View>
-            )}
-
-            {orden.partners?.length > 0 && (
-              <View style={styles.panel}>
-                <Text style={styles.panelTitle}>Datos del solicitante</Text>
-                {orden.partners.map((p, idx) => (
-                  <Text key={idx} style={styles.value}>
-                    <Text style={styles.labelInline}>Rol: </Text>
-                    {p.role}{' '}
-                    <Text style={styles.labelInline}>· Partner: </Text>
-                    {p.partner}
-                  </Text>
-                ))}
-              </View>
-            )}
-
-            <View style={styles.panel}>
-              <Text style={styles.panelTitle}>Datos de la orden</Text>
-              <Row label="Equipo" value={orden.equipment} />
-              <Row label="Dirección" value={direccionValor} />
-              <Row label="Inicio" value={fmtDMY(orden.start_date)} />
-              <Row label="Fin" value={fmtDMY(orden.finish_date)} />
-
-              {allMaterials.length > 0 && (
-                <TouchableOpacity
-                  style={styles.btnSeeMaterials}
-                  onPress={() => setShowAllMaterialsModal(true)}
-                  activeOpacity={0.9}
-                >
-                  <Ionicons name="cube-outline" size={16} color="#fff" />
-                  <Text style={styles.btnSeeMaterialsText}>Ver materiales asignados</Text>
-                </TouchableOpacity>
-              )}
-            </View>
-
-            <Text style={styles.sectionKicker}>Operaciones asignadas</Text>
-          </>
+          <EncabezadoDetalleOrden
+            orden={orden}
+            id={id}
+            styles={styles}
+            FIORI={FIORI}
+            estatusColor={estatusColor}
+            isNoMant={isNoMant}
+            checkinDone={checkinDone}
+            isOrderFinished={isOrderFinished}
+            direccionValor={direccionValor}
+            allMaterialsLen={allMaterials.length}
+            fmtDMY={fmtDMY}
+            formatValueForRow={formatValueForRow}
+            onAbrirPdfNoMant={abrirModalNoMantPdf}
+            onVerMaterialesOrden={() => setShowAllMaterialsModal(true)}
+          />
         }
-        renderItem={({ item: op, index }) => {
-          const limitMin =
-            op.duracion_minutos ?? durationToMinutes(op.DurationNormal, op.DurationNormalUnit);
-          const effectiveId = op.id || opKey(orden.Orderid, op);
+        renderItem={() => {
+          // ✅ (opcional) ver en consola si ya llegan campos
+          console.log(
+            '[OPS AGRUPADAS] ejemplo:',
+            (orden?.operaciones || [])[0]?.Usr00,
+            (orden?.operaciones || [])[0]?.Usr01
+          );
 
-          const workedMs = Number(op.worked_ms || 0);
-          const resumeAtMs =
-            toMs(op.last_resume_at) ?? (clientStartsRef.current[effectiveId] ?? toMs(op.Strttimcon));
+          // ✅ Pasamos workedMs/resumeAtMs calculados
+          const ops = Array.isArray(orden?.operaciones) ? orden.operaciones : [];
 
-          const isOpFinalizada = op.estatus === 'finalizada';
-          const actionsDisabled = isOpsLocked || isOpFinalizada;
+          const workedMsMap = {};
+          const resumeAtMsMap = {};
+
+          for (const op of ops) {
+            const effectiveId = op.id || opKey(orden.Orderid, op);
+
+            const workedMs = Number(op.worked_ms || 0);
+            const resumeAtMs =
+              toMs(op.last_resume_at) ??
+              (clientStartsRef.current[effectiveId] ?? toMs(op.Strttimcon));
+
+            workedMsMap[effectiveId] = workedMs;
+            resumeAtMsMap[effectiveId] = resumeAtMs;
+          }
 
           return (
-            <TouchableOpacity
-              activeOpacity={0.92}
-              onPress={() => openComponentsModal(op, 'view')}
-              style={[
-                styles.operCard,
-                operacionesFueraTiempo[effectiveId] && { borderColor: FIORI.err, borderWidth: 2 },
-                actionsDisabled && { opacity: 0.85 },
-              ]}
-            >
-              <View style={styles.operHeader}>
-                <Text style={styles.operTitle}>
-                  #{index + 1} · {op.activity}
-                </Text>
-                {!!op.subactivity && <Text style={styles.operSub}>{op.subactivity}</Text>}
-              </View>
-
-              {!!op.description && <Text style={styles.operDesc}>{op.description}</Text>}
-
-              <Text style={styles.operMeta}>
-                Tiempo asignado:{' '}
-                <Text style={styles.operMetaBold}>
-                  {limitMin ?? '—'} {Number.isFinite(limitMin) ? 'min' : ''}
-                </Text>
-              </Text>
-
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4 }}>
-                <Ionicons name="pricetags-outline" size={14} color={FIORI.textMuted} />
-                <Text style={{ color: FIORI.textMuted, fontSize: 12 }}>{`Toca para ver materiales y cantidades`}</Text>
-              </View>
-
-              {/* ✅ Timer solo si EN PROCESO y NO bloqueado */}
-              {op.estatus === 'en_proceso' && !actionsDisabled && (
-                <TimerBadge
-                  opId={effectiveId}
-                  label={op.activity}
-                  limitMin={limitMin}
-                  workedMs={workedMs}
-                  resumeAtMs={resumeAtMs}
-                  onNeedStartLocal={() => {
-                    if (!clientStartsRef.current[effectiveId]) {
-                      clientStartsRef.current[effectiveId] = Date.now();
-                      saveStartMs(effectiveId, clientStartsRef.current[effectiveId]);
-                    }
-                  }}
-                  onNearingEnd={() => {
-                    playAlertSound();
-                    Alert.alert('⏳ Queda poco tiempo', 'Falta menos de 1 minuto para terminar.', [{ text: 'OK' }]);
-                  }}
-                  onExpire={() => {
-                    playAlertSound();
-                    Alert.alert('⏱️ Tiempo agotado', `La operación "${op.activity}" superó el tiempo asignado.`, [
-                      { text: 'Finalizar', onPress: () => solicitarFinalizarOperacion(op) },
-                      { text: 'Continuar', style: 'cancel' },
-                    ]);
-                    setOperacionesFueraTiempo((prev) => ({ ...prev, [effectiveId]: true }));
-                  }}
-                />
-              )}
-
-              {/* ===== Acciones técnico (deshabilitadas si locked) ===== */}
-              {user?.rol_id === 3 &&
-                (() => {
-                  if (actionsDisabled) {
-                    return (
-                      <View
-                        style={[
-                          styles.btnPrimary,
-                          { backgroundColor: FIORI.surfaceAlt, borderWidth: 1, borderColor: FIORI.border },
-                        ]}
-                      >
-                        <Ionicons
-                          name={isOpFinalizada ? 'checkmark-done-outline' : 'lock-closed-outline'}
-                          size={16}
-                          color={FIORI.textMuted}
-                        />
-                        <Text style={[styles.btnPrimaryText, { color: FIORI.textMuted }]}>
-                          {isOpFinalizada ? 'Operación finalizada' : 'Operación bloqueada'}
-                        </Text>
-                      </View>
-                    );
-                  }
-
-                  if (op.estatus === 'pendiente') {
-                    return (
-                      <TouchableOpacity style={styles.btnPrimary} onPress={() => iniciarOperacion(op)}>
-                        <Ionicons name="play-outline" size={16} color="#fff" />
-                        <Text style={styles.btnPrimaryText}>Iniciar actividad</Text>
-                      </TouchableOpacity>
-                    );
-                  }
-
-                  if (op.estatus === 'pausada') {
-                    return (
-                      <TouchableOpacity
-                        style={[styles.btnPrimary, { backgroundColor: FIORI.ok }]}
-                        onPress={() => iniciarOperacion(op)}
-                      >
-                        <Ionicons name="play-forward-outline" size={16} color="#fff" />
-                        <Text style={styles.btnPrimaryText}>Reanudar</Text>
-                      </TouchableOpacity>
-                    );
-                  }
-
-
-
-                  if (op.estatus === 'en_proceso') {
-                    return (
-                      <View style={{ flexDirection: 'row', gap: 10 }}>
-                        {/* ✅ CAMBIO: ahora abre modal de motivo */}
-                        <TouchableOpacity
-                          style={[styles.btnPrimary, { backgroundColor: FIORI.pause, flex: 1 }]}
-                          onPress={() => openPauseModal(op)}
-                        >
-                          <Ionicons name="pause-circle-outline" size={16} color="#fff" />
-                          <Text style={styles.btnPrimaryText}>Pausar</Text>
-                        </TouchableOpacity>
-
-                        <TouchableOpacity
-                          style={[styles.btnPrimary, { backgroundColor: FIORI.ok, flex: 1 }]}
-                          onPress={() => solicitarFinalizarOperacion(op)}
-                        >
-                          <Ionicons name="checkmark-done-outline" size={16} color="#fff" />
-                          <Text style={styles.btnPrimaryText}>Finalizar</Text>
-                        </TouchableOpacity>
-                      </View>
-                    );
-                  }
-
-                  return <Text style={styles.operDone}>Finalizada</Text>;
-                })()}
-
-              {!isNoMant && (isOrderSinEmpezar || isOrderPendiente0100) && (
-                <Text style={styles.operLocked}>
-                  Las operaciones están bloqueadas mientras la orden esté en estatus pendiente (0100).
-                </Text>
-              )}
-            </TouchableOpacity>
+            <ListaOperacionesAgrupadas
+              operaciones={ops}
+              ordenId={orden?.Orderid || id}
+              styles={styles}
+              FIORI={FIORI}
+              userRolId={user?.rol_id}
+              isOpsLocked={isOpsLocked}
+              isNoMant={isNoMant}
+              isOrderSinEmpezar={isOrderSinEmpezar}
+              isOrderPendiente0100={isOrderPendiente0100}
+              operacionesFueraTiempo={operacionesFueraTiempo}
+              workedMs={workedMsMap}
+              resumeAtMs={resumeAtMsMap}
+              clientStartsRef={clientStartsRef}
+              saveStartMs={saveStartMs}
+              onOpenComponentsView={(opX) => openComponentsModal(opX, 'view')}
+              onIniciarOperacion={iniciarOperacion}
+              onOpenPauseModal={openPauseModal}
+              onSolicitarFinalizarOperacion={solicitarFinalizarOperacion}
+              // ✅ NUEVO: acciones por ITEM (batch)
+              onPausarItem={pausarItem}
+              onFinalizarItem={finalizarItem}
+              playAlertSound={playAlertSound}
+              setOperacionesFueraTiempo={setOperacionesFueraTiempo}
+              onIniciarItem={iniciarItem}
+              // ✅ NUEVO: estados de carga para bloquear UI
+              finalizandoOp={finalizandoOp}
+              sendingPause={sendingPause}
+            />
           );
         }}
         ListFooterComponent={
-          !isNoMant && (
-            <>
-              <View style={styles.block}>
-                <Text style={styles.blockTitle}>Mantenimiento</Text>
-                <View style={styles.grid}>
-                  <FormCardFlat
-                    title="Mantto elevador"
-                    icon="construct-outline"
-                    color="#5AAAF6"
-                    onPress={irAManttoElevador}
-                  />
-                  <FormCardFlat
-                    title="Mantto escalera"
-                    icon="build-outline"
-                    color="#4C9FEF"
-                    onPress={irAManttoEscalera}
-                  />
-                </View>
-              </View>
-
-              {user?.rol_id === 3 && (
-                <View style={{ marginTop: 4, marginBottom: 24 }}>
-                  <TouchableOpacity
-                    style={[styles.btnFinishOrder, finishingOrder && { opacity: 0.7 }]}
-                    activeOpacity={0.9}
-                    onPress={handleFinalizarOrden}
-                    disabled={finishingOrder}
-                  >
-                    <Ionicons name="flag-outline" size={18} color="#fff" />
-                    <Text style={styles.btnFinishOrderText}>
-                      {finishingOrder ? 'Preparando firma…' : 'Finalizar orden'}
-                    </Text>
-                  </TouchableOpacity>
-                </View>
-              )}
-            </>
-          )
+          <PieDetalleOrden
+            styles={styles}
+            FIORI={FIORI}
+            isNoMant={isNoMant}
+            userRolId={user?.rol_id}
+            finishingOrder={finishingOrder}
+            onIrManttoElevador={irAManttoElevador}
+            onIrManttoEscalera={irAManttoEscalera}
+            onFinalizarOrden={handleFinalizarOrden}
+          />
         }
       />
 
@@ -1419,471 +1536,56 @@ const finalizarOperacionConMaterial = async () => {
         </TouchableOpacity>
       )}
 
-      {/* ===== Modal TODOS materiales ===== */}
-      <Modal
-        visible={showAllMaterialsModal}
-        animationType="slide"
-        transparent
-        onRequestClose={() => setShowAllMaterialsModal(false)}
-      >
-        <View style={styles.modalBackdrop}>
-          <View style={styles.modalCard}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Materiales asignados a la orden</Text>
-              <TouchableOpacity onPress={() => setShowAllMaterialsModal(false)} style={styles.modalCloseBtn}>
-                <Ionicons name="close" size={20} color="#fff" />
-              </TouchableOpacity>
-            </View>
-
-            <ScrollView style={{ maxHeight: 420, paddingHorizontal: 12, paddingVertical: 8 }}>
-              {!allMaterials || allMaterials.length === 0 ? (
-                <Text style={{ color: FIORI.textMuted, marginTop: 8 }}>
-                  Esta orden no tiene materiales asignados desde SAP.
-                </Text>
-              ) : (
-                allMaterials.map((m, idx) => {
-                  const desc = m.MatlDesc || m.ShortText || m.Material || 'Sin descripción';
-                  const qty = m.RequirementQuantity ?? m.Quantity ?? '—';
-                  const unit = m.RequirementQuantityUnitIso || m.RequirementQuantityUnit || m.Unit || '';
-                  return (
-                    <View key={m.id || `${m.activity}-${m.Item}-${idx}`} style={styles.compRow}>
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.compTitle}>{desc}</Text>
-                        <Text style={styles.compSub}>
-                          Cantidad: {qty} {unit}
-                        </Text>
-                        <Text style={styles.compMeta}>
-                          Operación: {m.activity || '—'} · Item: {m.Item || '—'}
-                        </Text>
-                        <Text style={styles.compMeta}>
-                          Centro: {m.Plant || '—'} · Almacén: {m.StorageLocation || '—'}
-                        </Text>
-                      </View>
-                    </View>
-                  );
-                })
-              )}
-            </ScrollView>
-          </View>
-        </View>
-      </Modal>
-
-      {/* ===== Modal materiales por operación + consumo ===== */}
-      <Modal visible={showCompModal} animationType="slide" transparent onRequestClose={closeComponentsModal}>
-        <View style={styles.modalBackdrop}>
-          <View style={styles.modalCard}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>
-                Materiales ·{' '}
-                {selectedOp
-                  ? `${selectedOp.activity}${selectedOp.subactivity ? ' / ' + selectedOp.subactivity : ''}`
-                  : ''}
-              </Text>
-              <TouchableOpacity onPress={closeComponentsModal} style={styles.modalCloseBtn}>
-                <Ionicons name="close" size={20} color="#fff" />
-              </TouchableOpacity>
-            </View>
-
-            <ScrollView style={{ maxHeight: 380, paddingHorizontal: 12 }}>
-              {loadingComponents ? (
-                <Text style={{ color: FIORI.textMuted, marginTop: 12 }}>Cargando materiales…</Text>
-              ) : !compList || compList.length === 0 ? (
-                <Text style={{ color: FIORI.textMuted, marginTop: 12 }}>
-                  No hay materiales asignados a esta operación.
-                </Text>
-              ) : (
-                compList.map((c) => {
-                  const desc = c.MatlDesc || c.ShortText || c.Material || 'Sin descripción';
-                  const qtyAsignada = c.RequirementQuantity ?? c.Quantity ?? '—';
-                  const unit = c.RequirementQuantityUnitIso || c.RequirementQuantityUnit || c.Unit || '';
-
-                  return (
-                    <View key={`${c.Orderid}-${c.Activity}-${c.ResItem}`} style={styles.compRow}>
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.compTitle}>{desc || 'Sin descripción'}</Text>
-                        <Text style={styles.compSub}>
-                          Cantidad asignada: {qtyAsignada} {unit}
-                        </Text>
-                      </View>
-
-                      {modalMode === 'finalizar' && hasComponents && consumioMaterial && (
-                        <View style={styles.compQtyWrapper}>
-                          <Text style={styles.compMeta}>Consumido:</Text>
-                          <View style={styles.compQty}>
-                            <TextInput
-                              style={styles.inputQty}
-                              keyboardType="numeric"
-                              value={cantidadesConsumidas[c.ResItem] ?? ''}
-                              onChangeText={(txt) =>
-                                setCantidadesConsumidas((prev) => ({ ...prev, [c.ResItem]: txt }))
-                              }
-                              placeholder="0"
-                            />
-                            <Text style={styles.compQtyUnit}>{unit}</Text>
-                          </View>
-                        </View>
-                      )}
-                    </View>
-                  );
-                })
-              )}
-            </ScrollView>
-
-            {modalMode === 'finalizar' ? (
-              <>
-                {hasComponents ? (
-                  <View style={styles.modalConsumeRow}>
-                    <Text style={{ color: FIORI.text, fontWeight: '700' }}>¿Se consumió material asignado?</Text>
-                    <View style={styles.toggleRow}>
-                      <TouchableOpacity
-                        style={[styles.toggleBtn, consumioMaterial && styles.toggleBtnActive]}
-                        onPress={() => setConsumioMaterial(true)}
-                      >
-                        <Text style={[styles.toggleBtnText, consumioMaterial && styles.toggleBtnTextActive]}>Sí</Text>
-                      </TouchableOpacity>
-
-                      <TouchableOpacity
-                        style={[styles.toggleBtn, !consumioMaterial && styles.toggleBtnActive]}
-                        onPress={() => setConsumioMaterial(false)}
-                      >
-                        <Text style={[styles.toggleBtnText, !consumioMaterial && styles.toggleBtnTextActive]}>No</Text>
-                      </TouchableOpacity>
-                    </View>
-                  </View>
-                ) : (
-                  <View style={styles.modalConsumeRow}>
-                    <Text style={{ color: FIORI.textMuted, fontSize: 12 }}>
-                      Esta operación no tiene materiales asignados. Solo se marcará como finalizada.
-                    </Text>
-                  </View>
-                )}
-
-                <View style={styles.modalFooterRow}>
-                  <TouchableOpacity
-                    style={[styles.smallBtn, { backgroundColor: FIORI.surfaceAlt }]}
-                    onPress={closeComponentsModal}
-                    disabled={finalizandoOp}
-                  >
-                    <Text style={styles.smallBtnText}>Cancelar</Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    style={[styles.smallBtn, { backgroundColor: FIORI.brand }]}
-                    onPress={finalizarOperacionConMaterial}
-                    disabled={finalizandoOp}
-                  >
-                    <Text style={[styles.smallBtnText, { color: '#fff' }]}>
-                      {finalizandoOp ? 'Guardando…' : 'Finalizar operación'}
-                    </Text>
-                  </TouchableOpacity>
-                </View>
-              </>
-            ) : (
-              <View style={styles.modalFooter} />
-            )}
-          </View>
-        </View>
-      </Modal>
-
-      {/* ✅ NUEVO: Modal motivo de pausa */}
-      <Modal visible={showPauseModal} animationType="slide" transparent onRequestClose={closePauseModal}>
-        <View style={styles.modalBackdrop}>
-          <View style={[styles.modalCard, { maxWidth: 600, maxHeight: '90%' }]}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Motivo de pausa</Text>
-              <TouchableOpacity onPress={closePauseModal} style={styles.modalCloseBtn} disabled={sendingPause}>
-                <Ionicons name="close" size={20} color="#fff" />
-              </TouchableOpacity>
-            </View>
-
-            <View style={{ padding: 14 }}>
-              <Text style={{ color: FIORI.text, fontWeight: '800', marginBottom: 8 }}>Escribe el motivo:</Text>
-
-              <TextInput
-                value={pauseMotivo}
-                onChangeText={setPauseMotivo}
-                placeholder="Ej. Esperando refacción / Cliente no autoriza / Falta acceso…"
-                placeholderTextColor={FIORI.textMuted}
-                multiline
-                style={{
-                  minHeight: 90,
-                  borderWidth: 1,
-                  borderColor: FIORI.border,
-                  borderRadius: 10,
-                  paddingHorizontal: 12,
-                  paddingVertical: 10,
-                  backgroundColor: FIORI.surfaceAlt,
-                  color: FIORI.text,
-                  textAlignVertical: 'top',
-                }}
-              />
-
-              <View style={[styles.modalFooterRow, { paddingLeft: 0, paddingRight: 0 }]}>
-                <TouchableOpacity
-                  style={[styles.smallBtn, { backgroundColor: FIORI.surfaceAlt }, sendingPause && { opacity: 0.6 }]}
-                  onPress={closePauseModal}
-                  disabled={sendingPause}
-                >
-                  <Text style={styles.smallBtnText}>Cancelar</Text>
-                </TouchableOpacity>
-
-
-                <TouchableOpacity
-                  style={[
-                    styles.smallBtn,
-                    { backgroundColor: FIORI.pause, borderColor: FIORI.pause },
-                    sendingPause && { opacity: 0.6 },
-                  ]}
-                  onPress={confirmarPausaConMotivo}
-                  disabled={sendingPause}
-                >
-                  {sendingPause ? (
-                    <>
-                      <ActivityIndicator size="small" color="#fff" />
-                      <Text style={[styles.smallBtnText, { color: '#fff' }]}>Enviando pausa…</Text>
-                    </>
-                  ) : (
-                    <>
-                      <Ionicons name="pause-circle-outline" size={16} color="#fff" />
-                      <Text style={[styles.smallBtnText, { color: '#fff' }]}>Pausar</Text>
-                    </>
-                  )}
-                </TouchableOpacity>
-
-              </View>
-            </View>
-          </View>
-        </View>
-      </Modal>
-
-      {/* ===== Modal firma cliente ===== */}
-      <Modal visible={showSignModal} animationType="slide" transparent onRequestClose={() => setShowSignModal(false)}>
-        <View style={styles.modalBackdrop}>
-          <View style={[styles.modalCard, { maxWidth: 600, maxHeight: '90%' }]}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Firma del cliente</Text>
-              <TouchableOpacity onPress={() => setShowSignModal(false)} style={styles.modalCloseBtn}>
-                <Ionicons name="close" size={20} color="#fff" />
-              </TouchableOpacity>
-            </View>
-
-            <View style={{ padding: 12 }}>
-              <Text style={{ color: FIORI.text, fontSize: 13, marginBottom: 8, fontWeight: '600' }}>
-                Pida al cliente que firme dentro del recuadro. Esta firma se usará como evidencia de finalización.
-              </Text>
-
-              <View
-                style={{
-                  height: 320,
-                  borderWidth: 1,
-                  borderColor: FIORI.border,
-                  borderRadius: 12,
-                  backgroundColor: '#fff',
-                }}
-              >
-                <Signature
-                  ref={signatureRef}
-                  onOK={(sig) => setSignatureData(sig)}
-                  onClear={() => setSignatureData(null)}
-                  descriptionText="Firme aquí"
-                  clearText="Limpiar"
-                  confirmText="Listo"
-                  webStyle={`
-                    .m-signature-pad { box-shadow: none; border: none; height: 100%; }
-                    .m-signature-pad--body { border: 0; height: 75%; }
-                    .m-signature-pad--footer {
-                      height: 25%;
-                      display: flex !important;
-                      justify-content: space-between;
-                      align-items: center;
-                      padding: 8px 12px;
-                    }
-                    .m-signature-pad--footer .button { font-size: 12px; padding: 6px 10px; border-radius: 6px; }
-                    .m-signature-pad--footer .button.save { background-color: #0A6ED1; color: #fff; }
-                    .m-signature-pad--footer .button.clear { background-color: #EEEEEE; color: #333; }
-                  `}
-                />
-              </View>
-
-              <Text style={{ marginTop: 8, fontSize: 11, color: FIORI.textMuted }}>
-                Puede usar "Limpiar" dentro del recuadro para borrar y volver a firmar.
-              </Text>
-            </View>
-
-            <View style={styles.modalFooterRow}>
-              <TouchableOpacity
-                style={[styles.smallBtn, { backgroundColor: FIORI.surfaceAlt }]}
-                onPress={() => setShowSignModal(false)}
-                disabled={savingSignature}
-              >
-                <Text style={styles.smallBtnText}>Cancelar</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[styles.btnFinishOrder, savingSignature && { opacity: 0.7 }]}
-                activeOpacity={0.9}
-                onPress={confirmarFinalizarConFirma}
-                disabled={savingSignature}
-              >
-                <Ionicons name="flag-outline" size={18} color="#fff" />
-                <Text style={styles.btnFinishOrderText}>{savingSignature ? 'Guardando…' : 'Finalizar orden'}</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
-
-      {/* ===== Modal PDF no mantenimiento ===== */}
-      <Modal visible={showNoMantPdfModal} animationType="slide" transparent onRequestClose={cerrarModalNoMantPdf}>
-        <View style={styles.modalBackdrop}>
-          <View style={[styles.modalCard, { maxWidth: 600, maxHeight: '90%' }]}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Carta de no mantenimiento (PDF)</Text>
-              <TouchableOpacity onPress={cerrarModalNoMantPdf} style={styles.modalCloseBtn}>
-                <Ionicons name="close" size={20} color="#fff" />
-              </TouchableOpacity>
-            </View>
-
-            <View style={{ flex: 1, padding: 12 }}>
-              {loadingNoMantPdf ? (
-                <View style={{ alignItems: 'center', marginTop: 20 }}>
-                  <ActivityIndicator size="large" color={FIORI.brand} />
-                  <Text style={{ marginTop: 10, color: FIORI.textMuted }}>Cargando PDF…</Text>
-                </View>
-              ) : noMantError ? (
-                <Text style={{ color: FIORI.err, marginTop: 10 }}>{noMantError}</Text>
-              ) : noMantPdfUrl ? (
-                <View style={{ flex: 1, height: 420 }}>
-                  <WebView source={{ uri: noMantPdfUrl }} style={{ flex: 1 }} />
-                </View>
-              ) : (
-                <Text style={{ color: FIORI.textMuted, marginTop: 10 }}>
-                  No se encontró el archivo PDF de la carta de no mantenimiento.
-                </Text>
-              )}
-            </View>
-
-            <View style={styles.modalFooterRow}>
-              <TouchableOpacity style={[styles.smallBtn, { backgroundColor: FIORI.surfaceAlt }]} onPress={cerrarModalNoMantPdf}>
-                <Text style={styles.smallBtnText}>Cerrar</Text>
-              </TouchableOpacity>
-
-              {noMantPdfRawUrl && (
-                <TouchableOpacity
-                  style={[styles.smallBtn, { backgroundColor: FIORI.brand }]}
-                  onPress={descargarNoMantPdf}
-                  disabled={downloadingNoMantPdf}
-                >
-                  <Text style={[styles.smallBtnText, { color: '#fff' }]}>
-                    {downloadingNoMantPdf ? 'Descargando…' : 'Descargar'}
-                  </Text>
-                </TouchableOpacity>
-              )}
-            </View>
-          </View>
-        </View>
-      </Modal>
+      <ModalesDetalleOrden
+        styles={styles}
+        FIORI={FIORI}
+        orden={orden}
+        allMaterials={allMaterials}
+        // Todos materiales
+        showAllMaterialsModal={showAllMaterialsModal}
+        setShowAllMaterialsModal={setShowAllMaterialsModal}
+        // Materiales por operación
+        showCompModal={showCompModal}
+        closeComponentsModal={closeComponentsModal}
+        selectedOp={selectedOp}
+        modalMode={modalMode}
+        loadingComponents={loadingComponents}
+        compList={compList}
+        hasComponents={hasComponents}
+        consumioMaterial={consumioMaterial}
+        setConsumioMaterial={setConsumioMaterial}
+        cantidadesConsumidas={cantidadesConsumidas}
+        setCantidadesConsumidas={setCantidadesConsumidas}
+        finalizandoOp={finalizandoOp}
+        finalizarOperacionConMaterial={finalizarOperacionConMaterial}
+        // Motivo pausa (individual o ITEM)
+        showPauseModal={showPauseModal}
+        closePauseModal={closePauseModal}
+        pauseMotivo={pauseMotivo}
+        setPauseMotivo={setPauseMotivo}
+        sendingPause={sendingPause}
+        confirmarPausaConMotivo={confirmarPausaConMotivo}
+        // Firma
+        showSignModal={showSignModal}
+        setShowSignModal={setShowSignModal}
+        signatureRef={signatureRef}
+        signatureData={signatureData}
+        setSignatureData={setSignatureData}
+        savingSignature={savingSignature}
+        confirmarFinalizarConFirma={confirmarFinalizarConFirma}
+        // PDF no mantenimiento
+        showNoMantPdfModal={showNoMantPdfModal}
+        cerrarModalNoMantPdf={cerrarModalNoMantPdf}
+        loadingNoMantPdf={loadingNoMantPdf}
+        noMantError={noMantError}
+        noMantPdfUrl={noMantPdfUrl}
+        noMantPdfRawUrl={noMantPdfRawUrl}
+        descargarNoMantPdf={descargarNoMantPdf}
+        downloadingNoMantPdf={downloadingNoMantPdf}
+      />
     </View>
   );
 }
-
-/* ====== Subcomponentes UI ====== */
-const Row = ({ label, value }) => {
-  const text = formatValueForRow(value);
-  return (
-    <View style={styles.row}>
-      <Text style={styles.rowLabel}>{label}</Text>
-      <Text style={styles.rowValue}>{text}</Text>
-    </View>
-  );
-};
-
-const FormCardFlat = ({ title, icon, color, onPress }) => (
-  <TouchableOpacity style={styles.cardWrap} onPress={onPress} activeOpacity={0.92}>
-    <View style={[styles.card, { backgroundColor: color }]}>
-      <View style={styles.cardTop}>
-        <View style={styles.iconBadge}>
-          <Ionicons name={icon} size={18} color="#fff" />
-        </View>
-      </View>
-      <Text numberOfLines={2} style={styles.cardTitle}>
-        {title}
-      </Text>
-    </View>
-  </TouchableOpacity>
-);
-
-/** ================= Cronómetro por operación (PAUSAS OK) ================= */
-const TimerBadge = ({
-  opId,
-  label,
-  limitMin,
-  workedMs = 0,
-  resumeAtMs,
-  onNeedStartLocal,
-  onNearingEnd,
-  onExpire,
-}) => {
-  const [now, setNow] = useState(Date.now());
-  const nearingShownRef = useRef(false);
-  const expiredShownRef = useRef(false);
-
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(id);
-  }, []);
-
-  useEffect(() => {
-    if (resumeAtMs == null) onNeedStartLocal?.();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [resumeAtMs]);
-
-  const tramoMs = resumeAtMs ? Math.max(0, now - resumeAtMs) : 0;
-  const elapsedMs = (Number.isFinite(workedMs) ? workedMs : 0) + tramoMs;
-
-  const hasLimit = Number.isFinite(limitMin);
-  const limitMs = hasLimit ? limitMin * 60 * 1000 : null;
-  const remainingMs = hasLimit ? Math.max(0, limitMs - elapsedMs) : null;
-
-  useEffect(() => {
-    if (!hasLimit) return;
-
-    if (remainingMs > 0 && remainingMs <= 60000 && !nearingShownRef.current) {
-      nearingShownRef.current = true;
-      onNearingEnd?.();
-    }
-    if (remainingMs === 0 && !expiredShownRef.current) {
-      expiredShownRef.current = true;
-      onExpire?.();
-    }
-  }, [hasLimit, remainingMs, onNearingEnd, onExpire]);
-
-  return (
-    <View style={styles.timerRow}>
-      <View style={styles.timerPill}>
-        <Ionicons name="time-outline" size={14} color={FIORI.text} />
-        <Text style={styles.timerText}> Transcurrido: {fmtHMS(elapsedMs)}</Text>
-      </View>
-
-      {hasLimit && (
-        <View
-          style={[
-            styles.timerPill,
-            {
-              backgroundColor: remainingMs === 0 ? '#FDECEA' : FIORI.brandSoft,
-              borderColor: FIORI.border,
-            },
-          ]}
-        >
-          <Ionicons name="hourglass-outline" size={14} color={FIORI.text} />
-          <Text style={styles.timerText}>
-            {remainingMs === 0 ? ' ¡Tiempo agotado!' : ` Restante: ${fmtHMS(remainingMs)}`}
-          </Text>
-        </View>
-      )}
-    </View>
-  );
-};
 
 /* ====================== Estilos ====================== */
 const styles = StyleSheet.create({
@@ -1980,7 +1682,12 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     ...elev(0.6),
   },
-  operHeader: { borderBottomWidth: 1, borderBottomColor: FIORI.borderSoft, paddingBottom: 6, marginBottom: 8 },
+  operHeader: {
+    borderBottomWidth: 1,
+    borderBottomColor: FIORI.borderSoft,
+    paddingBottom: 6,
+    marginBottom: 8,
+  },
   operTitle: { fontSize: 15, fontWeight: '800', color: FIORI.text },
   operSub: { fontSize: 12, color: FIORI.textMuted, marginTop: 2 },
   operDesc: { fontSize: 13, color: FIORI.text, marginBottom: 6 },
@@ -2100,7 +1807,13 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
 
-  compRow: { borderBottomWidth: 1, borderBottomColor: FIORI.borderSoft, paddingVertical: 10, flexDirection: 'row', gap: 10 },
+  compRow: {
+    borderBottomWidth: 1,
+    borderBottomColor: FIORI.borderSoft,
+    paddingVertical: 10,
+    flexDirection: 'row',
+    gap: 10,
+  },
   compTitle: { fontSize: 14, fontWeight: '800', color: FIORI.text },
   compSub: { fontSize: 12, color: FIORI.textMuted, marginTop: 2 },
   compMeta: { fontSize: 12, color: FIORI.textMuted, marginTop: 2 },
@@ -2122,7 +1835,13 @@ const styles = StyleSheet.create({
 
   modalFooter: { padding: 12, alignItems: 'flex-end' },
 
-  modalConsumeRow: { paddingHorizontal: 14, paddingTop: 10, paddingBottom: 4, flexDirection: 'column', gap: 8 },
+  modalConsumeRow: {
+    paddingHorizontal: 14,
+    paddingTop: 10,
+    paddingBottom: 4,
+    flexDirection: 'column',
+    gap: 8,
+  },
   toggleRow: { flexDirection: 'row', gap: 8 },
   toggleBtn: {
     flex: 1,
@@ -2150,6 +1869,82 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   smallBtnText: { color: FIORI.text, fontWeight: '700', fontSize: 13 },
+
+  chipTab: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+    borderWidth: 1,
+    maxWidth: 280,
+  },
+  chipTabText: {
+    fontWeight: '800',
+    fontSize: 12,
+  },
+
+  // ✅ para ListaOperacionesAgrupadas (acordeones)
+  grupoCard: {
+    backgroundColor: FIORI.surface,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: FIORI.border,
+    padding: 12,
+    ...elev(0.4),
+  },
+  grupoHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  grupoTitle: { fontSize: 14, fontWeight: '900', color: FIORI.text },
+  grupoMeta: { fontSize: 12, color: FIORI.textMuted, marginTop: 2 },
+  grupoBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderWidth: 1,
+    borderColor: FIORI.border,
+    backgroundColor: FIORI.surfaceAlt,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+  },
+  grupoBadgeText: { fontWeight: '900', color: FIORI.text, fontSize: 12 },
+
+  itemCard: {
+    backgroundColor: FIORI.surfaceAlt,
+    borderRadius: 12,
+    padding: 12,
+  },
+  itemHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  itemTitle: { fontSize: 13, fontWeight: '900', color: FIORI.text },
+  itemMeta: { fontSize: 12, color: FIORI.textMuted, marginTop: 2 },
+
+  // ✅ operación compacta
+  operCardSmall: {
+    backgroundColor: FIORI.surface,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: FIORI.borderSoft,
+    padding: 10,
+  },
+  badgeSmall: {
+    borderRadius: 999,
+    borderWidth: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  badgeSmallText: { fontSize: 11, fontWeight: '900', color: FIORI.text },
+  operTitleSmall: { fontSize: 13, fontWeight: '900', color: FIORI.text },
+  operDescSmall: { fontSize: 12, color: FIORI.textMuted, marginTop: 2 },
+  operHintSmall: { fontSize: 12, color: FIORI.textMuted, fontWeight: '700' },
 });
 
 function elev(multiplier = 1) {

@@ -348,7 +348,7 @@ export default function DetallesAveriaSupervisor() {
           ) : null}
 
           <View style={{ marginTop: 10 }}>
-            <Text style={styles.infoLabel}>Causa asignada (P)</Text>
+            <Text style={styles.infoLabel}>Causa asignada</Text>
             <Text style={styles.infoValue}>
               {codeGroup && coding ? `${codeGroup} / ${coding}` : 'No asignada'}
             </Text>
@@ -409,12 +409,12 @@ export default function DetallesAveriaSupervisor() {
 
           <View style={styles.infoGrid}>
             <View style={styles.infoItemFull}>
-              <Text style={styles.infoLabel}>Grupo de código (CodeGroup)</Text>
+              <Text style={styles.infoLabel}>Grupo de código</Text>
               <Text style={styles.infoValue}>{codeGroup || '—'}</Text>
             </View>
 
             <View style={styles.infoItemFull}>
-              <Text style={styles.infoLabel}>Código (Coding)</Text>
+              <Text style={styles.infoLabel}>Código</Text>
               <Text style={styles.infoValue}>{coding || '—'}</Text>
             </View>
           </View>
