@@ -12,15 +12,18 @@ import {
   Alert,
   TextInput,
   ActivityIndicator,
-
 } from "react-native";
 import { Calendar, LocaleConfig } from "react-native-calendars";
 import { Ionicons } from "@expo/vector-icons";
 import Header from "../../../../src/components/Header";
-import api from "../../../../src/services/api";
 import { useAuth } from "../../../../src/context/AuthContext";
-
 import { SafeAreaView } from "react-native-safe-area-context";
+
+// ✅ OFFLINE service (tú lo creas en: src/services/reprogramacionesSupervisor.js)
+import {
+  fetchReprogramacionesOrders,
+  rescheduleWorkorders,
+} from "../../../../src/services/reprogramacionesSupervisor";
 
 /* ====================== Locale ES ====================== */
 LocaleConfig.locales.es = {
@@ -46,6 +49,14 @@ const COLORS = {
   danger: "#E76565",
   ok: "#1F8A5B",
   warn: "#B26A00",
+
+  // estados sync
+  pendingBg: "#FFF7EA",
+  pendingBorder: "#F0D7A8",
+  sentBg: "#ECFFF6",
+  sentBorder: "#BFE7D5",
+  errBg: "#FFEDED",
+  errBorder: "#F3B4B4",
 };
 
 /* ====================== Helpers ====================== */
@@ -108,7 +119,6 @@ function buildODataRangeFilter({ startYmd, endYmd, email }) {
   return `StartDate ge datetime'${startYmd}T00:00:00' and FinishDate le datetime'${endYmd}T23:59:59' and Userstatus eq '${email}'`;
 }
 
-
 function buildRangeMarkedDates(startYmd, endYmd) {
   const marked = {};
   if (!startYmd) return marked;
@@ -140,8 +150,24 @@ function buildRangeMarkedDates(startYmd, endYmd) {
   return marked;
 }
 
+function getSyncBadge(sync) {
+  const state = sync?.state;
+  if (!state) return null;
+
+  if (state === "pending") {
+    return { label: "PENDIENTE DE ENVIAR", bg: COLORS.pendingBg, border: COLORS.pendingBorder, color: COLORS.warn };
+  }
+  if (state === "sent") {
+    return { label: "ENVIADO", bg: COLORS.sentBg, border: COLORS.sentBorder, color: COLORS.ok };
+  }
+  if (state === "error") {
+    return { label: "ERROR", bg: COLORS.errBg, border: COLORS.errBorder, color: COLORS.danger };
+  }
+  return null;
+}
+
 export default function ReprogramarOrden() {
-  const { token, user } = useAuth();
+  const { user } = useAuth(); // token ya no lo necesitamos aquí; el service lo toma de AsyncStorage
 
   const supervisorEmail =
     safeStr(user?.email) ||
@@ -175,8 +201,8 @@ export default function ReprogramarOrden() {
   // Modal reprogramar VARIAS (rango igual para todas)
   const [bulkOpen, setBulkOpen] = useState(false);
   const [bulkStep, setBulkStep] = useState("start"); // "start" | "end"
-  const [bulkStart, setBulkStart] = useState("");    // YYYY-MM-DD
-  const [bulkEnd, setBulkEnd] = useState("");        // YYYY-MM-DD
+  const [bulkStart, setBulkStart] = useState(""); // YYYY-MM-DD
+  const [bulkEnd, setBulkEnd] = useState(""); // YYYY-MM-DD
   const [bulkSaving, setBulkSaving] = useState(false);
 
   function toggleSelect(id) {
@@ -192,74 +218,70 @@ export default function ReprogramarOrden() {
     setSelectedIds(new Set());
   }
 
-  // ✅ FETCH desde NotificationHeaderSet (como ya lo traías)
+  // ✅ FETCH offline-friendly (cache first, network if available)
   const fetchOrders = useCallback(
     async ({ year, month, dayYmd }) => {
       try {
         setLoading(true);
 
-        const { startYmd, endYmd } = getMonthRange(year, month);
+        // Tu filtro OData (igual que antes) PERO lo construye el service si hay red.
+        // Aquí solo le pasamos parámetros.
+        const r = await fetchReprogramacionesOrders({
+          year,
+          month,
+          dayYmd,
+          supervisorEmail,
+        });
 
-        const filter = dayYmd
-          ? buildODataDayFilter({ ymd: dayYmd, email: supervisorEmail })
-          : buildODataRangeFilter({ startYmd, endYmd, email: supervisorEmail });
+        // r.orders ya puede traer _sync por orden
+        const list = Array.isArray(r.orders) ? r.orders : [];
 
-        const res = await api.get(
-          "/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet",
-          {
-            headers: { Authorization: `Bearer ${token}` },
-            params: { $filter: filter, $format: "json" },
-          }
-        );
-
-
-        const results = Array.isArray(res.data?.d?.results) ? res.data.d.results : [];
-
-        const mapped = results
+        // (opcional) si el backend devolviera cosas raras, reforzamos la regla de ocultamiento
+        const cleaned = list
           .map((x) => {
-            const id = safeStr(x.Orderid || x.OrderId || x.OrderID || x.NotifNo || x.Notification || x.id);
-
-            const startFromWorkOrder = odataDateToYMD(x.StartDate);
-            const finishFromWorkOrder = odataDateToYMD(x.FinishDate);
-
-            const notifDate =
-              safeStr(x.NotifDate).includes("/Date(") ? odataDateToYMD(x.NotifDate) : safeStr(x.NotifDate || "");
-
-            const finalStart = startFromWorkOrder || notifDate;
-            const finalFinish = finishFromWorkOrder || notifDate || finalStart;
-
-            const userstatusCodes = safeStr(x.Userstatus || x.UserStatus || "");
+            // Asegura shape
+            const id = safeStr(x.id);
+            const userstatusCodes = safeStr(x.userstatusCodes);
+            const startDate =
+              safeStr(x.startDate).includes("/Date(") ? odataDateToYMD(x.startDate) : safeStr(x.startDate);
+            const finishDate =
+              safeStr(x.finishDate).includes("/Date(") ? odataDateToYMD(x.finishDate) : safeStr(x.finishDate);
 
             return {
+              ...x,
               id,
-              equipo: safeStr(x.Equipment || x.Equipo || ""),
-              shortText: safeStr(x.ShortText || x.Description || x.Descripcion || ""),
-              startDate: finalStart,
-              finishDate: finalFinish,
+              equipo: safeStr(x.equipo),
+              shortText: safeStr(x.shortText),
+              startDate,
+              finishDate,
               userstatusCodes,
             };
           })
           .filter((o) => o.id)
           .filter((o) => !shouldHideByUserstatus(o.userstatusCodes));
 
-        setOrders(mapped);
+        setOrders(cleaned);
         clearSelection();
+
+        if (!r.ok && r.from !== "cache") {
+          Alert.alert("Error", "No se pudieron cargar las órdenes.");
+        }
       } catch (error) {
-        console.error("Error al cargar órdenes (NotificationHeaderSet):", error?.response?.data || error?.message);
-        Alert.alert("Error", "No se pudieron cargar las órdenes del servicio de notificaciones.");
+        console.error("[REPROGRAMAR FETCH ERROR]", error?.message || error);
+        Alert.alert("Error", "No se pudieron cargar las órdenes.");
         setOrders([]);
         clearSelection();
       } finally {
         setLoading(false);
       }
     },
-    [token, supervisorEmail]
+    [supervisorEmail]
   );
 
   useEffect(() => {
-    if (!token) return;
+    // ✅ ya no dependemos de token; si estás offline, el service regresa cache
     fetchOrders({ year: anioVisible, month: mesVisible, dayYmd: null });
-  }, [token, anioVisible, mesVisible, fetchOrders]);
+  }, [anioVisible, mesVisible, fetchOrders]);
 
   const markedDates = useMemo(() => {
     const marks = {};
@@ -285,7 +307,11 @@ export default function ReprogramarOrden() {
 
     const q = query.trim().toLowerCase();
     if (q) {
-      list = list.filter((o) => (`${o.id} ${o.equipo} ${o.shortText} ${o.userstatusCodes}`).toLowerCase().includes(q));
+      list = list.filter((o) =>
+        (`${o.id} ${o.equipo} ${o.shortText} ${o.userstatusCodes} ${o._sync?.state || ""}`)
+          .toLowerCase()
+          .includes(q)
+      );
     }
     return list;
   }, [orders, selectedDate, query]);
@@ -333,6 +359,7 @@ export default function ReprogramarOrden() {
 
   async function saveEdit() {
     if (!editing) return;
+
     if (!tempStart || !tempEnd) {
       Alert.alert("Faltan fechas", "Selecciona fecha inicio y fecha fin.");
       return;
@@ -342,6 +369,7 @@ export default function ReprogramarOrden() {
       return;
     }
 
+    // ✅ payload igual al original (solo para log si quieres verlo)
     const payload = {
       WorkOrderHeader: { Supervisor: supervisorEmail },
       WorkOrderItemsSet: [
@@ -360,29 +388,49 @@ export default function ReprogramarOrden() {
 
       console.log("[REPROGRAMACION] payload:", JSON.stringify(payload, null, 2));
 
-      const res = await api.post(
-        "/api/odata/ZCS_RESCHEDULE_WORKORDER_SRV/WorkOrderHeaderSet",
-        payload,
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-            Accept: "application/json",
-            "Content-Type": "application/json",
-          },
-        }
-      );
+      // ✅ ahora: ONLINE -> manda a SAP | OFFLINE -> lo encola y guarda status
+      const r = await rescheduleWorkorders({
+        supervisorEmail,
+        items: [{ orderId: safeStr(editing.id), startYmd: tempStart, endYmd: tempEnd }],
+      });
 
-      console.log("[REPROGRAMACION OK] response:", res?.data);
-
+      // ✅ UI optimista SIEMPRE
       setOrders((prev) =>
-        prev.map((o) => (o.id === editing.id ? { ...o, startDate: tempStart, finishDate: tempEnd } : o))
+        prev.map((o) =>
+          o.id === editing.id
+            ? {
+                ...o,
+                startDate: tempStart,
+                finishDate: tempEnd,
+                _sync: {
+                  ...(o._sync || {}),
+                  state: r.mode === "offline" ? "pending" : "sent",
+                  startYmd: tempStart,
+                  endYmd: tempEnd,
+                  updatedAt: Date.now(),
+                  outboxId: r.outboxId || o?._sync?.outboxId,
+                  lastError: "",
+                },
+              }
+            : o
+        )
       );
 
       closeEdit();
-      Alert.alert("Reprogramación lista", `Orden #${editing.id}\nInicio: ${tempStart}\nFin: ${tempEnd}`);
+
+      if (r.mode === "offline") {
+        Alert.alert(
+          "Guardado offline",
+          `Orden #${editing.id}\nSe enviará cuando haya internet.\nInicio: ${tempStart}\nFin: ${tempEnd}`
+        );
+      } else if (r.ok) {
+        Alert.alert("Reprogramación lista", `Orden #${editing.id}\nInicio: ${tempStart}\nFin: ${tempEnd}`);
+      } else {
+        Alert.alert("Error", "No se pudo reprogramar.");
+      }
     } catch (error) {
-      console.error("[REPROGRAMACION ERROR]", error?.response?.data || error?.message);
-      Alert.alert("Error", "No se pudo reprogramar en SAP (revisa logs del backend/BTP).");
+      console.error("[REPROGRAMACION ERROR]", error?.message || error);
+      Alert.alert("Error", "No se pudo reprogramar (revisa logs).");
     } finally {
       setSaving(false);
     }
@@ -392,13 +440,12 @@ export default function ReprogramarOrden() {
   function openBulk() {
     if (!bulkMode) return;
 
-    // ✅ recuerda lo último si ya había algo, si no, usa hoy
     const fallback = toYMD(new Date());
     const start = bulkStart || fallback;
 
     setBulkStep("start");
     setBulkStart(start);
-    setBulkEnd(bulkEnd || ""); // si ya tenía end, lo mantiene, si no, vacío
+    setBulkEnd(bulkEnd || "");
     setBulkOpen(true);
   }
 
@@ -406,7 +453,7 @@ export default function ReprogramarOrden() {
     if (bulkSaving) return;
     setBulkOpen(false);
     setBulkStep("start");
-    // ✅ NO limpiamos bulkStart/bulkEnd para "recordar" la última selección
+    // ✅ NO limpiamos bulkStart/bulkEnd para recordar la última selección
   }
 
   function onPickBulkDate(ymd) {
@@ -458,24 +505,35 @@ export default function ReprogramarOrden() {
 
       console.log("[REPROGRAMACION BULK] payload:", JSON.stringify(payload, null, 2));
 
-      const res = await api.post(
-        "/api/odata/ZCS_RESCHEDULE_WORKORDER_SRV/WorkOrderHeaderSet",
-        payload,
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-            Accept: "application/json",
-            "Content-Type": "application/json",
-          },
-        }
-      );
+      // ✅ ONLINE -> manda | OFFLINE -> encola
+      const r = await rescheduleWorkorders({
+        supervisorEmail,
+        items: selectedIdsArray.map((id) => ({
+          orderId: safeStr(id),
+          startYmd: bulkStart,
+          endYmd: bulkEnd,
+        })),
+      });
 
-      console.log("[REPROGRAMACION BULK OK] response:", res?.data);
-
-      // actualiza UI local
+      // ✅ UI optimista
       setOrders((prev) =>
         prev.map((o) =>
-          selectedIds.has(o.id) ? { ...o, startDate: bulkStart, finishDate: bulkEnd } : o
+          selectedIds.has(o.id)
+            ? {
+                ...o,
+                startDate: bulkStart,
+                finishDate: bulkEnd,
+                _sync: {
+                  ...(o._sync || {}),
+                  state: r.mode === "offline" ? "pending" : "sent",
+                  startYmd: bulkStart,
+                  endYmd: bulkEnd,
+                  updatedAt: Date.now(),
+                  outboxId: r.outboxId || o?._sync?.outboxId,
+                  lastError: "",
+                },
+              }
+            : o
         )
       );
 
@@ -483,9 +541,18 @@ export default function ReprogramarOrden() {
       clearSelection();
       setBulkOpen(false);
 
-      Alert.alert("Reprogramación lista", `Se reprogramaron ${count} órdenes.\nInicio: ${bulkStart}\nFin: ${bulkEnd}`);
+      if (r.mode === "offline") {
+        Alert.alert(
+          "Guardado offline",
+          `Se guardaron ${count} órdenes.\nSe enviarán cuando haya internet.\nInicio: ${bulkStart}\nFin: ${bulkEnd}`
+        );
+      } else if (r.ok) {
+        Alert.alert("Reprogramación lista", `Se reprogramaron ${count} órdenes.\nInicio: ${bulkStart}\nFin: ${bulkEnd}`);
+      } else {
+        Alert.alert("Error", "No se pudieron reprogramar las órdenes seleccionadas.");
+      }
     } catch (error) {
-      console.error("[REPROGRAMACION BULK ERROR]", error?.response?.data || error?.message);
+      console.error("[REPROGRAMACION BULK ERROR]", error?.message || error);
       Alert.alert("Error", "No se pudieron reprogramar las órdenes seleccionadas.");
     } finally {
       setBulkSaving(false);
@@ -621,12 +688,13 @@ export default function ReprogramarOrden() {
         keyExtractor={(item) => item.id}
         ListHeaderComponent={HeaderUI}
         contentContainerStyle={{
-          paddingBottom: bulkMode ? 110 : 22, // ✅ deja espacio para la barra flotante
+          paddingBottom: bulkMode ? 110 : 22,
         }}
         ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
         ListEmptyComponent={<Text style={styles.empty}>{loading ? "Cargando…" : "No hay resultados."}</Text>}
         renderItem={({ item }) => {
           const checked = selectedIds.has(item.id);
+          const badge = getSyncBadge(item._sync);
 
           return (
             <View style={styles.orderRow}>
@@ -639,7 +707,20 @@ export default function ReprogramarOrden() {
               </Pressable>
 
               <View style={{ flex: 1 }}>
-                <Text style={styles.orderId}>Orden #{item.id}</Text>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                  <Text style={styles.orderId}>Orden #{item.id}</Text>
+
+                  {!!badge && (
+                    <View
+                      style={[
+                        styles.syncBadge,
+                        { backgroundColor: badge.bg, borderColor: badge.border },
+                      ]}
+                    >
+                      <Text style={[styles.syncBadgeText, { color: badge.color }]}>{badge.label}</Text>
+                    </View>
+                  )}
+                </View>
 
                 <Text style={styles.orderSub}>
                   {item.equipo ? item.equipo : "Equipo —"}
@@ -654,9 +735,14 @@ export default function ReprogramarOrden() {
                 {!!item.userstatusCodes && (
                   <Text style={styles.small}>Userstatus: {safeStr(item.userstatusCodes).trim() || "—"}</Text>
                 )}
+
+                {item._sync?.state === "error" && !!item._sync?.lastError && (
+                  <Text style={[styles.small, { color: COLORS.danger }]}>
+                    Error: {safeStr(item._sync.lastError)}
+                  </Text>
+                )}
               </View>
 
-              {/* ✅ Solo permitir reprogramar UNA cuando NO hay selección múltiple */}
               {!bulkMode && (
                 <Pressable style={styles.editBtn} onPress={() => openEdit(item)}>
                   <Ionicons name="calendar-outline" size={18} color="#fff" />
@@ -668,7 +754,6 @@ export default function ReprogramarOrden() {
         }}
       />
 
-      {/* ✅ BARRA FLOTANTE cuando hay selección */}
       {bulkMode && (
         <View style={styles.bulkBar}>
           <View style={{ flex: 1 }}>
@@ -787,7 +872,7 @@ export default function ReprogramarOrden() {
             </View>
 
             <Text style={styles.modalFooter}>
-              *En POST NO se manda $format ni $expand. FechaIni/FechaFin van en YYYYMMDD.
+              *En POST NO se manda $format ni $expand. FechaIni/FechaFin van en YYYYMMDD. (Offline: se encola y se envía al volver red)
             </Text>
           </View>
         </View>
@@ -893,6 +978,8 @@ export default function ReprogramarOrden() {
             <Text style={styles.modalFooter}>
               Inicio: <Text style={styles.bold}>{bulkStart || "—"}</Text> · Fin:{" "}
               <Text style={styles.bold}>{bulkEnd || "—"}</Text>
+              {"\n"}
+              *Offline: se guarda en cola y se envía al volver red.
             </Text>
           </View>
         </View>
@@ -981,6 +1068,17 @@ const styles = StyleSheet.create({
   orderDates: { marginTop: 6, fontSize: 12.5, color: COLORS.textSub },
   small: { marginTop: 4, fontSize: 11.5, color: COLORS.textSub },
 
+  syncBadge: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 999,
+    borderWidth: 1,
+  },
+  syncBadgeText: {
+    fontSize: 11,
+    fontWeight: "900",
+  },
+
   editBtn: {
     alignSelf: "center",
     flexDirection: "row",
@@ -993,7 +1091,6 @@ const styles = StyleSheet.create({
   },
   editBtnText: { color: "#fff", fontWeight: "900", fontSize: 12.5 },
 
-  // ✅ Barra bulk flotante abajo
   bulkBar: {
     position: "absolute",
     left: 12,

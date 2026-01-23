@@ -15,16 +15,16 @@ import Header from '../../src/components/Header';
 // ====== Datos del menú (tiles) PARA SUPERVISOR ======
 const TILES = [
   {
-    key: 'reprogramaciones',
-    title: 'Reprogramación de órdenes',
-    icon: 'calendar-outline',
-    onPress: () => router.push('/supervisor/reprogramacionesPlan'),
-  },
-  {
     key: 'ordenes',
     title: 'Órdenes de servicio',
     icon: 'receipt-outline',
     onPress: () => router.push('/supervisor/ordenes'),
+  },
+  {
+    key: 'reprogramaciones',
+    title: 'Reprogramación de órdenes',
+    icon: 'calendar-outline',
+    onPress: () => router.push('/supervisor/reprogramacionesPlan'),
   },
   {
     key: 'averia',

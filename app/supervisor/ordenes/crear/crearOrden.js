@@ -199,7 +199,6 @@ function extractOrderFromReturn(dataOrD) {
   };
 }
 
-
 /**
  * ✅ Fallback: extrae #orden / #aviso desde sap-message header.
  */
@@ -304,7 +303,9 @@ export default function CrearOrdenMantto() {
   const [selectedWorkCenter, setSelectedWorkCenter] = useState(null); // { Arbpl, Ktext }
 
   // ✅ Operaciones con materiales
-  const [operations, setOperations] = useState(() => normalizeOpsAndComponents([emptyOperation(0, planPlant)], planPlant));
+  const [operations, setOperations] = useState(() =>
+    normalizeOpsAndComponents([emptyOperation(0, planPlant)], planPlant)
+  );
 
   const [saving, setSaving] = useState(false);
 
@@ -363,7 +364,10 @@ export default function CrearOrdenMantto() {
         setWorkCenters(mapped);
       } catch (err) {
         console.error("Error al cargar WorkCentreSet:", err);
-        Alert.alert("Catálogo de técnicos", "No se pudo cargar la lista de centros de trabajo.");
+        Alert.alert(
+          "Catálogo de técnicos",
+          "No se pudo cargar la lista de centros de trabajo."
+        );
       } finally {
         setLoadingWorkCenters(false);
       }
@@ -428,7 +432,10 @@ export default function CrearOrdenMantto() {
         if (i !== opIndex) return op;
         const comps = op.Components || [];
         if (comps.length === 1) {
-          Alert.alert("No permitido", "Debe haber al menos un componente por operación.");
+          Alert.alert(
+            "No permitido",
+            "Debe haber al menos un componente por operación."
+          );
           return op;
         }
         return { ...op, Components: comps.filter((_, j) => j !== compIndex) };
@@ -503,7 +510,11 @@ export default function CrearOrdenMantto() {
           if (i !== opIndex) return op;
           const comps = (op.Components || []).map((c, j) => {
             if (j !== compIndex) return c;
-            return { ...c, NotFoundCategories: cats, LoadingNotFoundCategories: false };
+            return {
+              ...c,
+              NotFoundCategories: cats,
+              LoadingNotFoundCategories: false,
+            };
           });
           return { ...op, Components: comps };
         });
@@ -511,12 +522,19 @@ export default function CrearOrdenMantto() {
       });
     } catch (e) {
       console.error("Error CategoriaManttoSet:", e);
-      Alert.alert("Categorías", "No se pudieron cargar las categorías de mantenimiento.");
+      Alert.alert(
+        "Categorías",
+        "No se pudieron cargar las categorías de mantenimiento."
+      );
       updateComponent(opIndex, compIndex, "LoadingNotFoundCategories", false);
     }
   };
 
-  const loadNotFoundMaterialsByCategory = async (opIndex, compIndex, zeinrDescripcion) => {
+  const loadNotFoundMaterialsByCategory = async (
+    opIndex,
+    compIndex,
+    zeinrDescripcion
+  ) => {
     const intrm = FIXED_INTRM_FOR_BOM;
     const zeinr = String(zeinrDescripcion || "").trim();
 
@@ -768,6 +786,10 @@ export default function CrearOrdenMantto() {
     });
 
     const notifOriginal = String(notifNo || averiaid || "").trim();
+    const numPeople =
+      Number.isFinite(Number(peopleCount)) && Number(peopleCount) > 0
+        ? Number(peopleCount)
+        : 1; // default si no seleccionan
 
     const payload = {
       WorkOrderHeader: {
@@ -786,8 +808,14 @@ export default function CrearOrdenMantto() {
           WorkCntr: workCntrValue,
           Plant: planPlantValue,
           Description: String(op.Description || "").trim(),
+
+          // ✅ horas por persona (como tu ejemplo)
           DurationNormal: String(op.DurationNormal || "").trim(),
+
+          // ✅ número de personas asignadas (como tu ejemplo)
+          NumberOfCapacities: String(numPeople),
         };
+
         if (op.IsExternal) base.ControlKey = "X";
         return base;
       }),
@@ -820,7 +848,6 @@ export default function CrearOrdenMantto() {
       let ofertaNo = parsed?.offerNo || null;
       let ofertaMsg = parsed?.offerMessage || null;
 
-
       // ✅ 2) Fallback: sap-message
       if (!orderId) {
         const fromHeader = extractFromSapMessageHeader(res?.headers);
@@ -839,12 +866,11 @@ export default function CrearOrdenMantto() {
       }
 
       const baseMsg = orderId
-          ? `✅ Orden creada: ${orderId}
-        📌 Aviso original: ${avisoOriginal || "—"}
-        📩 Aviso SAP (retorno): ${avisoCreado || "—"}
-        💰 Oferta: ${ofertaNo ? ofertaNo : "—"}${ofertaMsg ? `\n🧾 ${ofertaMsg}` : ""}`
-          : "✅ Orden creada (no pude leer el número desde Return/sap-message).";
-
+        ? `✅ Orden creada: ${orderId}
+📌 Aviso original: ${avisoOriginal || "—"}
+📩 Aviso SAP (retorno): ${avisoCreado || "—"}
+💰 Oferta: ${ofertaNo ? ofertaNo : "—"}${ofertaMsg ? `\n🧾 ${ofertaMsg}` : ""}`
+        : "✅ Orden creada (no pude leer el número desde Return/sap-message).";
 
       Alert.alert("Orden creada", baseMsg, [
         { text: "OK", onPress: () => router.replace("/supervisor/averia") },
@@ -938,7 +964,7 @@ export default function CrearOrdenMantto() {
             />
           </View>
 
-          <Text style={styles.fieldLabel}>Centro de trabajo / técnico</Text>
+          <Text style={styles.fieldLabel}>Técnico asignado</Text>
           {loadingWorkCenters ? (
             <View style={{ paddingVertical: 8 }}>
               <ActivityIndicator color={COLORS.accent} />
@@ -1052,7 +1078,11 @@ export default function CrearOrdenMantto() {
                 label="Duración (horas)"
                 value={op.DurationNormal}
                 onChangeText={(txt) =>
-                  updateOperation(opIndex, "DurationNormal", String(txt || "").replace(/[^0-9.]/g, ""))
+                  updateOperation(
+                    opIndex,
+                    "DurationNormal",
+                    String(txt || "").replace(/[^0-9.]/g, "")
+                  )
                 }
                 placeholder="Ej. 2"
                 keyboardType="numeric"
@@ -1072,8 +1102,10 @@ export default function CrearOrdenMantto() {
                 return (
                   <View
                     key={`${opIndex}-${compIndex}-${c.ItemNumber}`}
-                    style={[styles.materialCard,
-                      compIndex > 0 && styles.materialCardSpaced,]}
+                    style={[
+                      styles.materialCard,
+                      compIndex > 0 && styles.materialCardSpaced,
+                    ]}
                   >
                     <View style={styles.opHeader}>
                       <Text style={styles.opTitle}>
@@ -1089,7 +1121,73 @@ export default function CrearOrdenMantto() {
                       )}
                     </View>
 
-                    
+                    {/* ✅ (CAMBIO) Toggle “Material no encontrado” SIEMPRE visible */}
+                    <TouchableOpacity
+                      style={styles.notFoundRow}
+                      onPress={async () => {
+                        const next = !c.NotFound;
+
+                        setOperations((prev) => {
+                          const nextOps = prev.map((o, oi) => {
+                            if (oi !== opIndex) return o;
+                            const comps = (o.Components || []).map((cc, ci) => {
+                              if (ci !== compIndex) return cc;
+
+                              if (next) {
+                                // Cambia a BOM: limpia catálogo + limpia BOM + abre selector
+                                return {
+                                  ...cc,
+                                  NotFound: true,
+                                  // limpia catálogo
+                                  Material: "",
+                                  Category: "",
+                                  Materials: [],
+                                  LoadingMaterials: false,
+                                  // limpia BOM
+                                  NotFoundCategory: "",
+                                  NotFoundMaterials: [],
+                                  MultiSelected: [],
+                                  MultiTrackingno: "02",
+                                };
+                              }
+
+                              // Regresa a catálogo: limpia BOM (y deja catálogo listo para elegir de nuevo)
+                              return {
+                                ...cc,
+                                NotFound: false,
+                                // limpia BOM
+                                NotFoundCategory: "",
+                                NotFoundMaterials: [],
+                                MultiSelected: [],
+                                MultiTrackingno: "02",
+                              };
+                            });
+                            return { ...o, Components: comps };
+                          });
+                          return normalizeOpsAndComponents(nextOps, planPlant);
+                        });
+
+                        if (next) {
+                          await openMultiSelect(opIndex, compIndex, true);
+                        }
+                      }}
+                      activeOpacity={0.85}
+                    >
+                      <View style={[styles.checkbox, c.NotFound && styles.checkboxChecked]}>
+                        {c.NotFound && <Ionicons name="checkmark" size={14} color="#fff" />}
+                      </View>
+
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.notFoundTitle}>
+                          {c.NotFound ? "Material BOM activo" : "¿No encuentras el material?"}
+                        </Text>
+                        <Text style={styles.notFoundSubtitle}>
+                          {c.NotFound
+                            ? "Toca aquí para volver a catálogo"
+                            : "Buscar material desde BOM por categoría"}
+                        </Text>
+                      </View>
+                    </TouchableOpacity>
 
                     {/* ✅ Si NO es NotFound: muestra categorías + material normal */}
                     {!c.NotFound && (
@@ -1104,7 +1202,9 @@ export default function CrearOrdenMantto() {
                                   <TouchableOpacity
                                     key={cat}
                                     style={[styles.categoryChip, active && styles.categoryChipActive]}
-                                    onPress={() => handleCategoryChangeForComponent(opIndex, compIndex, cat)}
+                                    onPress={() =>
+                                      handleCategoryChangeForComponent(opIndex, compIndex, cat)
+                                    }
                                     activeOpacity={0.8}
                                   >
                                     <Text
@@ -1133,92 +1233,47 @@ export default function CrearOrdenMantto() {
                           <SelectMaterial
                             items={c.Materials || []}
                             value={c.Material}
-                            onSelect={(materialCode) => updateComponent(opIndex, compIndex, "Material", materialCode)}
+                            onSelect={(materialCode) =>
+                              updateComponent(opIndex, compIndex, "Material", materialCode)
+                            }
                             disabled={!c.Category || c.LoadingMaterials}
                           />
                         </View>
-                        
-
-                        {/* 🔹 Separador visual */}
-                        <View style={styles.softDivider} />
-
-                        {/* ✅ Opción alternativa: Material no encontrado */}
-                        <TouchableOpacity
-                          style={styles.notFoundRow}
-                          onPress={async () => {
-                            const next = !c.NotFound;
-
-                            setOperations((prev) => {
-                              const nextOps = prev.map((o, oi) => {
-                                if (oi !== opIndex) return o;
-                                const comps = (o.Components || []).map((cc, ci) => {
-                                  if (ci !== compIndex) return cc;
-
-                                  if (next) {
-                                    return {
-                                      ...cc,
-                                      NotFound: true,
-                                      Material: "",
-                                      Category: "",
-                                      Materials: [],
-                                      LoadingMaterials: false,
-                                      NotFoundCategory: "",
-                                      NotFoundMaterials: [],
-                                      MultiSelected: [],
-                                      MultiTrackingno: "02",
-                                    };
-                                  }
-
-                                  return {
-                                    ...cc,
-                                    NotFound: false,
-                                    NotFoundCategory: "",
-                                    NotFoundMaterials: [],
-                                    MultiSelected: [],
-                                    MultiTrackingno: "02",
-                                  };
-                                });
-                                return { ...o, Components: comps };
-                              });
-                              return normalizeOpsAndComponents(nextOps, planPlant);
-                            });
-
-                            if (next) {
-                              await openMultiSelect(opIndex, compIndex, true);
-                            }
-                          }}
-                          activeOpacity={0.85}
-                        >
-                          <View style={[styles.checkbox, c.NotFound && styles.checkboxChecked]}>
-                            {c.NotFound && <Ionicons name="checkmark" size={14} color="#fff" />}
-                          </View>
-                          <View style={{ flex: 1 }}>
-                            <Text style={styles.notFoundTitle}>¿No encuentras el material?</Text>
-                            <Text style={styles.notFoundSubtitle}>
-                              Buscar material desde BOM por categoría
-                            </Text>
-                          </View>
-                        </TouchableOpacity>
-
 
                         <Text style={styles.fieldLabel}>Tipo de material</Text>
                         <View style={styles.toggleRow}>
                           <TouchableOpacity
-                            style={[styles.toggleChip, c.Trackingno === "03" && styles.toggleChipActive]}
+                            style={[
+                              styles.toggleChip,
+                              c.Trackingno === "03" && styles.toggleChipActive,
+                            ]}
                             onPress={() => updateComponent(opIndex, compIndex, "Trackingno", "03")}
                             activeOpacity={0.85}
                           >
-                            <Text style={[styles.toggleText, c.Trackingno === "03" && styles.toggleTextActive]}>
+                            <Text
+                              style={[
+                                styles.toggleText,
+                                c.Trackingno === "03" && styles.toggleTextActive,
+                              ]}
+                            >
                               Directo
                             </Text>
                           </TouchableOpacity>
 
                           <TouchableOpacity
-                            style={[styles.toggleChip, c.Trackingno === "02" && styles.toggleChipActive]}
+                            style={[
+                              styles.toggleChip,
+                              c.Trackingno === "02" && styles.toggleChipActive,
+                            ]}
                             onPress={() => updateComponent(opIndex, compIndex, "Trackingno", "02")}
                             activeOpacity={0.85}
                           >
-                            <Text style={[styles.toggleText, c.Trackingno === "02" && styles.toggleTextActive]}>
+                            <Text
+                              style={[
+                                styles.toggleText,
+                                c.Trackingno === "02" && styles.toggleTextActive,
+                              ]}
+                            >
                               Préstamo / Falla
                             </Text>
                           </TouchableOpacity>
@@ -1241,7 +1296,16 @@ export default function CrearOrdenMantto() {
                         </TouchableOpacity>
 
                         {!!notFoundSelected && (
-                          <View style={{ marginTop: 8, padding: 10, borderWidth: 1, borderColor: COLORS.border, borderRadius: 12, backgroundColor: "#FAFBFF" }}>
+                          <View
+                            style={{
+                              marginTop: 8,
+                              padding: 10,
+                              borderWidth: 1,
+                              borderColor: COLORS.border,
+                              borderRadius: 12,
+                              backgroundColor: "#FAFBFF",
+                            }}
+                          >
                             <Text style={{ fontSize: 12, color: COLORS.muted, marginBottom: 4 }}>
                               Seleccionado:
                             </Text>
@@ -1254,31 +1318,56 @@ export default function CrearOrdenMantto() {
                           </View>
                         )}
 
-                        <Text style={[styles.fieldLabel, { marginTop: 10 }]}>Tipo para “no encontrado”</Text>
+                        <Text style={[styles.fieldLabel, { marginTop: 10 }]}>
+                          Tipo para “no encontrado”
+                        </Text>
                         <View style={styles.toggleRow}>
                           <TouchableOpacity
-                            style={[styles.toggleChip, c.MultiTrackingno === "02" && styles.toggleChipActive]}
+                            style={[
+                              styles.toggleChip,
+                              c.MultiTrackingno === "02" && styles.toggleChipActive,
+                            ]}
                             onPress={() => updateComponent(opIndex, compIndex, "MultiTrackingno", "02")}
                             activeOpacity={0.85}
                           >
-                            <Text style={[styles.toggleText, c.MultiTrackingno === "02" && styles.toggleTextActive]}>
+                            <Text
+                              style={[
+                                styles.toggleText,
+                                c.MultiTrackingno === "02" && styles.toggleTextActive,
+                              ]}
+                            >
                               Préstamo
                             </Text>
                           </TouchableOpacity>
 
                           <TouchableOpacity
-                            style={[styles.toggleChip, c.MultiTrackingno === "01" && styles.toggleChipActive]}
+                            style={[
+                              styles.toggleChip,
+                              c.MultiTrackingno === "01" && styles.toggleChipActive,
+                            ]}
                             onPress={() => updateComponent(opIndex, compIndex, "MultiTrackingno", "01")}
                             activeOpacity={0.85}
                           >
-                            <Text style={[styles.toggleText, c.MultiTrackingno === "01" && styles.toggleTextActive]}>
+                            <Text
+                              style={[
+                                styles.toggleText,
+                                c.MultiTrackingno === "01" && styles.toggleTextActive,
+                              ]}
+                            >
                               Oferta
                             </Text>
                           </TouchableOpacity>
                         </View>
 
                         <TouchableOpacity
-                          style={[styles.smallBtn, { alignSelf: "flex-start", marginBottom: 8, backgroundColor: COLORS.cardBg }]}
+                          style={[
+                            styles.smallBtn,
+                            {
+                              alignSelf: "flex-start",
+                              marginBottom: 8,
+                              backgroundColor: COLORS.cardBg,
+                            },
+                          ]}
                           onPress={() => updateComponent(opIndex, compIndex, "MultiSelected", [])}
                         >
                           <Text style={styles.smallBtnText}>Quitar selección</Text>
@@ -1290,7 +1379,12 @@ export default function CrearOrdenMantto() {
                       label="Cantidad requerida"
                       value={c.RequirementQuantity}
                       onChangeText={(txt) =>
-                        updateComponent(opIndex, compIndex, "RequirementQuantity", String(txt || "").replace(/[^0-9.]/g, ""))
+                        updateComponent(
+                          opIndex,
+                          compIndex,
+                          "RequirementQuantity",
+                          String(txt || "").replace(/[^0-9.]/g, "")
+                        )
                       }
                       placeholder="Ej. 2"
                       keyboardType="numeric"
@@ -1361,7 +1455,12 @@ export default function CrearOrdenMantto() {
       </ScrollView>
 
       {/* ===== Modal MultiSelect (NotFound) ===== */}
-      <Modal visible={multiVisible} transparent animationType="fade" onRequestClose={() => setMultiVisible(false)}>
+      <Modal
+        visible={multiVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setMultiVisible(false)}
+      >
         <View style={styles.modalBackdrop}>
           <View style={styles.modalCard}>
             <View style={styles.modalHeader}>
@@ -1422,7 +1521,9 @@ export default function CrearOrdenMantto() {
 
                   const filteredCats = !q
                     ? cats
-                    : cats.filter((x) => `${x.Texto || ""} ${x.Zeinr || ""}`.toLowerCase().includes(q));
+                    : cats.filter((x) =>
+                        `${x.Texto || ""} ${x.Zeinr || ""}`.toLowerCase().includes(q)
+                      );
 
                   if (!filteredCats.length) {
                     return (
@@ -1448,7 +1549,9 @@ export default function CrearOrdenMantto() {
                       <TouchableOpacity
                         key={key}
                         style={styles.workerRow}
-                        onPress={() => loadNotFoundMaterialsByCategory(multiOpIndex, multiCompIndex, cat.Zeinr)}
+                        onPress={() =>
+                          loadNotFoundMaterialsByCategory(multiOpIndex, multiCompIndex, cat.Zeinr)
+                        }
                         activeOpacity={0.7}
                       >
                         <View style={[styles.checkbox, { opacity: 0.6 }]} />
@@ -1489,7 +1592,12 @@ export default function CrearOrdenMantto() {
                                 if (oi !== multiOpIndex) return o;
                                 const comps = (o.Components || []).map((cc, ci) => {
                                   if (ci !== multiCompIndex) return cc;
-                                  return { ...cc, NotFoundCategory: "", NotFoundMaterials: [], MultiSelected: [] };
+                                  return {
+                                    ...cc,
+                                    NotFoundCategory: "",
+                                    NotFoundMaterials: [],
+                                    MultiSelected: [],
+                                  };
                                 });
                                 return { ...o, Components: comps };
                               });
@@ -1501,7 +1609,10 @@ export default function CrearOrdenMantto() {
                         </TouchableOpacity>
 
                         <TouchableOpacity
-                          style={[styles.smallBtn, { backgroundColor: COLORS.accent, borderColor: COLORS.accent }]}
+                          style={[
+                            styles.smallBtn,
+                            { backgroundColor: COLORS.accent, borderColor: COLORS.accent },
+                          ]}
                           onPress={() => loadNotFoundMaterialsByCategory(multiOpIndex, multiCompIndex, zeinr)}
                         >
                           <Text style={[styles.smallBtnText, { color: "#fff" }]}>Reintentar</Text>
@@ -1513,7 +1624,9 @@ export default function CrearOrdenMantto() {
 
                 const filtered = !q
                   ? list
-                  : list.filter((m) => `${m.Ojtxp || ""} ${m.Idnrk || ""}`.toLowerCase().includes(q));
+                  : list.filter((m) =>
+                      `${m.Ojtxp || ""} ${m.Idnrk || ""}`.toLowerCase().includes(q)
+                    );
 
                 const selected0 = (c.MultiSelected || [])[0]?.Material || null;
 
@@ -1581,7 +1694,10 @@ export default function CrearOrdenMantto() {
               </TouchableOpacity>
 
               <TouchableOpacity
-                style={[styles.smallBtn, { backgroundColor: COLORS.accent, borderColor: COLORS.accent }]}
+                style={[
+                  styles.smallBtn,
+                  { backgroundColor: COLORS.accent, borderColor: COLORS.accent },
+                ]}
                 onPress={() => setMultiVisible(false)}
               >
                 <Text style={[styles.smallBtnText, { color: "#fff" }]}>Listo</Text>
@@ -1621,7 +1737,14 @@ export default function CrearOrdenMantto() {
                     }}
                   />
 
-                  <View style={{ flexDirection: "row", justifyContent: "flex-end", gap: 10, marginTop: 10 }}>
+                  <View
+                    style={{
+                      flexDirection: "row",
+                      justifyContent: "flex-end",
+                      gap: 10,
+                      marginTop: 10,
+                    }}
+                  >
                     <TouchableOpacity
                       style={[styles.smallBtn, { backgroundColor: COLORS.cardBg }]}
                       onPress={() => setDtPickerVisible(false)}
@@ -1630,7 +1753,10 @@ export default function CrearOrdenMantto() {
                     </TouchableOpacity>
 
                     <TouchableOpacity
-                      style={[styles.smallBtn, { backgroundColor: COLORS.accent, borderColor: COLORS.accent }]}
+                      style={[
+                        styles.smallBtn,
+                        { backgroundColor: COLORS.accent, borderColor: COLORS.accent },
+                      ]}
                       onPress={() => {
                         applyPickedDateTime(dtPickerTemp);
                         setDtPickerVisible(false);
@@ -1806,7 +1932,9 @@ const SelectWorkCenter = ({ items, selected, onSelect }) => {
 
               {!filteredItems.length && (
                 <View style={{ paddingHorizontal: 14, paddingVertical: 10 }}>
-                  <Text style={{ color: COLORS.muted, fontSize: 12 }}>No hay resultados con esa búsqueda.</Text>
+                  <Text style={{ color: COLORS.muted, fontSize: 12 }}>
+                    No hay resultados con esa búsqueda.
+                  </Text>
                 </View>
               )}
             </ScrollView>
@@ -1905,10 +2033,7 @@ const SelectMaterial = ({ items, value, onSelect, disabled }) => {
             </ScrollView>
 
             <View style={styles.modalFooterRow}>
-              <TouchableOpacity
-                style={[styles.smallBtn, { backgroundColor: COLORS.cardBg }]}
-                onPress={() => onSelect("")}
-              >
+              <TouchableOpacity style={[styles.smallBtn, { backgroundColor: COLORS.cardBg }]} onPress={() => onSelect("")}>
                 <Text style={styles.smallBtnText}>Limpiar</Text>
               </TouchableOpacity>
 
@@ -2097,7 +2222,7 @@ const styles = StyleSheet.create({
     borderColor: COLORS.border,
     borderRadius: 12,
     padding: 10,
-    marginBottom: 18, 
+    marginBottom: 18,
     backgroundColor: "#FAFBFF",
   },
 
@@ -2226,7 +2351,8 @@ const styles = StyleSheet.create({
     backgroundColor: "#fff",
   },
   btnMiniText: { color: COLORS.accent, fontWeight: "900" },
-    materialCard: {
+
+  materialCard: {
     borderWidth: 1,
     borderColor: COLORS.border,
     borderRadius: 14,
@@ -2237,42 +2363,42 @@ const styles = StyleSheet.create({
   materialCardSpaced: {
     marginTop: 14,
   },
+
   operationDivider: {
-  height: 1,
-  backgroundColor: COLORS.border,
-  marginVertical: 12,
-  opacity: 0.6,
-},
+    height: 1,
+    backgroundColor: COLORS.border,
+    marginVertical: 12,
+    opacity: 0.6,
+  },
 
-softDivider: {
-  height: 1,
-  backgroundColor: COLORS.border,
-  marginVertical: 10,
-  opacity: 0.5,
-},
+  softDivider: {
+    height: 1,
+    backgroundColor: COLORS.border,
+    marginVertical: 10,
+    opacity: 0.5,
+  },
 
-notFoundRow: {
-  flexDirection: "row",
-  alignItems: "flex-start",
-  gap: 10,
-  padding: 12,
-  borderRadius: 14,
-  borderWidth: 1,
-  borderColor: COLORS.border,
-  backgroundColor: "#FAFBFF",
-  marginBottom: 12,
-},
+  notFoundRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 10,
+    padding: 12,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    backgroundColor: "#FAFBFF",
+    marginBottom: 12,
+  },
 
-notFoundTitle: {
-  fontSize: 13,
-  fontWeight: "800",
-  color: COLORS.title,
-},
+  notFoundTitle: {
+    fontSize: 13,
+    fontWeight: "800",
+    color: COLORS.title,
+  },
 
-notFoundSubtitle: {
-  fontSize: 11,
-  color: COLORS.muted,
-  marginTop: 2,
-},
-
+  notFoundSubtitle: {
+    fontSize: 11,
+    color: COLORS.muted,
+    marginTop: 2,
+  },
 });
