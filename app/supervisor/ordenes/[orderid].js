@@ -30,7 +30,7 @@ const COLORS = {
 };
 
 /* ======================
-   Helpers SAP Date
+   ✅ Helpers SAP Date (UTC-safe)
    ====================== */
 const sapDateToMs = (value) => {
   if (value === null || value === undefined) return null;
@@ -38,20 +38,40 @@ const sapDateToMs = (value) => {
   if (typeof value === "number") return value;
 
   const s = String(value);
-  const m = s.match(/\/Date\((\-?\d+)\)\//);
-  if (m) return Number(m[1]);
+
+  // /Date(1768176000000)/  o  /Date(1768176000000-0600)/
+  const m = s.match(/\/Date\((\-?\d+)([+-]\d{4})?\)\//);
+  if (m) {
+    const ms = Number(m[1]);
+    const off = m[2]; // ej "-0600"
+    if (!off) return ms;
+
+    const sign = off.startsWith("-") ? -1 : 1;
+    const hh = parseInt(off.slice(1, 3), 10);
+    const mm = parseInt(off.slice(3, 5), 10);
+    const offsetMinutes = sign * (hh * 60 + mm);
+
+    // Ajusta a UTC real
+    return ms - offsetMinutes * 60 * 1000;
+  }
 
   // por si llega ISO string
   const d = new Date(s);
   return Number.isNaN(d.getTime()) ? null : d.getTime();
 };
 
-const formatDate = (value) => {
+// ✅ Formato estable (NO depende de timezone del dispositivo)
+const formatDateUTC = (value) => {
   const ms = sapDateToMs(value);
   if (ms === null) return "—";
+
   const d = new Date(ms);
   if (Number.isNaN(d.getTime())) return "—";
-  return d.toLocaleDateString();
+
+  const dd = String(d.getUTCDate()).padStart(2, "0");
+  const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const yyyy = d.getUTCFullYear();
+  return `${dd}/${mm}/${yyyy}`;
 };
 
 /* =========================
@@ -110,7 +130,6 @@ function normalizeDetalle(det) {
 
   const userstatus = det.userstatus ?? det.Userstatus ?? "";
 
-  // ✅ aquí estaba el problema: cubrir todas las llaves reales
   const startRaw =
     det.start_date ??
     det.startdate ??
@@ -136,7 +155,7 @@ function normalizeDetalle(det) {
     nombre_orden: String(nombre_orden || "—"),
     userstatus: String(userstatus || ""),
 
-    // ✅ guardar normalizado a ms para render confiable
+    // ✅ guardar ya normalizado a ms (UTC-safe)
     start_date: sapDateToMs(startRaw),
     finish_date: sapDateToMs(finishRaw),
   };
@@ -274,17 +293,17 @@ export default function DetalleOrdenSupervisor() {
             <Text style={styles.rowValue}>{data.equipment || "—"}</Text>
           </View>
 
-          {/* ✅ Ya se pintan porque start_date/finish_date están normalizados a ms */}
+          {/* ✅ FECHAS (UTC estable) */}
           <View style={styles.row}>
             <Ionicons name="calendar-outline" size={16} color={COLORS.muted} />
             <Text style={styles.rowLabel}>Inicio:</Text>
-            <Text style={styles.rowValue}>{formatDate(data.start_date)}</Text>
+            <Text style={styles.rowValue}>{formatDateUTC(data.start_date)}</Text>
           </View>
 
           <View style={styles.row}>
             <Ionicons name="calendar-outline" size={16} color={COLORS.muted} />
             <Text style={styles.rowLabel}>Fin:</Text>
-            <Text style={styles.rowValue}>{formatDate(data.finish_date)}</Text>
+            <Text style={styles.rowValue}>{formatDateUTC(data.finish_date)}</Text>
           </View>
         </View>
 
@@ -339,11 +358,7 @@ export default function DetalleOrdenSupervisor() {
                       </View>
                     </View>
 
-                    <Ionicons
-                      name={isOpen ? "chevron-up" : "chevron-down"}
-                      size={18}
-                      color={COLORS.muted}
-                    />
+                    <Ionicons name={isOpen ? "chevron-up" : "chevron-down"} size={18} color={COLORS.muted} />
                   </TouchableOpacity>
 
                   {isOpen && (

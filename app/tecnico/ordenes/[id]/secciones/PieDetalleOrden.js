@@ -58,13 +58,13 @@ export default function PieDetalleOrden({
             onPress={onIrManttoElevador}
             styles={styles}
           />
-          <TarjetaFormulario
+          {/*<TarjetaFormulario
             title="Mantto escalera"
             icon="build-outline"
             color="#4C9FEF"
             onPress={onIrManttoEscalera}
             styles={styles}
-          />
+          />*/}
         </View>
       </View>
 

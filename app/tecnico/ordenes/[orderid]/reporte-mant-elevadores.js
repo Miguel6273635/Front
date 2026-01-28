@@ -15,13 +15,16 @@ import {
 } from 'react-native';
 import Header from '../../../../src/components/Header';
 import { useLocalSearchParams, router } from 'expo-router';
-import { fetchDatosMantenimiento, guardarMantElevadores } from '../../../../src/services/mantenimiento';
+
 import FloorSelectModal from '../../../../src/components/FloorSelectModal';
+import { generarYCompartirPdf } from "../../../../src/services/pdf";
+import { subirPdfMantElevadoresASap } from "../../../../src/services/mantenimientoPdfSap";
+import { fetchDatosMantenimiento, guardarMantElevadores } from '../../../../src/services/mantenimiento';
+
 
 // ✅ PDF / Firma
 import Signature from 'react-native-signature-canvas';
-import * as Print from 'expo-print';
-import * as Sharing from 'expo-sharing';
+
 import { Asset } from 'expo-asset';
 import * as FileSystem from 'expo-file-system/legacy';
 
@@ -529,16 +532,7 @@ async function buildPdfHtmlElevadores(payload) {
 </html>`;
 }
 
-async function generarYCompartirPdf(html) {
-  const { uri } = await Print.printToFileAsync({ html });
-  const canShare = await Sharing.isAvailableAsync();
-  if (canShare) {
-    await Sharing.shareAsync(uri, { mimeType: 'application/pdf', UTI: 'com.adobe.pdf' });
-  } else {
-    Alert.alert('PDF generado', uri);
-  }
-  return uri;
-}
+
 
 // ================== Pantalla ==================
 export default function MantElevadores() {
@@ -632,53 +626,65 @@ export default function MantElevadores() {
   };
 
   const onGuardar = async () => {
-    if (!datos?.Orderid) {
-      Alert.alert('Error', 'No hay Orderid para guardar.');
-      return;
-    }
+  if (!datos?.Orderid) {
+    Alert.alert('Error', 'No hay Orderid para guardar.');
+    return;
+  }
 
-    const d = new Date();
-    const horaSalida = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  const d = new Date();
+  const horaSalida = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 
-    const payload = {
-      orderid: datos.Orderid,
-      equipment: datos.equipment,
-      tecnico: datos.tecnico_nombre,
-      cliente: `${datos.Name1 ?? ''} ${datos.Name2 ?? ''}`.trim(),
-      fecha,
-      hora_entrada: horaEntrada,
-      hora_salida: horaSalida,
-      pisos,
-      bloques: { tablaTop: top, subconjuntos: subsel },
-      niveles: niveles ? Number(niveles) : null,
-      aviso_cliente: avisoCliente,
-      detalle_trabajo: detalleTrabajo,
-      notas,
-      refacciones: refacciones.filter(r => r.cantidad || r.descripcion || r.codigo),
-    };
-
-    try {
-      // 1) Guarda en backend
-      const res = await guardarMantElevadores(payload);
-
-      // 2) Genera PDF (plantilla)
-      const html = await buildPdfHtmlElevadores({
-        ...payload,
-        firmaClienteBase64,
-        nombreClienteFirma,
-        cargoClienteFirma,
-      });
-
-      await generarYCompartirPdf(html);
-
-      Alert.alert('Listo', `Reporte (Elevadores) guardado (id: ${res?.id ?? '—'}).`, [
-        { text: 'OK', onPress: () => router.back() },
-      ]);
-    } catch (e) {
-      console.error(e);
-      Alert.alert('Error', 'No se pudo guardar / generar el PDF.');
-    }
+  const payload = {
+    orderid: datos.Orderid,
+    equipment: datos.equipment,
+    tecnico: datos.tecnico_nombre,
+    cliente: `${datos.Name1 ?? ''} ${datos.Name2 ?? ''}`.trim(),
+    fecha,
+    hora_entrada: horaEntrada,
+    hora_salida: horaSalida,
+    pisos,
+    bloques: { tablaTop: top, subconjuntos: subsel },
+    niveles: niveles ? Number(niveles) : null,
+    aviso_cliente: avisoCliente,
+    detalle_trabajo: detalleTrabajo,
+    notas,
+    refacciones: refacciones.filter(r => r.cantidad || r.descripcion || r.codigo),
   };
+
+  try {
+  
+    // 🟢 2) Construye el HTML del PDF
+    const html = await buildPdfHtmlElevadores({
+      ...payload,
+      firmaClienteBase64,
+      nombreClienteFirma,
+      cargoClienteFirma,
+    });
+
+    // 🟢 3) Genera el PDF y abre para ver/guardar/compartir
+    const pdfUri = await generarYCompartirPdf(
+      html,
+      "mantenimiento_elevadores.pdf"
+    );
+
+    // 🟢 4) Envía el PDF a SAP como adjunto
+    await subirPdfMantElevadoresASap({
+      orderid: datos.Orderid,
+      pdfUri,
+    });
+
+    Alert.alert(
+      "Listo",
+      `PDF generado, visible para el usuario y enviado a SAP (orden ${datos.Orderid}).`,
+      [{ text: "OK", onPress: () => router.back() }]
+    );
+
+  } catch (e) {
+    console.error(e);
+    Alert.alert('Error', 'No se pudo guardar / generar el PDF / enviar a SAP.');
+  }
+};
+
 
   if (loading && !datos?.Orderid) return <View style={styles.center}><ActivityIndicator /></View>;
   if (!datos) return <View style={styles.center}><Text>No hay datos.</Text></View>;

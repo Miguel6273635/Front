@@ -47,19 +47,24 @@ const COLORS = {
 };
 
 /* ====================== Endpoints (ajusta si tu SAP usa otro) ====================== */
-// ✅ Reprogramación (fechas)
 const RESCHEDULE_PATH =
   "/api/odata/ZCS_RESCHEDULE_WORKORDER_SRV/WorkOrderHeaderSet";
 
-// ✅ Cambio de estatus de usuario (poner 0012)
-// OJO: aquí NO pegaste la URL exacta; te dejo una default típica.
-// Si tu backend/BTP usa otra ruta, cambia SOLO esta constante.
 const CHANGE_STATUS_PATH =
   "/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet";
 
 /* ====================== Helpers ====================== */
 const pad2 = (n) => String(n).padStart(2, "0");
+
+// Para fechas que tú construyes (calendario/rangos) en local
 const toYMD = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+
+// ✅ Para fechas que vienen en /Date(ms)/ desde SAP: conviértelas a YMD usando UTC
+const toYMD_UTC_FROM_MS = (ms) => {
+  const d = new Date(ms);
+  return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())}`;
+};
+
 const safeStr = (v) => (v == null ? "" : String(v));
 
 function ymdToSAP(ymd) {
@@ -68,20 +73,20 @@ function ymdToSAP(ymd) {
   return `${y}${m}${d}`;
 }
 
+// ✅ Para comparar rangos sin “-1 día” por zona/DST: crea a mediodía local
 function ymdToDate(ymd) {
   const [y, m, d] = ymd.split("-").map(Number);
-  return new Date(y, m - 1, d);
+  return new Date(y, m - 1, d, 12, 0, 0, 0);
 }
 
-// /Date(1768435200000)/ -> YYYY-MM-DD
+// ✅ /Date(1768435200000)/ -> YYYY-MM-DD (sin “-1 día”)
 function odataDateToYMD(value) {
   const s = safeStr(value);
   const match = s.match(/\/Date\((\d+)\)\//);
   if (!match) return "";
   const ms = Number(match[1]);
   if (!Number.isFinite(ms)) return "";
-  const d = new Date(ms);
-  return toYMD(d);
+  return toYMD_UTC_FROM_MS(ms);
 }
 
 /**
@@ -118,7 +123,6 @@ function buildODataRangeFilter({ startYmd, endYmd, email }) {
   return `StartDate ge datetime'${startYmd}T00:00:00' and FinishDate le datetime'${endYmd}T23:59:59' and Userstatus eq '${email}'`;
 }
 
-
 function buildRangeMarkedDates(startYmd, endYmd) {
   const marked = {};
   if (!startYmd) return marked;
@@ -153,8 +157,6 @@ function buildRangeMarkedDates(startYmd, endYmd) {
 export default function NoMantenimiento() {
   const { token, user } = useAuth();
 
-  // ⚠️ OJO: en tu SAP, "Supervisor" debe ser un valor válido según la validación del servicio.
-  // Si el correo real falla, aquí podrías mapear correo -> supervisorSAP válido.
   const supervisorEmail =
     safeStr(user?.email) ||
     safeStr(user?.correo) ||
@@ -204,7 +206,7 @@ export default function NoMantenimiento() {
     setSelectedIds(new Set());
   }
 
-  // ✅ FETCH desde NotificationHeaderSet (igual que la otra vista), pero filtrando SOLO no-mant (0001..0011)
+  // ✅ FETCH desde WorkOrderHeaderSet (filtra SOLO no-mant)
   const fetchOrders = useCallback(
     async ({ year, month, dayYmd }) => {
       try {
@@ -224,7 +226,6 @@ export default function NoMantenimiento() {
           }
         );
 
-
         const results = Array.isArray(res.data?.d?.results) ? res.data.d.results : [];
 
         const mapped = results
@@ -233,17 +234,13 @@ export default function NoMantenimiento() {
               x.Orderid || x.OrderId || x.OrderID || x.NotifNo || x.Notification || x.id
             );
 
-            const startFromWorkOrder = odataDateToYMD(x.StartDate);
-            const finishFromWorkOrder = odataDateToYMD(x.FinishDate);
+            const finalStart = safeStr(x.StartDate).includes("/Date(")
+              ? odataDateToYMD(x.StartDate)
+              : safeStr(x.StartDate || "");
 
-            const notifDate =
-              safeStr(x.NotifDate).includes("/Date(")
-                ? odataDateToYMD(x.NotifDate)
-                : safeStr(x.NotifDate || "");
-
-            const finalStart = odataDateToYMD(x.StartDate);
-            const finalFinish = odataDateToYMD(x.FinishDate) || finalStart;
-
+            const finalFinish = safeStr(x.FinishDate).includes("/Date(")
+              ? odataDateToYMD(x.FinishDate)
+              : safeStr(x.FinishDate || "") || finalStart;
 
             const userstatusCodes = safeStr(x.Userstatus || x.UserStatus || "");
 
@@ -252,17 +249,17 @@ export default function NoMantenimiento() {
               equipo: safeStr(x.Equipment || x.Equipo || ""),
               shortText: safeStr(x.ShortText || x.Description || x.Descripcion || ""),
               startDate: finalStart,
-              finishDate: finalFinish,
+              finishDate: finalFinish || finalStart,
               userstatusCodes,
             };
           })
           .filter((o) => o.id)
-          .filter((o) => isNoMantenimiento(o.userstatusCodes)); // ✅ AQUÍ está el cambio clave
+          .filter((o) => isNoMantenimiento(o.userstatusCodes));
 
         setOrders(mapped);
         clearSelection();
       } catch (error) {
-        console.error("Error al cargar NO MANT (NotificationHeaderSet):", error?.response?.data || error?.message);
+        console.error("Error al cargar NO MANT:", error?.response?.data || error?.message || error);
         Alert.alert("Error", "No se pudieron cargar las órdenes NO mantenimiento.");
         setOrders([]);
         clearSelection();
@@ -359,31 +356,29 @@ export default function NoMantenimiento() {
 
   // ===== Cambiar Userstatus a 0012 (Reprogramación) =====
   async function postUserStatus0012(orderId) {
-  const payload = {
-    OrderId: String(orderId),
-    WorkOrderHeader: { Orderid: String(orderId) },
-    WorkOrderUserStatusSet: [
-      { UserStText: "0012", Langu: "ES", Inactive: "" },
-    ],
-    Return: [],
-  };
+    const payload = {
+      OrderId: String(orderId),
+      WorkOrderHeader: { Orderid: String(orderId) },
+      WorkOrderUserStatusSet: [{ UserStText: "0012", Langu: "ES", Inactive: "" }],
+      Return: [],
+    };
 
-  console.log("[NO_MANT][STATUS 0012] url:", CHANGE_STATUS_PATH);
-  console.log("[NO_MANT][STATUS 0012] payload:", JSON.stringify(payload, null, 2));
+    console.log("[NO_MANT][STATUS 0012] url:", CHANGE_STATUS_PATH);
+    console.log("[NO_MANT][STATUS 0012] payload:", JSON.stringify(payload, null, 2));
 
-  return api.post(CHANGE_STATUS_PATH, payload, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: "application/json",
-      "Content-Type": "application/json",
-    },
-  });
-}
-
+    return api.post(CHANGE_STATUS_PATH, payload, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+    });
+  }
 
   // ✅ POST reprogramación (rango) + luego poner 0012
   async function saveEdit() {
     if (!editing) return;
+
     if (!tempStart || !tempEnd) {
       Alert.alert("Faltan fechas", "Selecciona fecha inicio y fecha fin.");
       return;
@@ -422,20 +417,18 @@ export default function NoMantenimiento() {
 
       console.log("[NO_MANT][RESCHEDULE OK] response:", res1?.data);
 
-      // 2) Poner Userstatus 0012 (Reprogramación)
+      // 2) Poner Userstatus 0012
       try {
         const res2 = await postUserStatus0012(editing.id);
         console.log("[NO_MANT][STATUS 0012 OK] response:", res2?.data);
       } catch (e2) {
-        console.error("[NO_MANT][STATUS 0012 ERROR]", e2?.response?.data || e2?.message);
-        // No bloqueamos si ya reprogramó, pero avisamos.
+        console.error("[NO_MANT][STATUS 0012 ERROR]", e2?.response?.data || e2?.message || e2);
         Alert.alert(
           "Aviso",
           "Las fechas se reprogramaron, pero NO se pudo poner el estatus 0012. Revisa la ruta/servicio de cambio de estatus."
         );
       }
 
-      // UI local
       setOrders((prev) =>
         prev.map((o) => (o.id === editing.id ? { ...o, startDate: tempStart, finishDate: tempEnd } : o))
       );
@@ -443,14 +436,14 @@ export default function NoMantenimiento() {
       closeEdit();
       Alert.alert("Reprogramación lista", `Orden #${editing.id}\nInicio: ${tempStart}\nFin: ${tempEnd}`);
     } catch (error) {
-      console.error("[NO_MANT][RESCHEDULE ERROR]", error?.response?.data || error?.message);
+      console.error("[NO_MANT][RESCHEDULE ERROR]", error?.response?.data || error?.message || error);
       Alert.alert("Error", "No se pudo reprogramar en SAP (revisa logs del backend/BTP).");
     } finally {
       setSaving(false);
     }
   }
 
-  // ===== VARIAS órdenes (rango) =====
+  // ===== BULK =====
   function openBulk() {
     if (!bulkMode) return;
     const todayYmd = toYMD(new Date());
@@ -487,6 +480,7 @@ export default function NoMantenimiento() {
 
   async function saveBulk() {
     if (!bulkMode) return;
+
     if (!bulkStart || !bulkEnd) {
       Alert.alert("Faltan fechas", "Selecciona fecha inicio y fecha fin.");
       return;
@@ -512,7 +506,7 @@ export default function NoMantenimiento() {
 
       console.log("[NO_MANT][RESCHEDULE BULK] payload:", JSON.stringify(payload, null, 2));
 
-      // 1) Reprogramar fechas (bulk)
+      // 1) Reprogramar fechas
       const res1 = await api.post(RESCHEDULE_PATH, payload, {
         headers: {
           Authorization: `Bearer ${token}`,
@@ -523,23 +517,18 @@ export default function NoMantenimiento() {
 
       console.log("[NO_MANT][RESCHEDULE BULK OK] response:", res1?.data);
 
-      // 2) Poner 0012 a todas (en paralelo, sin bloquear si alguna falla)
-      const statusResults = await Promise.allSettled(
-        selectedIdsArray.map((id) => postUserStatus0012(id))
-      );
-
+      // 2) Poner 0012 a todas (sin bloquear si alguna falla)
+      const statusResults = await Promise.allSettled(selectedIdsArray.map((id) => postUserStatus0012(id)));
       const okCount = statusResults.filter((r) => r.status === "fulfilled").length;
       const failCount = statusResults.length - okCount;
 
       if (failCount > 0) {
-        console.warn("[NO_MANT][STATUS 0012] fallaron:", failCount);
         Alert.alert(
           "Aviso",
-          `Fechas reprogramadas. Estatus 0012 aplicado a ${okCount}/${statusResults.length} órdenes. Revisa servicio/ruta de estatus si necesitas 100%.`
+          `Fechas reprogramadas. Estatus 0012 aplicado a ${okCount}/${statusResults.length} órdenes.`
         );
       }
 
-      // UI local
       setOrders((prev) =>
         prev.map((o) => (selectedIds.has(o.id) ? { ...o, startDate: bulkStart, finishDate: bulkEnd } : o))
       );
@@ -550,7 +539,7 @@ export default function NoMantenimiento() {
 
       Alert.alert("Reprogramación lista", `Se reprogramaron ${count} órdenes.\nInicio: ${bulkStart}\nFin: ${bulkEnd}`);
     } catch (error) {
-      console.error("[NO_MANT][RESCHEDULE BULK ERROR]", error?.response?.data || error?.message);
+      console.error("[NO_MANT][RESCHEDULE BULK ERROR]", error?.response?.data || error?.message || error);
       Alert.alert("Error", "No se pudieron reprogramar las órdenes seleccionadas.");
     } finally {
       setBulkSaving(false);
@@ -582,8 +571,7 @@ export default function NoMantenimiento() {
         </Text>
 
         <Text style={styles.hint}>
-          *Aquí aparecen <Text style={styles.bold}>SOLO</Text> órdenes con códigos de{" "}
-          <Text style={styles.bold}>0001..0011</Text> (No mantenimiento).
+          *Aquí aparecen <Text style={styles.bold}>SOLO</Text> órdenes con códigos <Text style={styles.bold}>0001..0011</Text>.
         </Text>
       </View>
 
@@ -633,9 +621,7 @@ export default function NoMantenimiento() {
         />
 
         <Text style={styles.hint}>
-          {selectedDate
-            ? `Mostrando solo órdenes del día: ${selectedDate}`
-            : "Toca un día para filtrar/cargar por esa fecha."}
+          {selectedDate ? `Mostrando solo órdenes del día: ${selectedDate}` : "Toca un día para filtrar/cargar por esa fecha."}
         </Text>
       </View>
 
@@ -686,13 +672,9 @@ export default function NoMantenimiento() {
         data={filteredOrders}
         keyExtractor={(item) => item.id}
         ListHeaderComponent={HeaderUI}
-        contentContainerStyle={{
-          paddingBottom: bulkMode ? 110 : 22, // espacio para barra flotante
-        }}
+        contentContainerStyle={{ paddingBottom: bulkMode ? 110 : 22 }}
         ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
-        ListEmptyComponent={
-          <Text style={styles.empty}>{loading ? "Cargando…" : "No hay resultados."}</Text>
-        }
+        ListEmptyComponent={<Text style={styles.empty}>{loading ? "Cargando…" : "No hay resultados."}</Text>}
         renderItem={({ item }) => {
           const checked = selectedIds.has(item.id);
 
@@ -735,7 +717,6 @@ export default function NoMantenimiento() {
         }}
       />
 
-      {/* ✅ barra flotante bulk */}
       {bulkMode && (
         <View style={styles.bulkBar}>
           <View style={{ flex: 1 }}>
@@ -754,7 +735,7 @@ export default function NoMantenimiento() {
         </View>
       )}
 
-      {/* ===== Modal UNA (rango) ===== */}
+      {/* ===== Modal UNA ===== */}
       <Modal visible={editOpen} transparent animationType="fade" onRequestClose={closeEdit}>
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
@@ -856,13 +837,13 @@ export default function NoMantenimiento() {
             </View>
 
             <Text style={styles.modalFooter}>
-              *Se manda RESCHEDULE (fechas) y luego se intenta poner Userstatus 0012 (ruta: CHANGE_STATUS_PATH).
+              *Se manda RESCHEDULE (fechas) y luego se intenta poner Userstatus 0012.
             </Text>
           </View>
         </View>
       </Modal>
 
-      {/* ===== Modal BULK (rango) ===== */}
+      {/* ===== Modal BULK ===== */}
       <Modal visible={bulkOpen} transparent animationType="fade" onRequestClose={closeBulk}>
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
@@ -1066,7 +1047,6 @@ const styles = StyleSheet.create({
   },
   editBtnText: { color: "#fff", fontWeight: "900", fontSize: 12.5 },
 
-  // Barra bulk flotante abajo
   bulkBar: {
     position: "absolute",
     left: 12,

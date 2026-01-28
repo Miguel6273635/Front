@@ -15,10 +15,8 @@ import Signature from 'react-native-signature-canvas';
 
 /**
  * ModalesDetalleOrden
- * Agrupa todos los modales de la pantalla:
  * - Materiales asignados a la orden (todos)
- * - Materiales por operación + consumo + finalizar
- * - Motivo de pausa
+ * - Materiales por operación (solo view)
  * - Firma del cliente
  * - PDF No mantenimiento
  *
@@ -38,35 +36,19 @@ export default function ModalesDetalleOrden({
   showAllMaterialsModal,
   setShowAllMaterialsModal,
 
-  // ===== Modal: materiales por operación =====
+  // ===== Modal: materiales por operación (SOLO VIEW) =====
   showCompModal,
   closeComponentsModal,
   selectedOp,
-  modalMode,
   loadingComponents,
   compList,
-  hasComponents,
-  consumioMaterial,
-  setConsumioMaterial,
-  cantidadesConsumidas,
-  setCantidadesConsumidas,
-  finalizandoOp,
-  finalizarOperacionConMaterial,
-
-  // ===== Modal: motivo pausa =====
-  showPauseModal,
-  closePauseModal,
-  pauseMotivo,
-  setPauseMotivo,
-  sendingPause,
-  confirmarPausaConMotivo,
 
   // ===== Modal: firma =====
   showSignModal,
   setShowSignModal,
   signatureRef,
-  setSignatureData,
   signatureData,
+  setSignatureData,
   savingSignature,
   confirmarFinalizarConFirma,
 
@@ -80,21 +62,32 @@ export default function ModalesDetalleOrden({
   descargarNoMantPdf,
   downloadingNoMantPdf,
 }) {
+  // ===== helpers UI =====
+  const safeStr = (v) => String(v ?? '').trim();
+
+  const titleOp = selectedOp
+    ? `${safeStr(selectedOp.activity || selectedOp.Activity)}${
+        safeStr(selectedOp.subactivity || selectedOp.SubActivity)
+          ? ' / ' + safeStr(selectedOp.subactivity || selectedOp.SubActivity)
+          : ''
+      }`
+    : '';
+
   return (
     <>
       {/* ===== Modal TODOS materiales ===== */}
       <Modal
-        visible={showAllMaterialsModal}
+        visible={!!showAllMaterialsModal}
         animationType="slide"
         transparent
-        onRequestClose={() => setShowAllMaterialsModal(false)}
+        onRequestClose={() => setShowAllMaterialsModal?.(false)}
       >
         <View style={styles.modalBackdrop}>
           <View style={styles.modalCard}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Materiales asignados a la orden</Text>
               <TouchableOpacity
-                onPress={() => setShowAllMaterialsModal(false)}
+                onPress={() => setShowAllMaterialsModal?.(false)}
                 style={styles.modalCloseBtn}
               >
                 <Ionicons name="close" size={20} color="#fff" />
@@ -102,7 +95,7 @@ export default function ModalesDetalleOrden({
             </View>
 
             <ScrollView style={{ maxHeight: 420, paddingHorizontal: 12, paddingVertical: 8 }}>
-              {!allMaterials || allMaterials.length === 0 ? (
+              {!Array.isArray(allMaterials) || allMaterials.length === 0 ? (
                 <Text style={{ color: FIORI.textMuted, marginTop: 8 }}>
                   Esta orden no tiene materiales asignados desde SAP.
                 </Text>
@@ -112,16 +105,24 @@ export default function ModalesDetalleOrden({
                   const qty = m.RequirementQuantity ?? m.Quantity ?? '—';
                   const unit =
                     m.RequirementQuantityUnitIso || m.RequirementQuantityUnit || m.Unit || '';
+
+                  const key =
+                    m.id ||
+                    `${m.Orderid || orden?.Orderid || ''}-${m.activity || m.Activity || ''}-${m.Item || m.ResItem || idx}`;
+
                   return (
-                    <View key={m.id || `${m.activity}-${m.Item}-${idx}`} style={styles.compRow}>
+                    <View key={key} style={styles.compRow}>
                       <View style={{ flex: 1 }}>
                         <Text style={styles.compTitle}>{desc}</Text>
                         <Text style={styles.compSub}>
                           Cantidad: {qty} {unit}
                         </Text>
+
                         <Text style={styles.compMeta}>
-                          Operación: {m.activity || '—'} · Item: {m.Item || '—'}
+                          Operación: {m.activity || m.Activity || '—'} · Item:{' '}
+                          {m.Item || m.ResItem || '—'}
                         </Text>
+
                         <Text style={styles.compMeta}>
                           Centro: {m.Plant || '—'} · Almacén: {m.StorageLocation || '—'}
                         </Text>
@@ -131,13 +132,22 @@ export default function ModalesDetalleOrden({
                 })
               )}
             </ScrollView>
+
+            <View style={styles.modalFooterRow}>
+              <TouchableOpacity
+                style={[styles.smallBtn, { backgroundColor: FIORI.surfaceAlt }]}
+                onPress={() => setShowAllMaterialsModal?.(false)}
+              >
+                <Text style={styles.smallBtnText}>Cerrar</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         </View>
       </Modal>
 
-      {/* ===== Modal materiales por operación + consumo ===== */}
+      {/* ===== Modal materiales por operación (SOLO VIEW) ===== */}
       <Modal
-        visible={showCompModal}
+        visible={!!showCompModal}
         animationType="slide"
         transparent
         onRequestClose={closeComponentsModal}
@@ -145,216 +155,57 @@ export default function ModalesDetalleOrden({
         <View style={styles.modalBackdrop}>
           <View style={styles.modalCard}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>
-                Materiales ·{' '}
-                {selectedOp
-                  ? `${selectedOp.activity}${selectedOp.subactivity ? ' / ' + selectedOp.subactivity : ''}`
-                  : ''}
-              </Text>
+              <Text style={styles.modalTitle}>Materiales · {titleOp}</Text>
               <TouchableOpacity onPress={closeComponentsModal} style={styles.modalCloseBtn}>
                 <Ionicons name="close" size={20} color="#fff" />
               </TouchableOpacity>
             </View>
 
-            <ScrollView style={{ maxHeight: 380, paddingHorizontal: 12 }}>
+            <ScrollView style={{ maxHeight: 420, paddingHorizontal: 12, paddingVertical: 8 }}>
               {loadingComponents ? (
                 <Text style={{ color: FIORI.textMuted, marginTop: 12 }}>Cargando materiales…</Text>
-              ) : !compList || compList.length === 0 ? (
+              ) : !Array.isArray(compList) || compList.length === 0 ? (
                 <Text style={{ color: FIORI.textMuted, marginTop: 12 }}>
                   No hay materiales asignados a esta operación.
                 </Text>
               ) : (
-                compList.map((c) => {
+                compList.map((c, idx) => {
                   const desc = c.MatlDesc || c.ShortText || c.Material || 'Sin descripción';
                   const qtyAsignada = c.RequirementQuantity ?? c.Quantity ?? '—';
                   const unit =
                     c.RequirementQuantityUnitIso || c.RequirementQuantityUnit || c.Unit || '';
 
+                  const key =
+                    `${c.Orderid || orden?.Orderid || ''}-${c.Activity || c.activity || ''}-${c.ResItem || c.Item || idx}`;
+
                   return (
-                    <View key={`${c.Orderid}-${c.Activity}-${c.ResItem}`} style={styles.compRow}>
+                    <View key={key} style={styles.compRow}>
                       <View style={{ flex: 1 }}>
-                        <Text style={styles.compTitle}>{desc || 'Sin descripción'}</Text>
+                        <Text style={styles.compTitle}>{desc}</Text>
                         <Text style={styles.compSub}>
                           Cantidad asignada: {qtyAsignada} {unit}
                         </Text>
-                      </View>
 
-                      {modalMode === 'finalizar' && hasComponents && consumioMaterial && (
-                        <View style={styles.compQtyWrapper}>
-                          <Text style={styles.compMeta}>Consumido:</Text>
-                          <View style={styles.compQty}>
-                            <TextInput
-                              style={styles.inputQty}
-                              keyboardType="numeric"
-                              value={cantidadesConsumidas?.[c.ResItem] ?? ''}
-                              onChangeText={(txt) =>
-                                setCantidadesConsumidas((prev) => ({ ...prev, [c.ResItem]: txt }))
-                              }
-                              placeholder="0"
-                            />
-                            <Text style={styles.compQtyUnit}>{unit}</Text>
-                          </View>
-                        </View>
-                      )}
+                        {/* info extra si existe */}
+                        {!!(c.Plant || c.StorageLocation) && (
+                          <Text style={styles.compMeta}>
+                            Centro: {c.Plant || '—'} · Almacén: {c.StorageLocation || '—'}
+                          </Text>
+                        )}
+                      </View>
                     </View>
                   );
                 })
               )}
             </ScrollView>
 
-            {modalMode === 'finalizar' ? (
-              <>
-                {hasComponents ? (
-                  <View style={styles.modalConsumeRow}>
-                    <Text style={{ color: FIORI.text, fontWeight: '700' }}>
-                      ¿Se consumió material asignado?
-                    </Text>
-                    <View style={styles.toggleRow}>
-                      <TouchableOpacity
-                        style={[styles.toggleBtn, consumioMaterial && styles.toggleBtnActive]}
-                        onPress={() => setConsumioMaterial(true)}
-                      >
-                        <Text
-                          style={[
-                            styles.toggleBtnText,
-                            consumioMaterial && styles.toggleBtnTextActive,
-                          ]}
-                        >
-                          Sí
-                        </Text>
-                      </TouchableOpacity>
-
-                      <TouchableOpacity
-                        style={[styles.toggleBtn, !consumioMaterial && styles.toggleBtnActive]}
-                        onPress={() => setConsumioMaterial(false)}
-                      >
-                        <Text
-                          style={[
-                            styles.toggleBtnText,
-                            !consumioMaterial && styles.toggleBtnTextActive,
-                          ]}
-                        >
-                          No
-                        </Text>
-                      </TouchableOpacity>
-                    </View>
-                  </View>
-                ) : (
-                  <View style={styles.modalConsumeRow}>
-                    <Text style={{ color: FIORI.textMuted, fontSize: 12 }}>
-                      Esta operación no tiene materiales asignados. Solo se marcará como finalizada.
-                    </Text>
-                  </View>
-                )}
-
-                <View style={styles.modalFooterRow}>
-                  <TouchableOpacity
-                    style={[styles.smallBtn, { backgroundColor: FIORI.surfaceAlt }]}
-                    onPress={closeComponentsModal}
-                    disabled={finalizandoOp}
-                  >
-                    <Text style={styles.smallBtnText}>Cancelar</Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    style={[styles.smallBtn, { backgroundColor: FIORI.brand }]}
-                    onPress={finalizarOperacionConMaterial}
-                    disabled={finalizandoOp}
-                  >
-                    <Text style={[styles.smallBtnText, { color: '#fff' }]}>
-                      {finalizandoOp ? 'Guardando…' : 'Finalizar operación'}
-                    </Text>
-                  </TouchableOpacity>
-                </View>
-              </>
-            ) : (
-              <View style={styles.modalFooter} />
-            )}
-          </View>
-        </View>
-      </Modal>
-
-      {/* ===== Modal motivo de pausa ===== */}
-      <Modal
-        visible={showPauseModal}
-        animationType="slide"
-        transparent
-        onRequestClose={closePauseModal}
-      >
-        <View style={styles.modalBackdrop}>
-          <View style={[styles.modalCard, { maxWidth: 600, maxHeight: '90%' }]}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Motivo de pausa</Text>
+            <View style={styles.modalFooterRow}>
               <TouchableOpacity
-                onPress={closePauseModal}
-                style={styles.modalCloseBtn}
-                disabled={sendingPause}
+                style={[styles.smallBtn, { backgroundColor: FIORI.surfaceAlt }]}
+                onPress={closeComponentsModal}
               >
-                <Ionicons name="close" size={20} color="#fff" />
+                <Text style={styles.smallBtnText}>Cerrar</Text>
               </TouchableOpacity>
-            </View>
-
-            <View style={{ padding: 14 }}>
-              <Text style={{ color: FIORI.text, fontWeight: '800', marginBottom: 8 }}>
-                Escribe el motivo:
-              </Text>
-
-              <TextInput
-                value={pauseMotivo}
-                onChangeText={setPauseMotivo}
-                placeholder="Ej. Esperando refacción / Cliente no autoriza / Falta acceso…"
-                placeholderTextColor={FIORI.textMuted}
-                multiline
-                style={{
-                  minHeight: 90,
-                  borderWidth: 1,
-                  borderColor: FIORI.border,
-                  borderRadius: 10,
-                  paddingHorizontal: 12,
-                  paddingVertical: 10,
-                  backgroundColor: FIORI.surfaceAlt,
-                  color: FIORI.text,
-                  textAlignVertical: 'top',
-                }}
-              />
-
-              <View style={[styles.modalFooterRow, { paddingLeft: 0, paddingRight: 0 }]}>
-                <TouchableOpacity
-                  style={[
-                    styles.smallBtn,
-                    { backgroundColor: FIORI.surfaceAlt },
-                    sendingPause && { opacity: 0.6 },
-                  ]}
-                  onPress={closePauseModal}
-                  disabled={sendingPause}
-                >
-                  <Text style={styles.smallBtnText}>Cancelar</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={[
-                    styles.smallBtn,
-                    { backgroundColor: FIORI.pause, borderColor: FIORI.pause },
-                    sendingPause && { opacity: 0.6 },
-                  ]}
-                  onPress={confirmarPausaConMotivo}
-                  disabled={sendingPause}
-                >
-                  {sendingPause ? (
-                    <>
-                      <ActivityIndicator size="small" color="#fff" />
-                      <Text style={[styles.smallBtnText, { color: '#fff' }]}>
-                        Enviando pausa…
-                      </Text>
-                    </>
-                  ) : (
-                    <>
-                      <Ionicons name="pause-circle-outline" size={16} color="#fff" />
-                      <Text style={[styles.smallBtnText, { color: '#fff' }]}>Pausar</Text>
-                    </>
-                  )}
-                </TouchableOpacity>
-              </View>
             </View>
           </View>
         </View>
@@ -362,19 +213,16 @@ export default function ModalesDetalleOrden({
 
       {/* ===== Modal firma cliente ===== */}
       <Modal
-        visible={showSignModal}
+        visible={!!showSignModal}
         animationType="slide"
         transparent
-        onRequestClose={() => setShowSignModal(false)}
+        onRequestClose={() => setShowSignModal?.(false)}
       >
         <View style={styles.modalBackdrop}>
           <View style={[styles.modalCard, { maxWidth: 600, maxHeight: '90%' }]}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Firma del cliente</Text>
-              <TouchableOpacity
-                onPress={() => setShowSignModal(false)}
-                style={styles.modalCloseBtn}
-              >
+              <TouchableOpacity onPress={() => setShowSignModal?.(false)} style={styles.modalCloseBtn}>
                 <Ionicons name="close" size={20} color="#fff" />
               </TouchableOpacity>
             </View>
@@ -392,12 +240,13 @@ export default function ModalesDetalleOrden({
                   borderColor: FIORI.border,
                   borderRadius: 12,
                   backgroundColor: '#fff',
+                  overflow: 'hidden',
                 }}
               >
                 <Signature
                   ref={signatureRef}
-                  onOK={(sig) => setSignatureData(sig)}
-                  onClear={() => setSignatureData(null)}
+                  onOK={(sig) => setSignatureData?.(sig)}
+                  onClear={() => setSignatureData?.(null)}
                   descriptionText="Firme aquí"
                   clearText="Limpiar"
                   confirmText="Listo"
@@ -430,8 +279,8 @@ export default function ModalesDetalleOrden({
             <View style={styles.modalFooterRow}>
               <TouchableOpacity
                 style={[styles.smallBtn, { backgroundColor: FIORI.surfaceAlt }]}
-                onPress={() => setShowSignModal(false)}
-                disabled={savingSignature}
+                onPress={() => setShowSignModal?.(false)}
+                disabled={!!savingSignature}
               >
                 <Text style={styles.smallBtnText}>Cancelar</Text>
               </TouchableOpacity>
@@ -440,7 +289,7 @@ export default function ModalesDetalleOrden({
                 style={[styles.btnFinishOrder, savingSignature && { opacity: 0.7 }]}
                 activeOpacity={0.9}
                 onPress={confirmarFinalizarConFirma}
-                disabled={savingSignature}
+                disabled={!!savingSignature}
               >
                 <Ionicons name="flag-outline" size={18} color="#fff" />
                 <Text style={styles.btnFinishOrderText}>
@@ -454,7 +303,7 @@ export default function ModalesDetalleOrden({
 
       {/* ===== Modal PDF no mantenimiento ===== */}
       <Modal
-        visible={showNoMantPdfModal}
+        visible={!!showNoMantPdfModal}
         animationType="slide"
         transparent
         onRequestClose={cerrarModalNoMantPdf}
@@ -495,11 +344,11 @@ export default function ModalesDetalleOrden({
                 <Text style={styles.smallBtnText}>Cerrar</Text>
               </TouchableOpacity>
 
-              {noMantPdfRawUrl && (
+              {!!noMantPdfRawUrl && (
                 <TouchableOpacity
                   style={[styles.smallBtn, { backgroundColor: FIORI.brand }]}
                   onPress={descargarNoMantPdf}
-                  disabled={downloadingNoMantPdf}
+                  disabled={!!downloadingNoMantPdf}
                 >
                   <Text style={[styles.smallBtnText, { color: '#fff' }]}>
                     {downloadingNoMantPdf ? 'Descargando…' : 'Descargar'}

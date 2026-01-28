@@ -31,7 +31,7 @@ import { Linking } from "react-native";
 
 import { AREAS_TRABAJO, RIESGOS_POSIBLES } from "../../../../src/constants/catalogosRiesgos";
 import { subirPdfOrden } from "../../../../src/services/riesgosSap";
-import { buildTbmkyHtml } from "../../../../src/services/tbmkyPdfTemplate";
+import { buildTbmkyHtml } from "../../../../src/services/templates/tbmkyPdfTemplate";
 
 // ===== Paleta Fiori / Horizon =====
 const FIORI = {
@@ -1046,22 +1046,6 @@ export default function FormularioRiesgosScreen() {
                 </Text>
 
                 <View style={styles.card}>
-                  <View style={styles.topActionsRow}>
-                    <TouchableOpacity
-                      style={[styles.smallBtn, { backgroundColor: FIORI.borderStrong }]}
-                      onPress={autollenarTopDesdeSeleccionados}
-                      disabled={lockedAfterPdf}
-                    >
-                      <Text style={[styles.smallBtnText, { color: FIORI.ink }]}>Autollenar primeros 3</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={[styles.smallBtn, { backgroundColor: FIORI.accent }]}
-                      onPress={aplicarTop}
-                      disabled={lockedAfterPdf}
-                    >
-                      <Text style={[styles.smallBtnText, { color: "#fff" }]}>Aplicar TOP 3</Text>
-                    </TouchableOpacity>
-                  </View>
 
                   <Text style={styles.miniLabel}>TOP 1</Text>
                   <Dropdown
@@ -1098,6 +1082,23 @@ export default function FormularioRiesgosScreen() {
                     onChange={(item) => !lockedAfterPdf && setTopSeleccionIds([topSeleccionIds[0], topSeleccionIds[1], item.value])}
                     disable={lockedAfterPdf}
                   />
+
+                  <View style={styles.topActionsRow}>
+                    {/*<TouchableOpacity
+                      style={[styles.smallBtn, { backgroundColor: FIORI.borderStrong }]}
+                      onPress={autollenarTopDesdeSeleccionados}
+                      disabled={lockedAfterPdf}
+                    >
+                      <Text style={[styles.smallBtnText, { color: FIORI.ink }]}>Autollenar primeros 3</Text>
+                    </TouchableOpacity>*/}
+                    <TouchableOpacity
+                      style={[styles.smallBtn, { backgroundColor: FIORI.accent }]}
+                      onPress={aplicarTop}
+                      disabled={lockedAfterPdf}
+                    >
+                      <Text style={[styles.smallBtnText, { color: "#fff" }]}>Aplicar TOP 3</Text>
+                    </TouchableOpacity>
+                  </View>
                 </View>
               </View>
             ) : (

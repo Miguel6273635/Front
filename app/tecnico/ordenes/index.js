@@ -18,6 +18,7 @@ import {
 import DateTimePicker from "@react-native-community/datetimepicker";
 import { router } from "expo-router"; // ✅ IMPORTANTE (arregla "Property 'router' doesn't exist")
 import * as ImagePicker from "expo-image-picker";
+import * as ImageManipulator from "expo-image-manipulator";
 
 import { useAuth } from "../../../src/context/AuthContext";
 import Header from "../../../src/components/Header";
@@ -401,22 +402,36 @@ export default function ListaOrdenesTecnico() {
       }
 
       const result = await ImagePicker.launchCameraAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        quality: 0.6,
-        base64: true,
+        quality: 1, // captura “normal”
+        base64: false, // 👈 NO la pidas aquí
         allowsEditing: false,
       });
 
       if (result.canceled) return;
 
       const asset = result.assets?.[0];
-      if (!asset?.base64) {
-        Alert.alert("Error", "No se pudo obtener la imagen en base64. Reintenta.");
+      if (!asset?.uri) {
+        Alert.alert("Error", "No se pudo obtener la foto.");
         return;
       }
 
-      setCheckinPhotoUri(asset.uri);
-      setCheckinPhotoBase64(asset.base64);
+      // ✅ Convertir a JPEG + resize (esto elimina HEIC/PNG y baja peso)
+      const manipulated = await ImageManipulator.manipulateAsync(
+        asset.uri,
+        [{ resize: { width: 1280 } }], // ajusta si quieres 1024
+        { compress: 0.65, format: ImageManipulator.SaveFormat.JPEG, base64: true }
+      );
+
+      if (!manipulated?.base64) {
+        Alert.alert("Error", "No se pudo convertir la imagen.");
+        return;
+      }
+
+      setCheckinPhotoUri(manipulated.uri);
+      setCheckinPhotoBase64(manipulated.base64);
+
+      // (opcional) debug
+      console.log("[CHECKIN] jpg base64 length:", manipulated.base64.length);
     } catch (e) {
       console.log("takeCheckinPhoto ERROR:", e);
       Alert.alert("Error", "No se pudo abrir la cámara.");

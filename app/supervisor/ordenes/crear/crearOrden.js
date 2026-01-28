@@ -867,9 +867,9 @@ export default function CrearOrdenMantto() {
 
       const baseMsg = orderId
         ? `✅ Orden creada: ${orderId}
-📌 Aviso original: ${avisoOriginal || "—"}
-📩 Aviso SAP (retorno): ${avisoCreado || "—"}
-💰 Oferta: ${ofertaNo ? ofertaNo : "—"}${ofertaMsg ? `\n🧾 ${ofertaMsg}` : ""}`
+        📌 Aviso original: ${avisoOriginal || "—"}
+        📩 Aviso SAP (retorno): ${avisoCreado || "—"}
+        💰 Oferta: ${ofertaNo ? ofertaNo : "—"}${ofertaMsg ? `\n🧾 ${ofertaMsg}` : ""}`
         : "✅ Orden creada (no pude leer el número desde Return/sap-message).";
 
       Alert.alert("Orden creada", baseMsg, [

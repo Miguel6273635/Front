@@ -19,7 +19,7 @@ import Header from "../../../../src/components/Header";
 import { useAuth } from "../../../../src/context/AuthContext";
 import { SafeAreaView } from "react-native-safe-area-context";
 
-// ✅ OFFLINE service (tú lo creas en: src/services/reprogramacionesSupervisor.js)
+// ✅ OFFLINE service
 import {
   fetchReprogramacionesOrders,
   rescheduleWorkorders,
@@ -61,7 +61,16 @@ const COLORS = {
 
 /* ====================== Helpers ====================== */
 const pad2 = (n) => String(n).padStart(2, "0");
+
+// (local) para fechas que tú construyes (calendario/rangos)
 const toYMD = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+
+// ✅ (UTC) para timestamps que vienen de SAP OData: evita “-1 día” en MX (UTC-6)
+const toYMD_UTC_FROM_MS = (ms) => {
+  const d = new Date(ms);
+  return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())}`;
+};
+
 const safeStr = (v) => (v == null ? "" : String(v));
 
 function ymdToSAP(ymd) {
@@ -69,20 +78,21 @@ function ymdToSAP(ymd) {
   const [y, m, d] = ymd.split("-");
   return `${y}${m}${d}`;
 }
+
+// ✅ comparar rangos sin broncas de zona/DST: crea a mediodía local
 function ymdToDate(ymd) {
   const [y, m, d] = ymd.split("-").map(Number);
-  return new Date(y, m - 1, d);
+  return new Date(y, m - 1, d, 12, 0, 0, 0);
 }
 
-// /Date(1768435200000)/ -> YYYY-MM-DD
+// ✅ /Date(1768435200000)/ -> YYYY-MM-DD (sin “-1 día”)
 function odataDateToYMD(value) {
   const s = safeStr(value);
   const match = s.match(/\/Date\((\d+)\)\//);
   if (!match) return "";
   const ms = Number(match[1]);
   if (!Number.isFinite(ms)) return "";
-  const d = new Date(ms);
-  return toYMD(d);
+  return toYMD_UTC_FROM_MS(ms);
 }
 
 /**
@@ -103,20 +113,6 @@ function shouldHideByUserstatus(userstatusRaw) {
   });
 
   return allInRange;
-}
-
-function getMonthRange(year, month) {
-  const start = new Date(year, month - 1, 1);
-  const end = new Date(year, month, 0);
-  return { startYmd: toYMD(start), endYmd: toYMD(end) };
-}
-
-function buildODataDayFilter({ ymd, email }) {
-  return `StartDate ge datetime'${ymd}T00:00:00' and FinishDate le datetime'${ymd}T23:59:59' and Userstatus eq '${email}'`;
-}
-
-function buildODataRangeFilter({ startYmd, endYmd, email }) {
-  return `StartDate ge datetime'${startYmd}T00:00:00' and FinishDate le datetime'${endYmd}T23:59:59' and Userstatus eq '${email}'`;
 }
 
 function buildRangeMarkedDates(startYmd, endYmd) {
@@ -167,7 +163,7 @@ function getSyncBadge(sync) {
 }
 
 export default function ReprogramarOrden() {
-  const { user } = useAuth(); // token ya no lo necesitamos aquí; el service lo toma de AsyncStorage
+  const { user } = useAuth(); // token lo toma el service de AsyncStorage
 
   const supervisorEmail =
     safeStr(user?.email) ||
@@ -224,8 +220,6 @@ export default function ReprogramarOrden() {
       try {
         setLoading(true);
 
-        // Tu filtro OData (igual que antes) PERO lo construye el service si hay red.
-        // Aquí solo le pasamos parámetros.
         const r = await fetchReprogramacionesOrders({
           year,
           month,
@@ -233,19 +227,19 @@ export default function ReprogramarOrden() {
           supervisorEmail,
         });
 
-        // r.orders ya puede traer _sync por orden
         const list = Array.isArray(r.orders) ? r.orders : [];
 
-        // (opcional) si el backend devolviera cosas raras, reforzamos la regla de ocultamiento
+        // ✅ Normaliza fechas bien (OData /Date(ms)/ -> UTC YMD)
         const cleaned = list
           .map((x) => {
-            // Asegura shape
             const id = safeStr(x.id);
             const userstatusCodes = safeStr(x.userstatusCodes);
-            const startDate =
-              safeStr(x.startDate).includes("/Date(") ? odataDateToYMD(x.startDate) : safeStr(x.startDate);
-            const finishDate =
-              safeStr(x.finishDate).includes("/Date(") ? odataDateToYMD(x.finishDate) : safeStr(x.finishDate);
+
+            const startDateRaw = safeStr(x.startDate);
+            const finishDateRaw = safeStr(x.finishDate);
+
+            const startDate = startDateRaw.includes("/Date(") ? odataDateToYMD(startDateRaw) : startDateRaw;
+            const finishDate = finishDateRaw.includes("/Date(") ? odataDateToYMD(finishDateRaw) : finishDateRaw;
 
             return {
               ...x,
@@ -279,7 +273,6 @@ export default function ReprogramarOrden() {
   );
 
   useEffect(() => {
-    // ✅ ya no dependemos de token; si estás offline, el service regresa cache
     fetchOrders({ year: anioVisible, month: mesVisible, dayYmd: null });
   }, [anioVisible, mesVisible, fetchOrders]);
 
@@ -369,7 +362,6 @@ export default function ReprogramarOrden() {
       return;
     }
 
-    // ✅ payload igual al original (solo para log si quieres verlo)
     const payload = {
       WorkOrderHeader: { Supervisor: supervisorEmail },
       WorkOrderItemsSet: [
@@ -388,7 +380,6 @@ export default function ReprogramarOrden() {
 
       console.log("[REPROGRAMACION] payload:", JSON.stringify(payload, null, 2));
 
-      // ✅ ahora: ONLINE -> manda a SAP | OFFLINE -> lo encola y guarda status
       const r = await rescheduleWorkorders({
         supervisorEmail,
         items: [{ orderId: safeStr(editing.id), startYmd: tempStart, endYmd: tempEnd }],
@@ -453,7 +444,6 @@ export default function ReprogramarOrden() {
     if (bulkSaving) return;
     setBulkOpen(false);
     setBulkStep("start");
-    // ✅ NO limpiamos bulkStart/bulkEnd para recordar la última selección
   }
 
   function onPickBulkDate(ymd) {
@@ -505,7 +495,6 @@ export default function ReprogramarOrden() {
 
       console.log("[REPROGRAMACION BULK] payload:", JSON.stringify(payload, null, 2));
 
-      // ✅ ONLINE -> manda | OFFLINE -> encola
       const r = await rescheduleWorkorders({
         supervisorEmail,
         items: selectedIdsArray.map((id) => ({
@@ -547,7 +536,10 @@ export default function ReprogramarOrden() {
           `Se guardaron ${count} órdenes.\nSe enviarán cuando haya internet.\nInicio: ${bulkStart}\nFin: ${bulkEnd}`
         );
       } else if (r.ok) {
-        Alert.alert("Reprogramación lista", `Se reprogramaron ${count} órdenes.\nInicio: ${bulkStart}\nFin: ${bulkEnd}`);
+        Alert.alert(
+          "Reprogramación lista",
+          `Se reprogramaron ${count} órdenes.\nInicio: ${bulkStart}\nFin: ${bulkEnd}`
+        );
       } else {
         Alert.alert("Error", "No se pudieron reprogramar las órdenes seleccionadas.");
       }

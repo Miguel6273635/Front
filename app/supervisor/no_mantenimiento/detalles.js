@@ -26,7 +26,7 @@ import api from "../../../src/services/api";
 import { useAuth } from "../../../src/context/AuthContext";
 
 // ✅ tu template ya está en src/services
-import { buildCartaNoMantenimientoHtml } from "../../../src/services/noMantenimientoPdfTemplate";
+import { buildCartaNoMantenimientoHtml } from "../../../src/services/templates/noMantenimientoPdfTemplate";
 
 const COLORS = {
   pageBg: "#F4F6F9",

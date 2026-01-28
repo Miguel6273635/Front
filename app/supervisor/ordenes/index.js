@@ -65,16 +65,44 @@ const COLORS = {
 };
 
 /* ======================
-   ✅ Parse SAP /Date(…)/ -> ms
+   ✅ Parse SAP /Date(…)/ -> ms (soporta offset /Date(ms-0600)/)
    ====================== */
 function sapDateToMs(value) {
   if (!value) return null;
   if (value instanceof Date) return value.getTime();
   if (typeof value === "number") return value;
+
   const s = String(value);
-  const m = s.match(/\/Date\((\-?\d+)\)\//);
+  // /Date(1768176000000)/  o  /Date(1768176000000-0600)/
+  const m = s.match(/\/Date\((\-?\d+)([+-]\d{4})?\)\//);
   if (!m) return null;
-  return Number(m[1]);
+
+  const ms = Number(m[1]);
+  const off = m[2]; // ej "-0600"
+
+  if (!off) return ms;
+
+  const sign = off.startsWith("-") ? -1 : 1;
+  const hh = parseInt(off.slice(1, 3), 10);
+  const mm = parseInt(off.slice(3, 5), 10);
+  const offsetMinutes = sign * (hh * 60 + mm);
+
+  // Ajuste para representar el instante en UTC real
+  return ms - offsetMinutes * 60 * 1000;
+}
+
+/* ======================
+   ✅ Formato estable (UTC) — evita que en teléfono se vaya a día anterior
+   ====================== */
+function formatSapMsAsDMY(ms) {
+  if (ms === null || ms === undefined) return "—";
+  const d = new Date(ms);
+
+  // IMPORTANTE: usar getters UTC
+  const dd = String(d.getUTCDate()).padStart(2, "0");
+  const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const yyyy = d.getUTCFullYear();
+  return `${dd}/${mm}/${yyyy}`;
 }
 
 /* =========================
@@ -98,7 +126,7 @@ async function fetchStatusCatalogMap() {
 }
 
 /* =========================
-   ✅ Reglas Userstatus (como técnicos)
+   ✅ Reglas Userstatus
    ========================= */
 function normalizeCode(code) {
   if (code === null || code === undefined) return "";
@@ -157,6 +185,7 @@ function mapOrdenSapToUi(o) {
     orderid: String(o?.Orderid ?? ""),
     equipment: String(o?.Equipment ?? ""),
     nombre_orden: String(o?.ShortText ?? ""),
+    // ✅ AQUÍ: parseamos de una vez el SAP raw
     startdate: sapDateToMs(o?.StartDate),
     finishdate: sapDateToMs(o?.FinishDate),
     userstatus: String(o?.Userstatus ?? ""),
@@ -166,29 +195,36 @@ function mapOrdenSapToUi(o) {
 
 /* =========================
    ✅ Normalizar un item "sea como sea"
+   (cubre: SAP raw, cache, y cualquier mezcla)
    ========================= */
 function normalizeOrdenItem(item) {
   if (!item) return null;
 
-  if (item.orderid || item.equipment || item.userstatus || item.startdate) {
+  // Caso: ya viene normalizado (cache / app)
+  if (item.orderid || item.equipment || item.userstatus || item.startdate || item.finishdate) {
+    const startMs =
+      typeof item.startdate === "number"
+        ? item.startdate
+        : sapDateToMs(item.startdate ?? item.StartDate);
+    const finishMs =
+      typeof item.finishdate === "number"
+        ? item.finishdate
+        : sapDateToMs(item.finishdate ?? item.FinishDate);
+
     return {
       ...item,
-      orderid: String(item.orderid ?? ""),
-      equipment: String(item.equipment ?? ""),
+      orderid: String(item.orderid ?? item.Orderid ?? ""),
+      equipment: String(item.equipment ?? item.Equipment ?? ""),
       nombre_orden: String(item.nombre_orden ?? item.ShortText ?? ""),
       userstatus: String(item.userstatus ?? item.Userstatus ?? ""),
-      startdate:
-        typeof item.startdate === "number"
-          ? item.startdate
-          : sapDateToMs(item.startdate ?? item.StartDate),
-      finishdate:
-        typeof item.finishdate === "number"
-          ? item.finishdate
-          : sapDateToMs(item.finishdate ?? item.FinishDate),
+      startdate: startMs,
+      finishdate: finishMs,
     };
   }
 
+  // Caso: SAP raw directo
   if (isSapRaw(item)) return mapOrdenSapToUi(item);
+
   return null;
 }
 
@@ -210,7 +246,6 @@ async function prefetchDetallesDeOrdenes(orderIds = []) {
     while (i < ids.length) {
       const idx = i++;
       const id = ids[idx];
-
       try {
         await fetchOrdenDetalleSupervisor(id);
         await fetchOperacionesSupervisor(id);
@@ -284,6 +319,9 @@ export default function ListaOrdenesSupervisor() {
     return "";
   }, [dateMode, dayRef, weekStart, weekEnd, monthYear, yearOnly]);
 
+  /* =========================
+     ✅ Cargar catálogo (si hay internet)
+     ========================= */
   useEffect(() => {
     let mounted = true;
     (async () => {
@@ -302,6 +340,9 @@ export default function ListaOrdenesSupervisor() {
     return () => { mounted = false; };
   }, []);
 
+  /* =========================
+     ✅ Prefetch inicial (para offline rápido)
+     ========================= */
   const didPrefetchRef = useRef(false);
   useEffect(() => {
     if (didPrefetchRef.current) return;
@@ -314,12 +355,14 @@ export default function ListaOrdenesSupervisor() {
         const e = new Date(t);
         s.setDate(s.getDate() - 7);
         e.setDate(e.getDate() + 7);
-
         await fetchOrdenesSupervisor(ymd(s), ymd(e), "range");
       } catch {}
     })();
   }, []);
 
+  /* =========================
+     ✅ Cargar lista
+     ========================= */
   const lastPrefetchKeyRef = useRef("");
   const cargar = useCallback(async () => {
     try {
@@ -375,14 +418,23 @@ export default function ListaOrdenesSupervisor() {
       st.type === "no_mantto" ? "close-circle-outline" :
       "ellipse-outline";
 
-    // ✅ AQUÍ ESTÁ LA CLAVE: toma startdate normalizado o StartDate crudo
-    const startMs = sapDateToMs(item?.startdate ?? item?.StartDate);
-    const finishMs = sapDateToMs(item?.finishdate ?? item?.FinishDate);
+    // ✅ AQUÍ ES DONDE SE ARREGLA LO DE "VACÍO":
+    // usamos el campo normalizado (number) y si no, parseamos el raw.
+    const startMs =
+      typeof item?.startdate === "number"
+        ? item.startdate
+        : sapDateToMs(item?.StartDate ?? item?.startdate);
+
+    const finishMs =
+      typeof item?.finishdate === "number"
+        ? item.finishdate
+        : sapDateToMs(item?.FinishDate ?? item?.finishdate);
 
     return (
       <TouchableOpacity
         style={styles.card}
         onPress={() => router.push(`/supervisor/ordenes/${item.orderid}`)}
+        activeOpacity={0.88}
       >
         <View style={[styles.sideBar, { backgroundColor: color }]} />
 
@@ -404,27 +456,23 @@ export default function ListaOrdenesSupervisor() {
             </View>
 
             <View style={[styles.statusPill, { backgroundColor: color + "25", borderColor: color }]}>
-              <Ionicons name={icon} size={14} style={{ marginRight: 4 }} />
+              <Ionicons name={icon} size={14} style={{ marginRight: 4 }} color={color} />
               <Text style={styles.statusText} numberOfLines={2}>
                 {st.label}{st.code ? ` (${st.code})` : ""}
               </Text>
             </View>
           </View>
 
-          {/* ✅ FECHAS */}
+          {/* ✅ FECHAS (UTC estable: NO se recorre al día anterior) */}
           <View style={styles.metaRow}>
             <View style={styles.metaItem}>
               <Ionicons name="calendar-outline" size={14} color={COLORS.text} />
-              <Text style={styles.metaText}>
-                Inicio: {startMs ? new Date(startMs).toLocaleDateString() : "—"}
-              </Text>
+              <Text style={styles.metaText}>Inicio: {formatSapMsAsDMY(startMs)}</Text>
             </View>
 
             <View style={styles.metaItem}>
               <Ionicons name="calendar-outline" size={14} color={COLORS.text} />
-              <Text style={styles.metaText}>
-                Fin: {finishMs ? new Date(finishMs).toLocaleDateString() : "—"}
-              </Text>
+              <Text style={styles.metaText}>Fin: {formatSapMsAsDMY(finishMs)}</Text>
             </View>
           </View>
         </View>
