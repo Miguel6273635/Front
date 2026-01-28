@@ -16,9 +16,21 @@ import {
   Image,
 } from "react-native";
 import DateTimePicker from "@react-native-community/datetimepicker";
-import { router } from "expo-router"; // ✅ IMPORTANTE (arregla "Property 'router' doesn't exist")
+import { router } from "expo-router";
 import * as ImagePicker from "expo-image-picker";
 import * as ImageManipulator from "expo-image-manipulator";
+import NetInfo from "@react-native-community/netinfo";
+
+import {
+  buildOfflineWindow,
+  filterOrdenesByWindow,
+  loadOrdenesTecnicoList,
+  saveOrdenesTecnicoList,
+  pruneDetallesNoUsados,
+} from "../../../src/offline/ordenesTecnicoCache";
+
+// ✅ NUEVO: prefetch de detalles para que NO tengas que entrar a cada orden
+import { prefetchOrdenesTecnicoDetalles } from "../../../src/offline/prefetchOrdenesTecnico";
 
 import { useAuth } from "../../../src/context/AuthContext";
 import Header from "../../../src/components/Header";
@@ -53,13 +65,6 @@ const startOfMonth = (d) => new Date(d.getFullYear(), d.getMonth(), 1, 0, 0, 0, 
 const endOfMonth = (d) => new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59, 999);
 const startOfYear = (y) => new Date(y, 0, 1, 0, 0, 0, 0);
 const endOfYear = (y) => new Date(y, 11, 31, 23, 59, 59, 999);
-
-const ymd = (d) => {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
-};
 
 const parseSapDate = (value) => {
   if (!value) return null;
@@ -225,10 +230,7 @@ export default function ListaOrdenesTecnico() {
   const [allOrdenes, setAllOrdenes] = useState([]);
   const [ordenes, setOrdenes] = useState([]);
 
-  // ✅ loading: solo para 1ra carga o cuando cambian filtros (si aún no hay lista)
   const [loading, setLoading] = useState(true);
-
-  // ✅ refreshing: para pull-to-refresh y botón Recargar sin “tirar” la lista
   const [refreshing, setRefreshing] = useState(false);
 
   const [query, setQuery] = useState("");
@@ -302,41 +304,94 @@ export default function ListaOrdenesTecnico() {
     }
   };
 
-  // ✅ IMPORTANTE: NO debe causar doble carga
   const fetchOrdenes = useCallback(
     async ({ isRefresh = false } = {}) => {
+      const userEmail = user?.correo || user?.email || user?.username || null;
+
       try {
         if (isRefresh) setRefreshing(true);
         else setLoading(true);
 
-        const ok = await ensureValidToken();
-        if (!ok) return;
+        // 0) Si hay cache, úsalo rápido (especialmente primera carga)
+        if (!isRefresh) {
+          const cached = await loadOrdenesTecnicoList(userEmail);
+          if (cached?.data?.length) {
+            setAllOrdenes(cached.data);
+            setLoading(false);
+          }
+        }
 
-        const sStr = ymd(start);
-        const eStr = ymd(end);
+        // 1) ¿hay internet?
+        const net = await NetInfo.fetch();
+        const isOnline = !!(net?.isConnected && net?.isInternetReachable !== false);
 
+        // 2) Si NO hay internet -> no intentes SAP; deja cache si existe
+        if (!isOnline) {
+          const cached = await loadOrdenesTecnicoList(userEmail);
+          if (!cached?.data?.length) {
+            Alert.alert("Sin conexión", "No hay internet y no hay datos guardados aún.");
+          }
+          return;
+        }
+
+        // 3) Sí hay internet: pide SIEMPRE ventana ±8 días
+        const win = buildOfflineWindow(new Date());
         const params = new URLSearchParams({
-          start: sStr,
-          end: eStr,
-          mode: dateMode === "day" ? "eq" : "range",
+          start: win.startStr,
+          end: win.endStr,
+          mode: "range",
         });
-
-        const userEmail = user?.correo || user?.email || user?.username || null;
         if (userEmail) params.set("user", userEmail);
+
+        const okToken = await ensureValidToken();
+        if (!okToken) return;
 
         const res = await api.get(`/api/ordenes/sap/list?${params.toString()}`);
         const data = Array.isArray(res.data) ? res.data : [];
-        setAllOrdenes(data);
+
+        // 4) recorta a ventana (UTC-safe)
+        const dataWin = filterOrdenesByWindow(data, win.start, win.end);
+
+        setAllOrdenes(dataWin);
+
+        // 5) guarda cache lista
+        await saveOrdenesTecnicoList(userEmail, dataWin, win);
+
+        // ✅ 6) PREFETCH DETALLES (la clave para que NO tengas que entrar a cada orden)
+        //    - NO bloquea UI (lo lanzamos "en background")
+        //    - Guarda detalle de cada orden en AsyncStorage
+        const orderIds = dataWin.map((x) => x?.Orderid).filter(Boolean);
+
+        // (opcional) limita para no saturar si son demasiadas
+        const MAX_PREFETCH = 80;
+        const idsToPrefetch = orderIds.slice(0, MAX_PREFETCH);
+
+        prefetchOrdenesTecnicoDetalles({
+          orderIds: idsToPrefetch,
+          token: user?.token, // ⚠️ si no guardas token en user, deja null y el servicio usa api con interceptor
+          concurrency: 3,
+        }).catch((e) => console.log("prefetchOrdenesTecnicoDetalles ERROR:", e?.message || e));
+
+        // 7) limpieza de detalles (recomendado)
+        await pruneDetallesNoUsados(orderIds);
       } catch (error) {
         console.error("Error al cargar órdenes (SAP):", error?.response?.data || error);
-        const serverMsg = error?.response?.data?.error || "No se pudieron cargar las órdenes desde SAP";
-        Alert.alert("Error", serverMsg);
+
+        const userEmail2 = user?.correo || user?.email || user?.username || null;
+        const cached = await loadOrdenesTecnicoList(userEmail2);
+
+        if (cached?.data?.length) {
+          setAllOrdenes(cached.data);
+        } else {
+          const serverMsg = error?.response?.data?.error || "No se pudieron cargar las órdenes desde SAP";
+          Alert.alert("Error", serverMsg);
+        }
       } finally {
         setLoading(false);
         setRefreshing(false);
       }
     },
-    [ensureValidToken, start, end, dateMode, user]
+    [ensureValidToken, user]
   );
 
   // ✅ 1) catálogo una vez
@@ -345,7 +400,7 @@ export default function ListaOrdenesTecnico() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ✅ 2) órdenes solo cuando cambian filtros / 1ra carga (no al regresar de detalles)
+  // ✅ 2) órdenes
   useEffect(() => {
     fetchOrdenes();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -402,8 +457,8 @@ export default function ListaOrdenesTecnico() {
       }
 
       const result = await ImagePicker.launchCameraAsync({
-        quality: 1, // captura “normal”
-        base64: false, // 👈 NO la pidas aquí
+        quality: 1,
+        base64: false,
         allowsEditing: false,
       });
 
@@ -415,10 +470,9 @@ export default function ListaOrdenesTecnico() {
         return;
       }
 
-      // ✅ Convertir a JPEG + resize (esto elimina HEIC/PNG y baja peso)
       const manipulated = await ImageManipulator.manipulateAsync(
         asset.uri,
-        [{ resize: { width: 1280 } }], // ajusta si quieres 1024
+        [{ resize: { width: 1280 } }],
         { compress: 0.65, format: ImageManipulator.SaveFormat.JPEG, base64: true }
       );
 
@@ -430,7 +484,6 @@ export default function ListaOrdenesTecnico() {
       setCheckinPhotoUri(manipulated.uri);
       setCheckinPhotoBase64(manipulated.base64);
 
-      // (opcional) debug
       console.log("[CHECKIN] jpg base64 length:", manipulated.base64.length);
     } catch (e) {
       console.log("takeCheckinPhoto ERROR:", e);
@@ -438,7 +491,6 @@ export default function ListaOrdenesTecnico() {
     }
   };
 
-  // ✅ 1) subir evidencia
   const postCheckinEvidence = async (orderId, base64) => {
     const payload = {
       WorkOrderHeader: { Orderid: orderId },
@@ -458,7 +510,6 @@ export default function ListaOrdenesTecnico() {
     });
   };
 
-  // ✅ 2) cambiar estatus a 0100
   const postChangeStatusTo0100 = async (orderId) => {
     const payload = {
       OrderId: orderId,
@@ -478,7 +529,6 @@ export default function ListaOrdenesTecnico() {
     });
   };
 
-  // ✅ enviar todo: evidencia + estatus
   const enviarCheckinCompletoASap = async () => {
     if (!checkinOrderId) {
       Alert.alert("Error", "No hay orden seleccionada.");
@@ -497,10 +547,7 @@ export default function ListaOrdenesTecnico() {
       const ok = await ensureValidToken();
       if (!ok) return;
 
-      // 1) Evidencia
       await postCheckinEvidence(orderId, checkinPhotoBase64);
-
-      // 2) Cambio de estatus a 0100
       await postChangeStatusTo0100(orderId);
 
       Alert.alert("Check-in", "Evidencia enviada y estatus actualizado a 0100 ✅");
@@ -509,7 +556,6 @@ export default function ListaOrdenesTecnico() {
       setCheckinPhotoBase64(null);
       setCheckinPhotoUri(null);
 
-      // refresca lista sin tirar UI
       fetchOrdenes({ isRefresh: true });
     } catch (e) {
       console.log("enviarCheckinCompletoASap ERROR:", e?.response?.data || e?.message || e);
@@ -886,7 +932,7 @@ export default function ListaOrdenesTecnico() {
       ) : (
         <FlatList
           data={ordenes}
-          keyExtractor={(item, idx) => String(item?.Orderid ?? `row-${idx}`)} // ✅ estable
+          keyExtractor={(item, idx) => String(item?.Orderid ?? `row-${idx}`)}
           renderItem={renderItem}
           contentContainerStyle={{ padding: 20, paddingTop: 6 }}
           refreshing={refreshing}

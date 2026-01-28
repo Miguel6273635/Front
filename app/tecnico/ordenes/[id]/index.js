@@ -10,12 +10,13 @@ import {
   Platform,
   FlatList,
 } from "react-native";
+import NetInfo from "@react-native-community/netinfo";
 
 import Header from "../../../../src/components/Header";
 import api from "../../../../src/services/api";
 import { useAuth } from "../../../../src/context/AuthContext";
 import { useLocalSearchParams, router } from "expo-router";
-
+import { loadOrdenTecnicoDetail, saveOrdenTecnicoDetail } from "../../../../src/offline/ordenesTecnicoCache";
 import { Audio } from "expo-av";
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -27,7 +28,7 @@ import EncabezadoDetalleOrden from "./secciones/EncabezadoDetalleOrden";
 import ModalesDetalleOrden from "./secciones/ModalesDetalleOrden";
 import { ListaOperacionesAgrupadas } from "./secciones/ListaOperacionesDetalle";
 import PieDetalleOrden from "./secciones/PieDetalleOrden";
-
+import { processSapQueue } from "../../../../src/offline/sapQueue";
 /* ====================== Paleta SAP Fiori (Horizon) ====================== */
 const FIORI = {
   pageBg: "#F7F7F7",
@@ -45,13 +46,14 @@ const FIORI = {
   pause: "#26a5e0ff",
 };
 
-
 /* ====================== Orden iniciada (contador) ====================== */
 const ORDER_START_KEY = (orderId) => `orderStart:${orderId}`;
 
-// ⚠️ CAMBIA ESTA URL por tu endpoint REAL
-const ORDER_STATUS_URL = () => `/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet`;
-
+/**
+ * ⚠️ Ya NO usamos ORDER_STATUS_URL porque ya no cambiamos estatus en SAP con este botón
+ * Lo dejo comentado por si luego lo vuelves a usar.
+ */
+// const ORDER_STATUS_URL = () => `/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet`;
 
 function msToHMS(ms) {
   const total = Math.max(0, Math.floor(ms / 1000));
@@ -204,7 +206,8 @@ function formatValueForRow(value) {
       direccion,
     } = value;
 
-    const posibleFull = full || direccion || value.fullAddress || value.addressString;
+    const posibleFull =
+      full || direccion || value.fullAddress || value.addressString;
     if (posibleFull && typeof posibleFull === "string") return posibleFull;
 
     const partes = [
@@ -273,6 +276,32 @@ export default function DetalleOrden() {
   const [soundObj, setSoundObj] = useState(null);
 
   const signatureRef = useRef(null);
+  const wasOnlineRef = useRef(false);
+
+  // 🔁 Procesar cola SAP cuando regresa el internet
+useEffect(() => {
+  const unsub = NetInfo.addEventListener(async (state) => {
+    const online = !!(state?.isConnected && state?.isInternetReachable !== false);
+
+    // Solo cuando pasamos de OFFLINE → ONLINE
+    if (online && !wasOnlineRef.current) {
+      wasOnlineRef.current = true;
+
+      try {
+        console.log("📡 Conexión restaurada, procesando cola SAP…");
+        await processSapQueue();
+      } catch (e) {
+        console.warn("Error procesando cola SAP:", e?.message || e);
+      }
+    }
+
+    if (!online) {
+      wasOnlineRef.current = false;
+    }
+  });
+
+  return () => unsub();
+}, []);
 
   // modal materiales por operación (SOLO VIEW)
   const [showCompModal, setShowCompModal] = useState(false);
@@ -297,7 +326,7 @@ export default function DetalleOrden() {
   const [signatureData, setSignatureData] = useState(null);
   const [savingSignature, setSavingSignature] = useState(false);
 
-  // ===== iniciar orden + contador =====
+  // ===== iniciar orden + contador (SOLO LOCAL) =====
   const [startingOrder, setStartingOrder] = useState(false);
   const [orderStartedAtMs, setOrderStartedAtMs] = useState(null);
   const [nowTick, setNowTick] = useState(Date.now());
@@ -308,9 +337,24 @@ export default function DetalleOrden() {
   const isNoMant = statusTipo === "NO_MANTENIMIENTO";
   const isOrderSinEmpezar = !statusCode;
   const isOrderPendiente0100 = statusCode === "0100";
-  const isOrderFinished = !!orden?.isFinal || ["0300", "0400", "0500"].includes(statusCode);
+  const isOrderFinished =
+    !!orden?.isFinal || ["0300", "0400", "0500"].includes(statusCode);
 
-  // Tick solo cuando ya está iniciada (0200) y tenemos startedAt
+ const estatusTxt = String(
+  orden?.estatus_label || orden?.estatus || orden?.status || ""
+)
+  .trim()
+  .toUpperCase();
+
+// ✅ considera EN_PROCESO si:
+// - el backend te da el texto "EN_PROCESO" o "EN PROCESO"
+// - o si tu statusCode es 0200 (tu “en proceso” real en SAP)
+const isOrderEnProceso =
+  estatusTxt === "EN_PROCESO" ||
+  estatusTxt === "EN PROCESO" ||
+  statusCode === "0200";
+
+  // Tick solo cuando ya tenemos startedAt
   useEffect(() => {
     if (!orderStartedAtMs) return;
     const t = setInterval(() => setNowTick(Date.now()), 1000);
@@ -324,27 +368,56 @@ export default function DetalleOrden() {
     statusCode === "0200";
 
   const isOpsLocked =
-    isNoMant || isOrderSinEmpezar || isOrderPendiente0100 || isOrderFinished || !checkinDone;
+    isNoMant ||
+    isOrderSinEmpezar ||
+    isOrderPendiente0100 ||
+    isOrderFinished ||
+    !checkinDone;
+
+  // ✅ habilitar iniciar cronómetro (solo EN_PROCESO y sin final/no mant y con check-in)
+  const canStartTimer =
+    isOrderEnProceso && !isNoMant && !isOrderFinished && !!checkinDone;
 
   /** ============================================================
    *  ✅ OBTENER ORDEN + ✅ DIRECCIÓN + ✅ OPERACIONES + ✅ LOCAL STATE
    *  ============================================================ */
   const obtenerOrden = async () => {
+    const orderIdParam = String(id || "").trim();
+
     try {
       setLoading(true);
 
-      // 1) detalle orden
-      const resOrden = await api.get(`/api/ordenes/sap/${id}`, {
+      // 0) Cache primero (si existe, lo pintas ya)
+      const cached = await loadOrdenTecnicoDetail(orderIdParam);
+      if (cached?.data) {
+        setOrden(cached.data);
+        // ojo: no hacemos setLoading(false) aquí, porque si hay internet queremos refrescar
+      }
+
+      // 1) ¿hay internet?
+      const net = await NetInfo.fetch();
+      const isOnline = !!(net?.isConnected && net?.isInternetReachable !== false);
+
+      if (!isOnline) {
+        // sin internet: si había cache, perfecto; si no, muestra error
+        if (!cached?.data) {
+          Alert.alert("Sin conexión", "No hay internet y no hay detalle guardado aún para esta orden.");
+        }
+        return;
+      }
+
+      // 2) online: tu flujo normal
+      const resOrden = await api.get(`/api/ordenes/sap/${orderIdParam}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       const baseOrden = resOrden.data || {};
 
-      // 1.1) Dirección igual que rutas-asignadas
+      // Dirección
       let direccionSap = "";
       let clienteSap = "";
 
       try {
-        const resAddr = await api.get(`/api/ordenes/sap/${id}/addresses`, {
+        const resAddr = await api.get(`/api/ordenes/sap/${orderIdParam}/addresses`, {
           headers: { Authorization: `Bearer ${token}` },
         });
 
@@ -358,50 +431,46 @@ export default function DetalleOrden() {
         console.warn("[ADDR] no se pudo cargar /addresses:", e?.response?.data || e?.message || e);
       }
 
-      // 2) operaciones SAP (endpoint bonito)
+      // Operaciones
       let ops = [];
       try {
-        const resOps = await api.get(`/api/operaciones/sap/${String(id)}`, {
+        const resOps = await api.get(`/api/operaciones/sap/${String(orderIdParam)}`, {
           headers: { Authorization: `Bearer ${token}` },
         });
         ops = normalizeOpsFromBackend(resOps.data);
       } catch (e) {
-        console.warn(
-          "No se pudieron cargar operaciones (nuevo endpoint):",
-          e?.response?.data || e
-        );
+        console.warn("No se pudieron cargar operaciones (nuevo endpoint):", e?.response?.data || e);
         ops = normalizeOpsFromBackend(baseOrden?.operaciones || []);
       }
 
-      // 3) asegurar id compuesto
-      const orderIdReal = String(baseOrden?.Orderid || baseOrden?.OrderId || id);
+      const orderIdReal = String(baseOrden?.Orderid || baseOrden?.OrderId || orderIdParam);
       const opsWithId = ops.map((o) => ({ ...o, id: o.id || opKey(orderIdReal, o) }));
 
-      // 4) cargar estado local y mezclar
       const localState = await loadOpState(orderIdReal);
       const opsMerged = mergeOpsWithLocalState(orderIdReal, opsWithId, localState);
 
-      // 5) inyectar direccion/cliente
       const data = {
         ...baseOrden,
-        direccion:
-          direccionSap ||
-          baseOrden?.direccion ||
-          baseOrden?.address ||
-          baseOrden?.partner_address ||
-          "",
-        cliente:
-          clienteSap ||
-          baseOrden?.cliente ||
-          `${baseOrden?.Name1 ?? ""} ${baseOrden?.Name2 ?? ""}`.trim(),
+        direccion: direccionSap || baseOrden?.direccion || baseOrden?.address || baseOrden?.partner_address || "",
+        cliente: clienteSap || baseOrden?.cliente || `${baseOrden?.Name1 ?? ""} ${baseOrden?.Name2 ?? ""}`.trim(),
         operaciones: opsMerged,
       };
 
       setOrden(data);
 
-      // Si la orden está en 0200, cargamos el start local para el contador
-      const finalStatus = String(data?.estatus_code || data?.userstatus || "").trim();
-      if (finalStatus === "0200") {
+      // 3) guarda cache del detalle
+      await saveOrdenTecnicoDetail(orderIdReal, data);
+
+      // Cronómetro (tu lógica)
+      const estatusTxtLocal = String(data?.estatus_label || data?.estatus || data?.status || "").trim().toUpperCase();
+      const statusCodeLocal = String(data?.estatus_code || data?.userstatus || "").trim();
+
+      const isEnProcesoLocal =
+        estatusTxtLocal === "EN_PROCESO" ||
+        estatusTxtLocal === "EN PROCESO" ||
+        statusCodeLocal === "0200";
+
+      if (isEnProcesoLocal) {
         const savedStart = await loadOrderStart(orderIdReal);
         if (savedStart) setOrderStartedAtMs(savedStart);
       } else {
@@ -409,11 +478,19 @@ export default function DetalleOrden() {
       }
     } catch (error) {
       console.error("Error al obtener orden (SAP):", error?.response?.data || error);
-      Alert.alert("Error", "No se pudo cargar la orden desde SAP");
+
+      // fallback final: intenta cache
+      const cached2 = await loadOrdenTecnicoDetail(orderIdParam);
+      if (cached2?.data) {
+        setOrden(cached2.data);
+      } else {
+        Alert.alert("Error", "No se pudo cargar la orden desde SAP");
+      }
     } finally {
       setLoading(false);
     }
   };
+
 
   // Abrir modal de componentes (SOLO VIEW)
   const openComponentsModal = async (op) => {
@@ -453,7 +530,9 @@ export default function DetalleOrden() {
 
     (async () => {
       try {
-        const { sound } = await Audio.Sound.createAsync(require("../../../../assets/alert.mp3"));
+        const { sound } = await Audio.Sound.createAsync(
+          require("../../../../assets/alert.mp3")
+        );
         localSound = sound;
         if (mounted) setSoundObj(sound);
       } catch (e) {
@@ -477,16 +556,53 @@ export default function DetalleOrden() {
       return;
     }
     const orderid = String(orden.Orderid).trim();
-    router.push({ pathname: "/tecnico/ordenes/[id]/aviso-averia", params: { id: orderid } });
+    router.push({
+      pathname: "/tecnico/ordenes/[id]/aviso-averia",
+      params: { id: orderid },
+    });
   };
 
-  // ======= Iniciar orden (0100 -> 0200) + contador =======
+  // ======= ✅ Iniciar cronómetro (SOLO LOCAL, NO CAMBIA ESTATUS) =======
   const iniciarOrden = async () => {
     if (!orden?.Orderid) return;
 
+    // solo permitir en EN_PROCESO + reglas
+    const estatusTxtNow = String(
+      orden?.estatus_label || orden?.estatus || orden?.status || ""
+    )
+      .trim()
+      .toUpperCase();
+
+    const puedeIniciarPorEstatus =
+      estatusTxtNow === "EN_PROCESO" ||
+      estatusTxtNow === "EN PROCESO" ||
+      statusCode === "0200";
+
+    if (!puedeIniciarPorEstatus) {
+      Alert.alert(
+        "No disponible",
+        'El cronómetro solo se puede iniciar cuando la orden está en "EN_PROCESO" (o código 0200).'
+      );
+      return;
+    }
+
+
+    if (!checkinDone) {
+      Alert.alert("Check-in requerido", "Primero debes hacer Check-in para iniciar el cronómetro.");
+      return;
+    }
+
+    if (isNoMant || isOrderFinished) {
+      Alert.alert("No disponible", "La orden no permite iniciar cronómetro en este estado.");
+      return;
+    }
+
+    // si ya está iniciado, no reiniciar
+    if (orderStartedAtMs) return;
+
     const orderId = String(orden.Orderid).trim();
 
-    Alert.alert("Iniciar orden", "¿Confirmas que deseas marcar la orden como INICIADA?", [
+    Alert.alert("Iniciar orden", "¿Deseas iniciar el cronómetro de la orden?", [
       { text: "Cancelar", style: "cancel" },
       {
         text: "Sí, iniciar",
@@ -494,42 +610,14 @@ export default function DetalleOrden() {
           try {
             setStartingOrder(true);
 
-            const payload = {
-              OrderId: orderId,
-              WorkOrderHeader: { Orderid: orderId },
-              WorkOrderUserStatusSet: [
-                { UserStText: "0200", Langu: "ES", Inactive: "" },
-                { UserStText: "0100", Langu: "ES", Inactive: "X" },
-              ],
-              Return: [],
-            };
-
-            await api.post(ORDER_STATUS_URL(), payload, {
-              headers: { Authorization: `Bearer ${token}` },
-            });
-
-
-            // Guardamos start local para el contador
             const startMs = Date.now();
             await saveOrderStart(orderId, startMs);
             setOrderStartedAtMs(startMs);
 
-            // Actualizamos UI sin esperar recarga
-            setOrden((prev) =>
-              prev
-                ? {
-                    ...prev,
-                    estatus_code: "0200",
-                    userstatus: "0200",
-                    estatus_label: prev?.estatus_label || "INICIADA",
-                  }
-                : prev
-            );
-
-            Alert.alert("Listo", "Orden marcada como iniciada (0200).");
+            Alert.alert("Listo", "Cronómetro iniciado.");
           } catch (e) {
-            console.error("Error al iniciar orden:", e?.response?.data || e);
-            Alert.alert("Error", "No se pudo iniciar la orden. Revisa logs del backend/SAP.");
+            console.error("Error al iniciar cronómetro:", e);
+            Alert.alert("Error", "No se pudo iniciar el cronómetro.");
           } finally {
             setStartingOrder(false);
           }
@@ -549,9 +637,12 @@ export default function DetalleOrden() {
     setNoMantError(null);
 
     try {
-      const res = await api.get(`/evidencias/orden/${orden.Orderid}/no-mantenimiento-pdf`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const res = await api.get(
+        `/evidencias/orden/${orden.Orderid}/no-mantenimiento-pdf`,
+        {
+          headers: { Authorization: `Bearer ${token}` },
+        }
+      );
 
       const { pdf_url } = res.data || {};
       if (!pdf_url) throw new Error("Sin URL de PDF desde backend");
@@ -562,7 +653,9 @@ export default function DetalleOrden() {
       const rawUrl = pdf_url.startsWith("http") ? pdf_url : `${serverRoot}${pdf_url}`;
       setNoMantPdfRawUrl(rawUrl);
 
-      const viewerUrl = `https://docs.google.com/gview?embedded=1&url=${encodeURIComponent(rawUrl)}`;
+      const viewerUrl = `https://docs.google.com/gview?embedded=1&url=${encodeURIComponent(
+        rawUrl
+      )}`;
       setNoMantPdfUrl(viewerUrl);
     } catch (error) {
       console.error("Error al obtener PDF no mantto:", error?.response?.data || error);
@@ -589,14 +682,19 @@ export default function DetalleOrden() {
     try {
       setDownloadingNoMantPdf(true);
 
-      const filename = noMantPdfRawUrl.split("/").pop() || `carta-no-mantto_${orden?.Orderid || ""}.pdf`;
+      const filename =
+        noMantPdfRawUrl.split("/").pop() ||
+        `carta-no-mantto_${orden?.Orderid || ""}.pdf`;
       const localUri = FileSystem.documentDirectory + filename;
 
       const { uri } = await FileSystem.downloadAsync(noMantPdfRawUrl, localUri);
 
       const canShare = await Sharing.isAvailableAsync();
       if (!canShare) {
-        Alert.alert("Descarga completa", "El PDF se guardó en la carpeta de documentos de la app.");
+        Alert.alert(
+          "Descarga completa",
+          "El PDF se guardó en la carpeta de documentos de la app."
+        );
         return;
       }
 
@@ -606,33 +704,54 @@ export default function DetalleOrden() {
       });
     } catch (e) {
       console.error("Error al descargar PDF:", e);
-      Alert.alert("Error", "No se pudo descargar el PDF. Verifica acceso a la URL del servidor.");
+      Alert.alert(
+        "Error",
+        "No se pudo descargar el PDF. Verifica acceso a la URL del servidor."
+      );
     } finally {
       setDownloadingNoMantPdf(false);
     }
   };
 
   // Finalizar orden (firma) — lo dejo porque tú lo tienes en tu flujo
-  const handleFinalizarOrden = () => {
-    if (!orden?.Orderid) return;
+  // app/ordenes/[id]/index.js
+const handleFinalizarOrden = (e) => {
+  e?.stopPropagation?.();
 
-    Alert.alert("Firma del cliente", 'Antes de finalizar la orden, el cliente debe firmar.\n\n¿Deseas capturar la firma ahora?', [
-      { text: "Cancelar", style: "cancel" },
-      {
-        text: "Sí, capturar firma",
-        onPress: () => {
-          setSignatureData(null);
-          setShowSignModal(true);
-        },
-      },
-    ]);
+  const orderid = String(orden?.Orderid ?? id ?? "").trim();
+  if (!orderid) {
+    Alert.alert("Error", "No se encontró el número de orden.");
+    return;
+  }
+
+  // OJO: si la orden está en 0400, entramos como “pendiente_firma”
+  const statusCodeNow = String(orden?.estatus_code || orden?.userstatus || "").trim();
+  const modo = statusCodeNow === "0400" ? "pendiente_firma" : "normal";
+
+  const p = {
+    orderid,
+    cliente: String(orden?.cliente ?? ""),
+    tecnico_nombre: String(orden?.tecnico_nombre ?? user?.nombre ?? user?.email ?? ""),
+    niveles: String(orden?.niveles ?? ""),
+    pisos: String(6), // por ahora fijo a 6 columnas
+    modo,
   };
+
+  router.push({
+    pathname: "/tecnico/ordenes/[orderid]/finalizar-mantto-elevadores",
+    params: p,
+  });
+};
+
 
   const confirmarFinalizarConFirma = async () => {
     if (!orden?.Orderid) return;
 
     if (!signatureData) {
-      Alert.alert("Falta firma", 'Pida al cliente que firme y toque "Listo" dentro del recuadro.');
+      Alert.alert(
+        "Falta firma",
+        'Pida al cliente que firme y toque "Listo" dentro del recuadro.'
+      );
       return;
     }
 
@@ -676,7 +795,7 @@ export default function DetalleOrden() {
         <Header title={`Orden ${id || ""}`} />
 
         {/* ===== Barra superior: iniciar / contador (en loading) ===== */}
-        {isOrderPendiente0100 ? (
+        {canStartTimer && !orderStartedAtMs ? (
           <View style={styles.topActionBar}>
             <TouchableOpacity
               activeOpacity={0.9}
@@ -690,11 +809,13 @@ export default function DetalleOrden() {
               </Text>
             </TouchableOpacity>
           </View>
-        ) : statusCode === "0200" && orderStartedAtMs ? (
+        ) : isOrderEnProceso && orderStartedAtMs ? (
           <View style={styles.topActionBar}>
             <View style={styles.timerPill}>
               <Ionicons name="time-outline" size={16} color={FIORI.text} />
-              <Text style={styles.timerText}>{msToHMS(nowTick - orderStartedAtMs)}</Text>
+              <Text style={styles.timerText}>
+                {msToHMS(nowTick - orderStartedAtMs)}
+              </Text>
             </View>
           </View>
         ) : null}
@@ -737,8 +858,8 @@ export default function DetalleOrden() {
     <View style={styles.container}>
       <Header title={`Orden ${orden?.Orderid || id || ""}`} />
 
-      {/* ✅ AQUÍ ES DONDE FALTABA: Barra superior cuando YA CARGÓ */}
-      {isOrderPendiente0100 ? (
+      {/* ✅ Barra superior cuando YA CARGÓ */}
+      {canStartTimer && !orderStartedAtMs ? (
         <View style={styles.topActionBar}>
           <TouchableOpacity
             activeOpacity={0.9}
@@ -752,11 +873,13 @@ export default function DetalleOrden() {
             </Text>
           </TouchableOpacity>
         </View>
-      ) : statusCode === "0200" && orderStartedAtMs ? (
+      ) : isOrderEnProceso && orderStartedAtMs ? (
         <View style={styles.topActionBar}>
           <View style={styles.timerPill}>
             <Ionicons name="time-outline" size={16} color={FIORI.text} />
-            <Text style={styles.timerText}>{msToHMS(nowTick - orderStartedAtMs)}</Text>
+            <Text style={styles.timerText}>
+              {msToHMS(nowTick - orderStartedAtMs)}
+            </Text>
           </View>
         </View>
       ) : null}
@@ -802,19 +925,27 @@ export default function DetalleOrden() {
             isNoMant={isNoMant}
             userRolId={user?.rol_id}
             finishingOrder={finishingOrder}
+            statusCode={statusCode}
             onIrManttoElevador={(e) => {
               e?.stopPropagation?.();
               const p = {
                 orderid: String(orden?.Orderid ?? id ?? ""),
                 equipment: String(orden?.equipment ?? orden?.Equipment ?? ""),
-                tecnico_nombre: String(orden?.tecnico_nombre ?? user?.nombre ?? user?.email ?? ""),
+                tecnico_nombre: String(
+                  orden?.tecnico_nombre ?? user?.nombre ?? user?.email ?? ""
+                ),
                 Name1: String(orden?.Name1 ?? ""),
                 Name2: String(orden?.Name2 ?? ""),
                 cliente: String(orden?.cliente ?? ""),
                 direccion:
-                  typeof direccionValor === "string" ? direccionValor : JSON.stringify(direccionValor),
+                  typeof direccionValor === "string"
+                    ? direccionValor
+                    : JSON.stringify(direccionValor),
               };
-              router.push({ pathname: "/tecnico/ordenes/[orderid]/reporte-mant-elevadores", params: p });
+              router.push({
+                pathname: "/tecnico/ordenes/[orderid]/reporte-mant-elevadores",
+                params: p,
+              });
             }}
             onIrManttoEscalera={() => {}}
             onFinalizarOrden={handleFinalizarOrden}
@@ -823,7 +954,11 @@ export default function DetalleOrden() {
       />
 
       {!isOpsLocked && (
-        <TouchableOpacity style={styles.fab} activeOpacity={0.9} onPress={(e) => irAAvisoAveria(e)}>
+        <TouchableOpacity
+          style={styles.fab}
+          activeOpacity={0.9}
+          onPress={(e) => irAAvisoAveria(e)}
+        >
           <Ionicons name="warning-outline" size={20} color="#000000ff" />
           <Text style={styles.fabLabel}>Avería</Text>
         </TouchableOpacity>
@@ -885,7 +1020,12 @@ const styles = StyleSheet.create({
   },
   titulo: { fontSize: 18, fontWeight: "800", color: FIORI.text },
 
-  statusBadge: { borderRadius: 999, paddingHorizontal: 10, paddingVertical: 6, marginLeft: 8 },
+  statusBadge: {
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    marginLeft: 8,
+  },
   statusBadgeText: { color: "#fff", fontWeight: "800", fontSize: 12 },
 
   noMantBanner: {
@@ -899,7 +1039,12 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     ...elev(0.3),
   },
-  noMantTitle: { fontSize: 14, fontWeight: "800", color: FIORI.text, marginBottom: 4 },
+  noMantTitle: {
+    fontSize: 14,
+    fontWeight: "800",
+    color: FIORI.text,
+    marginBottom: 4,
+  },
   noMantText: { fontSize: 12, color: FIORI.textMuted },
   btnNoMantBanner: {
     marginLeft: 10,
@@ -1059,44 +1204,47 @@ const styles = StyleSheet.create({
   },
 
   block: { marginTop: 6, marginBottom: 2 },
-  blockTitle: { fontSize: 14, fontWeight: '800', color: FIORI.text, marginBottom: 8 },
+  blockTitle: { fontSize: 14, fontWeight: "800", color: FIORI.text, marginBottom: 8 },
 
-  grid: { flexDirection: 'row', flexWrap: 'wrap', marginHorizontal: -6 },
-  cardWrap: { width: '50%', paddingHorizontal: 6, marginBottom: 12 },
-  card: { borderRadius: 14, minHeight: 96, padding: 14, justifyContent: 'space-between', ...elev(0.6) },
-  cardTop: { flexDirection: 'row', justifyContent: 'flex-end' },
+  grid: { flexDirection: "row", flexWrap: "wrap", marginHorizontal: -6 },
+  cardWrap: { width: "50%", paddingHorizontal: 6, marginBottom: 12 },
+  card: {
+    borderRadius: 14,
+    minHeight: 96,
+    padding: 14,
+    justifyContent: "space-between",
+    ...elev(0.6),
+  },
+  cardTop: { flexDirection: "row", justifyContent: "flex-end" },
   iconBadge: {
     width: 30,
     height: 30,
     borderRadius: 15,
-    backgroundColor: 'rgba(255,255,255,0.25)',
-    alignItems: 'center',
-    justifyContent: 'center',
+    backgroundColor: "rgba(255,255,255,0.25)",
+    alignItems: "center",
+    justifyContent: "center",
     ...elev(0.2),
   },
-  cardTitle: { color: '#fff', fontWeight: '900', fontSize: 15, lineHeight: 18 },
+  cardTitle: { color: "#fff", fontWeight: "900", fontSize: 15, lineHeight: 18 },
 
   btnFinishOrder: {
-    backgroundColor: '#0B8457',
+    backgroundColor: "#0B8457",
     borderRadius: 12,
     paddingVertical: 12,
     paddingHorizontal: 16,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
     gap: 8,
     ...elev(0.7),
   },
-  btnFinishOrderText: { color: '#fff', fontWeight: '900', fontSize: 15 },
-
-
-
+  btnFinishOrderText: { color: "#fff", fontWeight: "900", fontSize: 15 },
 });
 
 function elev(multiplier = 1) {
   return Platform.select({
     ios: {
-      shadowColor: '#000',
+      shadowColor: "#000",
       shadowOpacity: 0.08 * multiplier,
       shadowRadius: 8 * multiplier,
       shadowOffset: { width: 0, height: 3 * multiplier },
