@@ -62,6 +62,12 @@ function fmtDateDMY(ms) {
   return new Date(ms).toLocaleDateString();
 }
 
+// ✅ Folio “aleatorio fijo” (persistente por draft)
+function makeFolio() {
+  // ejemplo: FOL-8K2P4Q
+  return `${Math.random().toString(36).toUpperCase().slice(2, 8)}`;
+}
+
 async function loadOrderStart(orderId) {
   try {
     const raw = await AsyncStorage.getItem(ORDER_START_KEY(orderId));
@@ -155,6 +161,29 @@ async function patchLocalEverywhere({ userEmail, orderId, estatus_code }) {
   } catch {}
 }
 
+// ==== Refacciones helpers ====
+function makeRefRow() {
+  return {
+    cantidad: "",
+    descripcion: "",
+    codigo: "",
+    conCargo: false,
+  };
+}
+
+function normalizeRefacciones(refacciones = []) {
+  // Solo para el PDF: máximo 4 y limpio
+  return (Array.isArray(refacciones) ? refacciones : [])
+    .map((r) => ({
+      cantidad: String(r?.cantidad ?? "").trim(),
+      descripcion: String(r?.descripcion ?? "").trim(),
+      codigo: String(r?.codigo ?? "").trim(),
+      conCargo: !!r?.conCargo,
+    }))
+    .filter((r) => r.cantidad || r.descripcion || r.codigo)
+    .slice(0, 4);
+}
+
 export default function FinalizarManttoElevadores() {
   const { orderid } = useLocalSearchParams();
   const { token, user } = useAuth();
@@ -192,10 +221,22 @@ export default function FinalizarManttoElevadores() {
   const [detalleTrabajo, setDetalleTrabajo] = useState("");
   const [avisoCliente, setAvisoCliente] = useState("");
 
-  // Firma
+  // ✅ Refacciones (SÍ van al PDF)
+  const [usoRefacciones, setUsoRefacciones] = useState(false);
+  const [refacciones, setRefacciones] = useState(() => [makeRefRow()]); // hasta 4
+
+  // ✅ Folio fijo para el PDF (guardado en draft)
+  const [folio, setFolio] = useState("");
+
+  // Firma (SÍ va al PDF)
   const [firmaBase64, setFirmaBase64] = useState(null);
   const [nombreFirma, setNombreFirma] = useState("");
   const [cargoFirma, setCargoFirma] = useState("");
+
+  // ✅ Datos extra cliente (NO van a PDF / NO se mandan)
+  const [telefonoCliente, setTelefonoCliente] = useState("");
+  const [correoCliente, setCorreoCliente] = useState("");
+  const [comentariosCliente, setComentariosCliente] = useState("");
 
   // Horas
   const [startMs, setStartMs] = useState(null);
@@ -208,19 +249,54 @@ export default function FinalizarManttoElevadores() {
       try {
         setLoading(true);
 
-        // 1) cargar hora de inicio del cronómetro (orderStart)
+        // ✅ leemos ambos: orderStart y draft
         const s = await loadOrderStart(orderId);
-        setStartMs(s);
-
-        // 2) si hay borrador, hidratar
         const draft = await loadDraft(orderId);
+
+        // ✅ Prioridad: orderStart -> draft.startMs -> ahora
+        const resolvedStart =
+          (Number.isFinite(s) ? s : null) ??
+          (Number.isFinite(draft?.startMs) ? draft.startMs : null) ??
+          Date.now();
+
+        setStartMs(resolvedStart);
+
+        // ✅ si no existía orderStart, lo guardamos
+        if (!Number.isFinite(s)) {
+          try {
+            await AsyncStorage.setItem(ORDER_START_KEY(orderId), String(resolvedStart));
+          } catch {}
+        }
+
+        // ✅ folio fijo: draft.folio -> generar uno
+        const resolvedFolio = String(draft?.folio || "").trim() || makeFolio();
+        setFolio(resolvedFolio);
+
+        // si no traía folio, lo persistimos para que ya quede fijo
+        if (!draft?.folio) {
+          try {
+            await saveDraft(orderId, { ...(draft || {}), folio: resolvedFolio });
+          } catch {}
+        }
+
+        // ✅ hidratar el resto del draft
         if (draft?.topChecks) setTopChecks(draft.topChecks);
         if (draft?.subChecks) setSubChecks(draft.subChecks);
         if (draft?.detalleTrabajo) setDetalleTrabajo(draft.detalleTrabajo);
         if (draft?.avisoCliente) setAvisoCliente(draft.avisoCliente);
+
+        if (typeof draft?.usoRefacciones === "boolean") setUsoRefacciones(draft.usoRefacciones);
+        if (Array.isArray(draft?.refacciones) && draft.refacciones.length) {
+          setRefacciones(draft.refacciones.slice(0, 4));
+        }
+
         if (draft?.nombreFirma) setNombreFirma(draft.nombreFirma);
         if (draft?.cargoFirma) setCargoFirma(draft.cargoFirma);
         if (draft?.firmaBase64) setFirmaBase64(draft.firmaBase64);
+
+        if (draft?.telefonoCliente) setTelefonoCliente(draft.telefonoCliente);
+        if (draft?.correoCliente) setCorreoCliente(draft.correoCliente);
+        if (draft?.comentariosCliente) setComentariosCliente(draft.comentariosCliente);
       } finally {
         setLoading(false);
       }
@@ -247,16 +323,29 @@ export default function FinalizarManttoElevadores() {
       subChecks,
       detalleTrabajo,
       avisoCliente,
+
+      usoRefacciones,
+      refacciones: (refacciones || []).slice(0, 4),
+
       nombreFirma,
       cargoFirma,
       firmaBase64,
+
+      // extras (NO PDF / NO SAP)
+      telefonoCliente,
+      correoCliente,
+      comentariosCliente,
+
+      // ✅ persistimos hora inicio y folio fijo
+      startMs,
+      folio,
+
       updatedAt: Date.now(),
     };
     await saveDraft(orderId, draft);
   };
 
   async function postToSap(payload) {
-    // ⚠️ api ya debería meter Authorization por interceptor, pero aquí lo mandamos explícito como tú lo traes en otras vistas
     return await api.post(ORDER_STATUS_URL(), payload, {
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
     });
@@ -264,6 +353,8 @@ export default function FinalizarManttoElevadores() {
 
   // ✅ Ahora genera PDF + regresa { uri, pdfBase64 }
   const generarPdf = async (finishMs, firmaFinal) => {
+    const refParaPdf = usoRefacciones ? normalizeRefacciones(refacciones) : [];
+
     const payload = {
       orderid: orderId,
       cliente,
@@ -275,16 +366,16 @@ export default function FinalizarManttoElevadores() {
       niveles: niveles ?? "",
       aviso_cliente: avisoCliente ?? "",
       detalle_trabajo: detalleTrabajo ?? "",
-      refacciones: [],
+      refacciones: refParaPdf, // ✅ ahora SÍ llena la tabla del PDF
       bloques: bloquesParaPdf,
       firmaClienteBase64: firmaFinal || "",
       nombreClienteFirma: nombreFirma || "",
       cargoClienteFirma: cargoFirma || "",
-      folio: "",
+      folio: folio || "", // ✅ folio aleatorio fijo
     };
 
     const html = await buildPdfHtmlElevadores(payload, {
-      logoModule: require("../../../../assets/logo.png"),
+      logoModule: require("../../../../assets/imgDocs/logo.png"),
       elevadorModule: require("../../../../assets/imgDocs/elevador.png"),
     });
 
@@ -313,41 +404,10 @@ export default function FinalizarManttoElevadores() {
         Alert.alert("PDF generado", "El archivo se generó en el almacenamiento de la app.");
       }
     } catch (e) {
-      // compartir no debe bloquear el flujo de finalizar
       console.warn("No se pudo compartir PDF (continuo):", e?.message || e);
     }
 
     return { uri, pdfBase64 };
-  };
-
-  const enqueueStatus = async ({ activate, deactivateList }) => {
-    const statusPayload = buildStatusPayload({
-      orderId,
-      activate,
-      deactivateList,
-    });
-
-    await upsertSapQueueItem({
-      type: "STATUS",
-      orderId,
-      endpoint: ORDER_STATUS_URL(),
-      payload: statusPayload,
-    });
-
-    return statusPayload;
-  };
-
-  const enqueuePdf = async ({ pdfBase64 }) => {
-    const pdfPayload = buildPdfSapPayload({ orderId, pdfBase64 });
-
-    await upsertSapQueueItem({
-      type: "PDF",
-      orderId,
-      endpoint: ORDER_STATUS_URL(),
-      payload: pdfPayload,
-    });
-
-    return pdfPayload;
   };
 
   const onGuardarPendienteFirma = async () => {
@@ -383,8 +443,10 @@ export default function FinalizarManttoElevadores() {
                   router.replace("/tecnico/ordenes");
                   return;
                 } catch (e) {
-                  console.warn("No se pudo postear 0400 online, encolo:", e?.response?.data || e?.message || e);
-                  // cae a offline/cola
+                  console.warn(
+                    "No se pudo postear 0400 online, encolo:",
+                    e?.response?.data || e?.message || e
+                  );
                 }
               }
 
@@ -470,8 +532,10 @@ export default function FinalizarManttoElevadores() {
                   router.replace("/tecnico/ordenes");
                   return;
                 } catch (e) {
-                  console.warn("Falló finalizar online, encolo:", e?.response?.data || e?.message || e);
-                  // cae a offline/cola
+                  console.warn(
+                    "Falló finalizar online, encolo:",
+                    e?.response?.data || e?.message || e
+                  );
                 }
               }
 
@@ -486,7 +550,7 @@ export default function FinalizarManttoElevadores() {
               await upsertSapQueueItem({
                 type: "STATUS",
                 orderId,
-                endpoint: ORDER_STATUS_URL(),
+               endpoint: ORDER_STATUS_URL(),
                 payload: statusPayload,
               });
 
@@ -495,10 +559,6 @@ export default function FinalizarManttoElevadores() {
                 orderId,
                 estatus_code: "0300",
               });
-
-              // ⚠️ decisión: NO borramos draft en offline (por seguridad)
-              // Si tú prefieres borrarlo, descomenta:
-              // await clearDraft(orderId);
 
               Alert.alert(
                 "Listo (offline)",
@@ -521,6 +581,41 @@ export default function FinalizarManttoElevadores() {
   const toggleTop = (k) => setTopChecks((p) => ({ ...p, [k]: !p[k] }));
   const toggleSub = (k) => setSubChecks((p) => ({ ...p, [k]: !p[k] }));
 
+  // ==== Refacciones UI actions ====
+  const setRefField = (idx, key, val) => {
+    setRefacciones((prev) => {
+      const next = [...prev];
+      const row = { ...(next[idx] || makeRefRow()) };
+      row[key] = val;
+      next[idx] = row;
+      return next.slice(0, 4);
+    });
+  };
+
+  const addRefRow = () => {
+    setRefacciones((prev) => {
+      const p = Array.isArray(prev) ? prev : [];
+      if (p.length >= 4) return p;
+      return [...p, makeRefRow()];
+    });
+  };
+
+  const removeRefRow = (idx) => {
+    setRefacciones((prev) => {
+      const p = Array.isArray(prev) ? prev : [];
+      const next = p.filter((_, i) => i !== idx);
+      return next.length ? next : [makeRefRow()];
+    });
+  };
+
+  const markUsoRefacciones = (val) => {
+    setUsoRefacciones(val);
+    if (!val) {
+      // si dice que NO, limpiamos (para que el PDF vaya vacío)
+      setRefacciones([makeRefRow()]);
+    }
+  };
+
   if (loading) {
     return (
       <View style={styles.container}>
@@ -532,6 +627,8 @@ export default function FinalizarManttoElevadores() {
       </View>
     );
   }
+
+  const refCountFilled = normalizeRefacciones(refacciones).length;
 
   return (
     <View style={styles.container}>
@@ -558,7 +655,7 @@ export default function FinalizarManttoElevadores() {
         </View>
 
         <View style={styles.card}>
-          <Text style={styles.title}>Checklist (tabla principal)</Text>
+          <Text style={styles.title}>Checklist</Text>
           {BLOQUE_TOP.map((k) => (
             <TouchableOpacity
               key={k}
@@ -619,7 +716,157 @@ export default function FinalizarManttoElevadores() {
           />
         </View>
 
-        {/* ✅ Firma con Modal (Opción A) */}
+        {/* ✅ Refacciones (ESTO SÍ VA AL PDF) */}
+        <View style={styles.card}>
+          <Text style={styles.title}>Refacciones utilizadas</Text>
+
+          <Text style={styles.label}>¿Se consumieron refacciones?</Text>
+          <View style={styles.choiceRow}>
+            <TouchableOpacity
+              style={[styles.choiceBtn, usoRefacciones && styles.choiceBtnActive]}
+              onPress={() => markUsoRefacciones(true)}
+              activeOpacity={0.9}
+            >
+              <Ionicons
+                name={usoRefacciones ? "checkmark-circle" : "ellipse-outline"}
+                size={18}
+                color={usoRefacciones ? "#fff" : "#111827"}
+              />
+              <Text style={[styles.choiceText, usoRefacciones && styles.choiceTextActive]}>Sí</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.choiceBtn, !usoRefacciones && styles.choiceBtnActive]}
+              onPress={() => markUsoRefacciones(false)}
+              activeOpacity={0.9}
+            >
+              <Ionicons
+                name={!usoRefacciones ? "checkmark-circle" : "ellipse-outline"}
+                size={18}
+                color={!usoRefacciones ? "#fff" : "#111827"}
+              />
+              <Text style={[styles.choiceText, !usoRefacciones && styles.choiceTextActive]}>No</Text>
+            </TouchableOpacity>
+          </View>
+
+          {usoRefacciones ? (
+            <>
+              <Text style={styles.hint}>Llenar “Con cargo” si aplica.</Text>
+
+              {refacciones.slice(0, 4).map((r, idx) => (
+                <View key={idx} style={styles.refCard}>
+                  <View style={styles.refHeader}>
+                    <Text style={styles.refTitle}>Refacción #{idx + 1}</Text>
+
+                    {refacciones.length > 1 && (
+                      <TouchableOpacity
+                        style={styles.refDelete}
+                        onPress={() => removeRefRow(idx)}
+                        activeOpacity={0.85}
+                      >
+                        <Ionicons name="trash-outline" size={16} color="#111827" />
+                        <Text style={styles.refDeleteText}>Quitar</Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+
+                  <Text style={styles.label}>Cantidad</Text>
+                  <TextInput
+                    value={String(r?.cantidad ?? "")}
+                    onChangeText={(v) => setRefField(idx, "cantidad", v)}
+                    keyboardType={Platform.OS === "ios" ? "numbers-and-punctuation" : "numeric"}
+                    placeholder="Ej. 1"
+                    style={styles.input}
+                  />
+
+                  <Text style={styles.label}>Descripción</Text>
+                  <TextInput
+                    value={String(r?.descripcion ?? "")}
+                    onChangeText={(v) => setRefField(idx, "descripcion", v)}
+                    placeholder="Ej. Fusible / Botonera / Sensor…"
+                    style={styles.input}
+                  />
+
+                  <Text style={styles.label}>Código interno</Text>
+                  <TextInput
+                    value={String(r?.codigo ?? "")}
+                    onChangeText={(v) => setRefField(idx, "codigo", v)}
+                    placeholder="Opcional…"
+                    style={styles.input}
+                  />
+
+                  <Text style={styles.label}>Con cargo al cliente</Text>
+                  <View style={styles.choiceRow}>
+                    <TouchableOpacity
+                      style={[styles.choiceBtnSmall, r?.conCargo && styles.choiceBtnActive]}
+                      onPress={() => setRefField(idx, "conCargo", true)}
+                      activeOpacity={0.9}
+                    >
+                      <Text style={[styles.choiceText, r?.conCargo && styles.choiceTextActive]}>Sí</Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={[styles.choiceBtnSmall, !r?.conCargo && styles.choiceBtnActive]}
+                      onPress={() => setRefField(idx, "conCargo", false)}
+                      activeOpacity={0.9}
+                    >
+                      <Text style={[styles.choiceText, !r?.conCargo && styles.choiceTextActive]}>No</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              ))}
+
+              {refacciones.length < 4 && (
+                <TouchableOpacity style={styles.btnGhost} onPress={addRefRow} activeOpacity={0.9}>
+                  <Ionicons name="add-circle-outline" size={18} />
+                  <Text style={styles.btnGhostText}>Agregar otra refacción</Text>
+                </TouchableOpacity>
+              )}
+
+              <Text style={styles.hint}>
+                Renglones llenos para PDF: <Text style={styles.bold}>{refCountFilled}</Text>
+              </Text>
+            </>
+          ) : (
+            <Text style={styles.hint}>
+              Si seleccionas “No”, la tabla de refacciones saldrá vacía en el PDF.
+            </Text>
+          )}
+        </View>
+
+        {/* ✅ Datos del cliente (no PDF / no SAP) */}
+        <View style={styles.card}>
+          <Text style={styles.title}>Datos del cliente</Text>
+
+          <Text style={styles.label}>Teléfono</Text>
+          <TextInput
+            value={telefonoCliente}
+            onChangeText={setTelefonoCliente}
+            placeholder="Opcional…"
+            keyboardType="phone-pad"
+            style={styles.input}
+          />
+
+          <Text style={styles.label}>Correo</Text>
+          <TextInput
+            value={correoCliente}
+            onChangeText={setCorreoCliente}
+            placeholder="Opcional…"
+            keyboardType="email-address"
+            autoCapitalize="none"
+            style={styles.input}
+          />
+
+          <Text style={styles.label}>Comentarios del cliente</Text>
+          <TextInput
+            value={comentariosCliente}
+            onChangeText={setComentariosCliente}
+            placeholder="Opcional…"
+            multiline
+            style={styles.textarea}
+          />
+        </View>
+
         <View style={styles.card}>
           <Text style={styles.title}>Firma del cliente</Text>
 
@@ -635,7 +882,7 @@ export default function FinalizarManttoElevadores() {
             activeOpacity={0.9}
           >
             <Ionicons name="pencil-outline" size={18} color="#111827" />
-            <Text style={styles.btnSecondaryText}>{firmaBase64 ? "Ver / Re-firmar" : "Firmar"}</Text>
+            <Text style={styles.btnSecondaryText}>{firmaBase64 ? "Editar firma" : "Firmar"}</Text>
           </TouchableOpacity>
 
           {!!firmaBase64 && (
@@ -654,7 +901,7 @@ export default function FinalizarManttoElevadores() {
             </TouchableOpacity>
           )}
 
-          <Text style={styles.hint}>Si NO hay firma, guarda como “Pendiente de firma (0400)”.</Text>
+          <Text style={styles.hint}>Si NO hay firma, guarda como “Pendiente de firma”.</Text>
         </View>
 
         <View style={{ height: 18 }} />
@@ -665,7 +912,7 @@ export default function FinalizarManttoElevadores() {
           onPress={onGuardarPendienteFirma}
         >
           <Ionicons name="save-outline" size={18} color="#111827" />
-          <Text style={styles.btnSecondaryText}>Guardar pendiente de firma (0400)</Text>
+          <Text style={styles.btnSecondaryText}>Guardar pendiente de firma</Text>
         </TouchableOpacity>
 
         <TouchableOpacity
@@ -674,7 +921,7 @@ export default function FinalizarManttoElevadores() {
           onPress={onFinalizarConFirma}
         >
           <Ionicons name="flag-outline" size={18} color="#fff" />
-          <Text style={styles.btnPrimaryText}>Finalizar con firma (0300) + Generar PDF</Text>
+          <Text style={styles.btnPrimaryText}>Finalizar con firma + Generar PDF</Text>
         </TouchableOpacity>
 
         <View style={{ height: 30 }} />
@@ -852,8 +1099,50 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#DDE6F2",
     backgroundColor: "#fff",
+    marginTop: 10,
   },
   btnGhostText: { fontWeight: "800", color: "#111827" },
+
+  // ===== Refacciones UI =====
+  choiceRow: { flexDirection: "row", gap: 10 },
+  choiceBtn: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: "#DDE6F2",
+    backgroundColor: "#fff",
+    borderRadius: 12,
+    paddingVertical: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+  },
+  choiceBtnSmall: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: "#DDE6F2",
+    backgroundColor: "#fff",
+    borderRadius: 12,
+    paddingVertical: 10,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  choiceBtnActive: { backgroundColor: "#0A6ED1", borderColor: "#0A6ED1" },
+  choiceText: { fontWeight: "900", color: "#111827" },
+  choiceTextActive: { color: "#fff" },
+
+  refCard: {
+    marginTop: 12,
+    borderWidth: 1,
+    borderColor: "#E6EEF9",
+    backgroundColor: "#FBFDFF",
+    borderRadius: 12,
+    padding: 12,
+  },
+  refHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  refTitle: { fontWeight: "900", color: "#0B1F3B" },
+  refDelete: { flexDirection: "row", alignItems: "center", gap: 6, padding: 6 },
+  refDeleteText: { fontWeight: "900", color: "#111827" },
 
   // ===== Modal Firma =====
   signModalHeader: {

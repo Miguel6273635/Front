@@ -16,10 +16,10 @@ function uid() {
 /**
  * Item schema:
  * {
- *   id, type: "STATUS" | "PDF",
+ *   id, type: "STATUS" | "PDF" | "EVIDENCE",
  *   orderId,
- *   endpoint,          // "/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet"
- *   payload,           // JSON a mandar
+ *   endpoint,
+ *   payload,
  *   createdAt,
  *   updatedAt,
  *   tries,
@@ -48,7 +48,9 @@ async function saveQueue(items) {
  */
 export async function upsertSapQueueItem({ type, orderId, endpoint, payload }) {
   const q = await loadQueue();
-  const idx = q.findIndex((x) => x?.type === type && String(x?.orderId) === String(orderId));
+  const idx = q.findIndex(
+    (x) => x?.type === type && String(x?.orderId) === String(orderId)
+  );
 
   const item = {
     id: idx >= 0 ? q[idx].id : uid(),
@@ -83,21 +85,42 @@ async function isOnlineNow() {
 }
 
 /**
- * ✅ Procesa cola en orden: primero PDF y luego STATUS (recomendado).
- * - Si algo falla, se detiene para no “romper” orden de envíos.
+ * ✅ Procesa cola en orden:
+ * 1) EVIDENCE
+ * 2) PDF
+ * 3) STATUS
+ *
+ * - Si algo falla, se detiene para no romper orden de envíos.
  * - Reintenta después.
+ *
+ * Opcional:
+ * - ensureValidToken(): function que renueva token si hace falta, debe regresar true/false
+ * - apiInstance: axios instance (si no pasas, usa api importado)
  */
-export async function processSapQueue({ ensureValidToken } = {}) {
+export async function processSapQueue({ ensureValidToken, apiInstance } = {}) {
   const online = await isOnlineNow();
-  if (!online) return { ok: false, reason: "offline", processed: 0, remaining: (await loadQueue()).length };
+  const currentQueue = await loadQueue();
 
-  let q = await loadQueue();
+  if (!online)
+    return {
+      ok: false,
+      reason: "offline",
+      processed: 0,
+      remaining: currentQueue.length,
+    };
+
+  let q = currentQueue;
   if (!q.length) return { ok: true, processed: 0, remaining: 0 };
 
-  // ✅ prioridad: PDF primero, luego STATUS
+  // ✅ prioridad: EVIDENCE primero, luego PDF, luego STATUS
   q = q.sort((a, b) => {
-    const pa = a?.type === "PDF" ? 0 : 1;
-    const pb = b?.type === "PDF" ? 0 : 1;
+    const prio = (t) => {
+      if (t === "EVIDENCE") return 0;
+      if (t === "PDF") return 1;
+      return 2; // STATUS
+    };
+    const pa = prio(a?.type);
+    const pb = prio(b?.type);
     if (pa !== pb) return pa - pb;
     return (a?.createdAt || 0) - (b?.createdAt || 0);
   });
@@ -105,19 +128,19 @@ export async function processSapQueue({ ensureValidToken } = {}) {
   let processed = 0;
   const newQueue = [];
 
+  const axiosClient = apiInstance || api;
+
   for (const item of q) {
     try {
       if (ensureValidToken) {
         const ok = await ensureValidToken();
         if (!ok) {
-          // token no válido: no borres cola
           newQueue.push(item);
           break;
         }
       }
 
-      // ⚠️ api ya debería meter Authorization por interceptor
-      await api.post(item.endpoint, item.payload, {
+      await axiosClient.post(item.endpoint, item.payload, {
         headers: { "Content-Type": "application/json" },
       });
 
@@ -125,7 +148,11 @@ export async function processSapQueue({ ensureValidToken } = {}) {
       // ✅ éxito: NO re-agregamos el item
     } catch (e) {
       const tries = (item?.tries || 0) + 1;
-      const err = e?.response?.data || e?.message || String(e);
+      const err =
+        e?.response?.data ||
+        e?.response?.status ||
+        e?.message ||
+        String(e);
 
       newQueue.push({
         ...item,
@@ -134,13 +161,12 @@ export async function processSapQueue({ ensureValidToken } = {}) {
         updatedAt: nowMs(),
       });
 
-      // ✅ detenemos para reintentar luego (evita mandar status sin pdf, etc.)
-      // Si quieres que continúe con otros, quita este break.
+      // ✅ detenemos para reintentar luego (evita mandar status sin evidencia/pdf)
       break;
     }
   }
 
-  // agrega los que no alcanzamos a procesar
+  // ✅ agrega los que no alcanzamos a procesar (sin duplicar)
   const processedIds = new Set(q.slice(0, processed).map((x) => x.id));
   for (const item of q) {
     if (!processedIds.has(item.id) && !newQueue.find((x) => x.id === item.id)) {

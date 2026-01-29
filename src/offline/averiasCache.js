@@ -2,15 +2,10 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
 const PREFIX = "@mitsu:averias:";
-
 const safe = (v) => (v == null ? "" : String(v));
 
 const jsonParse = (s, fallback) => {
-  try {
-    return JSON.parse(s);
-  } catch {
-    return fallback;
-  }
+  try { return JSON.parse(s); } catch { return fallback; }
 };
 
 /* =========================
@@ -42,15 +37,16 @@ export async function loadAveriasListCache({ correo, startYmd, endYmd }) {
 /* =========================
    DETALLE DE AVERÍA (DETALLES)
 ========================= */
-const keyDetail = ({ averiaid }) =>
-  `${PREFIX}detail:${safe(averiaid).trim()}`;
+const keyDetail = ({ averiaid }) => `${PREFIX}detail:${safe(averiaid).trim()}`;
 
-export async function saveAveriaDetailCache({ averiaid, header, codigos }) {
+// ✅ ahora guarda header + item (y sigue guardando codigos si los usas)
+export async function saveAveriaDetailCache({ averiaid, header, item, codigos }) {
   const k = keyDetail({ averiaid });
   const payload = {
     savedAt: Date.now(),
     averiaid: safe(averiaid).trim(),
     header: header ?? null,
+    item: item ?? null,
     codigos: codigos ?? null,
   };
   await AsyncStorage.setItem(k, JSON.stringify(payload));
@@ -59,30 +55,6 @@ export async function saveAveriaDetailCache({ averiaid, header, codigos }) {
 
 export async function loadAveriaDetailCache({ averiaid }) {
   const k = keyDetail({ averiaid });
-  const raw = await AsyncStorage.getItem(k);
-  if (!raw) return null;
-  return jsonParse(raw, null);
-}
-
-/* =========================
-   CATÁLOGOS (ej. causas "P")
-========================= */
-const keyCatalog = ({ catalogo }) =>
-  `${PREFIX}catalog:${safe(catalogo).trim().toUpperCase()}`;
-
-export async function saveCatalogCache({ catalogo, items }) {
-  const k = keyCatalog({ catalogo });
-  const payload = {
-    savedAt: Date.now(),
-    catalogo: safe(catalogo).trim().toUpperCase(),
-    items: Array.isArray(items) ? items : [],
-  };
-  await AsyncStorage.setItem(k, JSON.stringify(payload));
-  return k;
-}
-
-export async function loadCatalogCache({ catalogo }) {
-  const k = keyCatalog({ catalogo });
   const raw = await AsyncStorage.getItem(k);
   if (!raw) return null;
   return jsonParse(raw, null);

@@ -266,3 +266,31 @@ function safeParse(s) {
     return null;
   }
 }
+// ✅ Parche/migración: corregir URLs guardadas en outbox
+export async function outboxReplaceRequestUrl(oldUrl, newUrl) {
+  const rows = await getAllAsync(
+    `SELECT id, request FROM outbox
+     WHERE status IN ('pending','error','sending');`,
+    []
+  );
+
+  let changed = 0;
+
+  for (const r of rows || []) {
+    const req = safeParse(r.request);
+    if (!req?.url) continue;
+
+    if (String(req.url).trim() === String(oldUrl).trim()) {
+      req.url = newUrl;
+
+      await runAsync(`UPDATE outbox SET request=? WHERE id=?;`, [
+        JSON.stringify(req),
+        r.id,
+      ]);
+
+      changed += 1;
+    }
+  }
+
+  return { ok: true, changed };
+}

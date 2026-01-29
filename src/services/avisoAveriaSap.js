@@ -1,10 +1,12 @@
 // src/services/avisoAveriaSap.js
 import api from "./api";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import NetInfo from "@react-native-community/netinfo";
 
 const PREFIX = "@mitsu:avisoAveria:";
 const keyMeta = (orderid) => `${PREFIX}meta:${String(orderid || "").trim()}`;
-const keyCatalog = (catalogo) => `${PREFIX}catalog:${String(catalogo || "").trim().toUpperCase()}`;
+const keyCatalog = (catalogo) =>
+  `${PREFIX}catalog:${String(catalogo || "").trim().toUpperCase()}`;
 
 const jsonParse = (s, fallback) => {
   try {
@@ -13,6 +15,12 @@ const jsonParse = (s, fallback) => {
     return fallback;
   }
 };
+
+async function isOnlineNow() {
+  const st = await NetInfo.fetch();
+  // ✅ Online si conectado y reachability NO es false (true o null)
+  return !!st?.isConnected && st?.isInternetReachable !== false;
+}
 
 export async function fetchMetaAviso(orderid, token) {
   if (!orderid || orderid === "undefined" || orderid === "null") {
@@ -25,18 +33,25 @@ export async function fetchMetaAviso(orderid, token) {
   const cachedRaw = await AsyncStorage.getItem(k);
   const cached = cachedRaw ? jsonParse(cachedRaw, null) : null;
 
+  // ✅ Si está offline, regresa cache directo (si hay)
+  const online = await isOnlineNow();
+  if (!online) {
+    if (cached?.data) return cached.data;
+    // si no hay cache, fuerza error claro
+    throw new Error("Sin conexión y no hay datos cacheados de la meta del aviso.");
+  }
+
   try {
-    const res = await api.get(`/api/aviso-averia/meta/${orderid}`, {
-      headers: { Authorization: `Bearer ${token}` },
+    const res = await api.get(`/api/aviso-averia/meta/${encodeURIComponent(orderid)}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
     });
 
     const payload = { savedAt: Date.now(), data: res.data };
     await AsyncStorage.setItem(k, JSON.stringify(payload));
     return res.data;
   } catch (e) {
-    if (cached?.data) {
-      return cached.data;
-    }
+    // ✅ fallback a cache
+    if (cached?.data) return cached.data;
     throw e;
   }
 }
@@ -49,10 +64,21 @@ export async function fetchCatalogoCircunstancia(catalogo, token) {
   const cachedRaw = await AsyncStorage.getItem(k);
   const cached = cachedRaw ? jsonParse(cachedRaw, null) : null;
 
+  // ✅ offline -> cache
+  const online = await isOnlineNow();
+  if (!online) {
+    if (cached?.data) return cached.data;
+    // sin cache, regresa [] para no romper UI
+    return [];
+  }
+
   try {
     const res = await api.get(
-      `/api/aviso-averia/catalogos/circunstancia?catalogo=${encodeURIComponent(cat)}`,
-      { headers: { Authorization: `Bearer ${token}` } }
+      `/api/aviso-averia/catalogos/circunstancia`,
+      {
+        params: { catalogo: cat },
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      }
     );
 
     const payload = { savedAt: Date.now(), data: res.data };
@@ -65,17 +91,18 @@ export async function fetchCatalogoCircunstancia(catalogo, token) {
 }
 
 export async function crearAvisoAveriaSap(payload, token) {
-  // ✅ esto NO lo encolamos aquí (si quieres, luego lo mandamos a tu outbox sqlite)
+  // ✅ online normal (offline lo resuelve la vista con outbox)
   try {
     const res = await api.post(`/api/aviso-averia/create`, payload, {
-      headers: { Authorization: `Bearer ${token}` },
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
     });
     return res.data;
   } catch (e) {
-    // mensaje más claro cuando es por red
-    const msg = e?.message || "";
+    const msg = String(e?.message || "");
     if (msg.toLowerCase().includes("network") || msg.toLowerCase().includes("timeout")) {
-      throw new Error("Sin conexión: no se puede crear el aviso offline. Intenta cuando tengas internet.");
+      throw new Error(
+        "Sin conexión: no se puede crear el aviso en este momento. Se recomienda guardar offline desde la vista."
+      );
     }
     throw e;
   }

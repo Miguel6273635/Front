@@ -16,8 +16,11 @@ import {
 import Header from "../../../src/components/Header";
 import { router } from "expo-router";
 import DateTimePicker from "@react-native-community/datetimepicker";
+import NetInfo from "@react-native-community/netinfo";
+
 import { useAuth } from "../../../src/context/AuthContext";
 import api from "../../../src/services/api";
+import { saveAveriasListCache, loadAveriasListCache } from "../../../src/offline/averiasCache";
 
 // Paleta Fiori
 const FIORI = {
@@ -36,8 +39,20 @@ const MONTHS = [
 ];
 
 // ===== Helpers =====
+const isOnlineNow = async () => {
+  const st = await NetInfo.fetch();
+  return !!st?.isConnected && st?.isInternetReachable !== false;
+};
 
-// OData datetime: YYYY-MM-DDTHH:mm:ss (sin Z, como tu ejemplo)
+const ymd = (d) => {
+  const x = new Date(d);
+  const yyyy = x.getFullYear();
+  const mm = String(x.getMonth() + 1).padStart(2, "0");
+  const dd = String(x.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+};
+
+// OData datetime: YYYY-MM-DDTHH:mm:ss
 const toOdataDateTime = (d, endOfDay = false) => {
   const date = new Date(d);
   if (endOfDay) date.setHours(23, 59, 59, 0);
@@ -52,7 +67,7 @@ const toOdataDateTime = (d, endOfDay = false) => {
   return `${yyyy}-${mm}-${dd}T${hh}:${mi}:${ss}`;
 };
 
-// SAP /Date(…)/ a Date o ISO
+// SAP /Date(…)/ a Date
 const sapDateToDate = (val) => {
   if (!val) return null;
   const s = String(val);
@@ -74,7 +89,6 @@ const formatDate = (value) => {
   return `${dd}/${mm}/${yyyy}`;
 };
 
-// rangos
 const atStartOfDay = (d) => {
   const x = new Date(d);
   x.setHours(0, 0, 0, 0);
@@ -97,6 +111,7 @@ export default function AveriaIndexTecnico() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
+  const [offlineMsg, setOfflineMsg] = useState(""); // ✅ banner offline
 
   // Filtros
   const [dateMode, setDateMode] = useState("day"); // 'all' | 'day' | 'weekRange' | 'month' | 'year'
@@ -167,24 +182,42 @@ export default function AveriaIndexTecnico() {
     return "";
   }, [dateMode, dayRef, weekStart, weekEnd, monthYear, yearOnly]);
 
-  // ======== FETCH ODATA (LA URL QUE PEDISTE) ========
   const fetchAvisosForRange = useCallback(async () => {
+    const correo = getCorreo();
+    const startYmd = ymd(start);
+    const endYmd = ymd(end);
+
     try {
       setErrorMsg("");
+      setOfflineMsg("");
       setLoading(true);
 
-      const correo = getCorreo();
       if (!correo) {
         setAvisos([]);
         setErrorMsg("No se encontró el correo del usuario logueado.");
         return;
       }
 
+      const online = await isOnlineNow();
+
+      // ✅ OFFLINE -> intenta cache
+      if (!online) {
+        const cached = await loadAveriasListCache({ correo, startYmd, endYmd });
+        const items = cached?.items || cached?.value?.items || []; // por si cambiaste estructura antes
+        if (Array.isArray(items) && items.length) {
+          setAvisos(items);
+          setOfflineMsg(`Mostrando datos offline (guardados: ${new Date(cached.savedAt).toLocaleString()})`);
+        } else {
+          setAvisos([]);
+          setErrorMsg("Sin conexión y no hay cache para este filtro.");
+        }
+        return;
+      }
+
+      // ✅ ONLINE -> pega a SAP
       const createdFrom = toOdataDateTime(start, false);
       const notifTo = toOdataDateTime(end, true);
 
-      // ✅ filter EXACTO como tu ejemplo:
-      // CreatedOn ge datetime'...' and NotifDate le datetime'...' and Userstatus eq 'correo'
       const filter = `CreatedOn ge datetime'${createdFrom}' and NotifDate le datetime'${notifTo}' and Userstatus eq '${correo}'`;
 
       const res = await api.get(
@@ -202,22 +235,19 @@ export default function AveriaIndexTecnico() {
         (Array.isArray(raw?.d) ? raw.d : null) ??
         (Array.isArray(raw) ? raw : []);
 
-      const mapped = (Array.isArray(results) ? results : []).map((it) => {
-        return {
-          id: it?.NotifNo,
-          NotifNo: it?.NotifNo,
-          ShortText: it?.ShortText || "",
-          Equipment: it?.Equipment || "",
-          FunctLoc: it?.FunctLoc || "",
-          CustNo: it?.CustNo || "",
-          Priority: it?.Priority || it?.Priotype || "",
-          NotifDate: it?.NotifDate || null,
-          CreatedOn: it?.CreatedOn || null,
-          raw: it,
-        };
-      });
+      const mapped = (Array.isArray(results) ? results : []).map((it) => ({
+        id: it?.NotifNo,
+        NotifNo: it?.NotifNo,
+        ShortText: it?.ShortText || "",
+        Equipment: it?.Equipment || "",
+        FunctLoc: it?.FunctLoc || "",
+        CustNo: it?.CustNo || "",
+        Priority: it?.Priority || it?.Priotype || "",
+        NotifDate: it?.NotifDate || null,
+        CreatedOn: it?.CreatedOn || null,
+        raw: it,
+      }));
 
-      // ordena por fecha notif desc
       mapped.sort((a, b) => {
         const da = sapDateToDate(a.NotifDate)?.getTime() ?? 0;
         const db = sapDateToDate(b.NotifDate)?.getTime() ?? 0;
@@ -225,15 +255,32 @@ export default function AveriaIndexTecnico() {
       });
 
       setAvisos(mapped);
+
+      // ✅ guarda cache (para offline)
+      await saveAveriasListCache({ correo, startYmd, endYmd, items: mapped });
     } catch (err) {
       console.error("Error cargando avisos OData:", err?.response?.data || err);
       setErrorMsg("No se pudieron cargar los avisos desde SAP. Intenta nuevamente.");
-      setAvisos([]);
+
+      // ✅ si falló online, intenta cache como fallback
+      try {
+        const cached = await loadAveriasListCache({ correo, startYmd, endYmd });
+        const items = cached?.items || [];
+        if (Array.isArray(items) && items.length) {
+          setAvisos(items);
+          setOfflineMsg(`Mostrando último cache guardado (guardado: ${new Date(cached.savedAt).toLocaleString()})`);
+          setErrorMsg("");
+        } else {
+          setAvisos([]);
+        }
+      } catch {
+        setAvisos([]);
+      }
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [start, end, token, user]);
+  }, [start, end, token, user, dateMode, dayRef, weekStart, weekEnd, monthYear, yearOnly]);
 
   useEffect(() => {
     fetchAvisosForRange();
@@ -244,7 +291,6 @@ export default function AveriaIndexTecnico() {
     fetchAvisosForRange();
   };
 
-  // Picker de años
   const YearPickerContent = ({ selectedYear, onSelect, from = 2020, to = now.getFullYear() + 2 }) => {
     const years = [];
     for (let y = to; y >= from; y--) years.push(y);
@@ -301,16 +347,13 @@ export default function AveriaIndexTecnico() {
     <View style={styles.container}>
       <Header title="Avisos de avería" />
 
-      {/* Filtros */}
       <View style={styles.filtersWrap}>
         <View style={styles.chipsRow}>
           <TouchableOpacity
             style={[styles.chip, dateMode === "all" && styles.chipActive]}
             onPress={() => setDateMode("all")}
           >
-            <Text style={[styles.chipText, dateMode === "all" && styles.chipTextActive]}>
-              Todas
-            </Text>
+            <Text style={[styles.chipText, dateMode === "all" && styles.chipTextActive]}>Todas</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -320,9 +363,7 @@ export default function AveriaIndexTecnico() {
               setShowDayPicker(true);
             }}
           >
-            <Text style={[styles.chipText, dateMode === "day" && styles.chipTextActive]}>
-              Día
-            </Text>
+            <Text style={[styles.chipText, dateMode === "day" && styles.chipTextActive]}>Día</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -344,9 +385,7 @@ export default function AveriaIndexTecnico() {
               setShowMonthModal(true);
             }}
           >
-            <Text style={[styles.chipText, dateMode === "month" && styles.chipTextActive]}>
-              Mes
-            </Text>
+            <Text style={[styles.chipText, dateMode === "month" && styles.chipTextActive]}>Mes</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -356,13 +395,17 @@ export default function AveriaIndexTecnico() {
               setShowYearModal(true);
             }}
           >
-            <Text style={[styles.chipText, dateMode === "year" && styles.chipTextActive]}>
-              Año
-            </Text>
+            <Text style={[styles.chipText, dateMode === "year" && styles.chipTextActive]}>Año</Text>
           </TouchableOpacity>
         </View>
 
         <Text style={styles.activeRangeText}>{activeRangeText}</Text>
+
+        {!!offlineMsg && (
+          <View style={styles.offlineBox}>
+            <Text style={styles.offlineText}>{offlineMsg}</Text>
+          </View>
+        )}
 
         {!!errorMsg && (
           <View style={styles.errorBox}>
@@ -573,6 +616,16 @@ const styles = StyleSheet.create({
   chipTextActive: { color: "#fff" },
 
   activeRangeText: { marginTop: 8, color: FIORI.textMuted, fontSize: 12 },
+
+  offlineBox: {
+    marginTop: 10,
+    padding: 10,
+    borderRadius: 10,
+    backgroundColor: "#FFFBEA",
+    borderWidth: 1,
+    borderColor: "#F7E7A3",
+  },
+  offlineText: { color: "#6b4f00", fontWeight: "700" },
 
   rangeButtonsRow: { flexDirection: "row", gap: 10, marginTop: 10 },
   smallBtn: {

@@ -28,7 +28,6 @@ import {
   saveOrdenesTecnicoList,
   pruneDetallesNoUsados,
 } from "../../../src/offline/ordenesTecnicoCache";
-
 // ✅ NUEVO: prefetch de detalles para que NO tengas que entrar a cada orden
 import { prefetchOrdenesTecnicoDetalles } from "../../../src/offline/prefetchOrdenesTecnico";
 

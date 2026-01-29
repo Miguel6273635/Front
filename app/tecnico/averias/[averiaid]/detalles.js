@@ -11,8 +11,11 @@ import {
 } from "react-native";
 import { useLocalSearchParams, router } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
+import NetInfo from "@react-native-community/netinfo";
+
 import Header from "../../../../src/components/Header";
 import api from "../../../../src/services/api";
+import { saveAveriaDetailCache, loadAveriaDetailCache } from "../../../../src/offline/averiasCache";
 
 const COLORS = {
   pageBg: "#F4F6F9",
@@ -22,6 +25,11 @@ const COLORS = {
   text: "#52616B",
   accent: "#0A6ED1",
   chipBg: "#EAF3FF",
+};
+
+const isOnlineNow = async () => {
+  const st = await NetInfo.fetch();
+  return !!st?.isConnected && st?.isInternetReachable !== false;
 };
 
 const parseSapDate = (value) => {
@@ -48,10 +56,12 @@ export default function DetallesAveriaTecnico() {
   const [header, setHeader] = useState(null);
   const [item, setItem] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [offlineMsg, setOfflineMsg] = useState("");
 
   const fetchDetalle = async () => {
     try {
       setLoading(true);
+      setOfflineMsg("");
 
       const id = String(averiaid || "").trim();
       if (!id || id === "undefined" || id === "null") {
@@ -60,14 +70,30 @@ export default function DetallesAveriaTecnico() {
         return;
       }
 
-      // ✅ Header (opcional, pero útil para mostrar info)
+      const online = await isOnlineNow();
+
+      // ✅ OFFLINE -> cache
+      if (!online) {
+        const cached = await loadAveriaDetailCache({ averiaid: id });
+        if (cached?.header || cached?.item) {
+          setHeader(cached.header ?? null);
+          setItem(cached.item ?? null);
+          setOfflineMsg(`Mostrando detalle offline (guardado: ${new Date(cached.savedAt).toLocaleString()})`);
+        } else {
+          setHeader(null);
+          setItem(null);
+          Alert.alert("Sin conexión", "No hay cache para este aviso todavía.");
+        }
+        return;
+      }
+
+      // ✅ ONLINE -> SAP
       const resHdr = await api.get(
         `/api/odata/ZCS_GET_NOTIFICATION_SRV/NotificationHeaderSet('${encodeURIComponent(id)}')`,
         { params: { $format: "json" } }
       );
       const hdr = resHdr?.data?.d ?? resHdr?.data ?? null;
 
-      // ✅ ItemsSet (tu URL exacta)
       const resItems = await api.get(
         `/api/odata/ZCS_GET_NOTIFICATION_SRV/NotificationHeaderSet('${encodeURIComponent(id)}')/NotificationItemsSet`,
         { params: { $format: "json" } }
@@ -79,11 +105,30 @@ export default function DetallesAveriaTecnico() {
 
       setHeader(hdr);
       setItem(first);
+
+      // ✅ guarda cache
+      await saveAveriaDetailCache({ averiaid: id, header: hdr, item: first, codigos: null });
     } catch (err) {
       console.error("Error detalle técnico:", err?.response?.data || err);
-      Alert.alert("Error", "No se pudo cargar el detalle del aviso.");
-      setHeader(null);
-      setItem(null);
+
+      // ✅ fallback: cache si falló online
+      try {
+        const id = String(averiaid || "").trim();
+        const cached = await loadAveriaDetailCache({ averiaid: id });
+        if (cached?.header || cached?.item) {
+          setHeader(cached.header ?? null);
+          setItem(cached.item ?? null);
+          setOfflineMsg(`Mostrando último cache guardado (guardado: ${new Date(cached.savedAt).toLocaleString()})`);
+        } else {
+          Alert.alert("Error", "No se pudo cargar el detalle del aviso.");
+          setHeader(null);
+          setItem(null);
+        }
+      } catch {
+        Alert.alert("Error", "No se pudo cargar el detalle del aviso.");
+        setHeader(null);
+        setItem(null);
+      }
     } finally {
       setLoading(false);
     }
@@ -128,7 +173,6 @@ export default function DetallesAveriaTecnico() {
   const functLoc = header?.FunctLoc || "";
   const notifDate = header?.NotifDate || header?.CreatedOn || null;
 
-  // Item fields comunes
   const descript = item?.Descript || "";
   const damage = { DCatTyp: item?.DCatTyp, DCodegrp: item?.DCodegrp, DCode: item?.DCode };
   const part = { DlCatTyp: item?.DlCatTyp, DlCodegrp: item?.DlCodegrp, DlCode: item?.DlCode };
@@ -138,12 +182,17 @@ export default function DetallesAveriaTecnico() {
       <Header title={`Aviso ${notifNo}`} />
 
       <ScrollView contentContainerStyle={styles.scrollContent}>
+        {!!offlineMsg && (
+          <View style={styles.offlineBox}>
+            <Text style={styles.offlineText}>{offlineMsg}</Text>
+          </View>
+        )}
+
         <TouchableOpacity style={styles.backRow} onPress={() => router.back()} activeOpacity={0.6}>
           <Ionicons name="chevron-back" size={20} color={COLORS.accent} />
           <Text style={styles.backText}>Volver a la lista</Text>
         </TouchableOpacity>
 
-        {/* ===== resumen ===== */}
         <View style={styles.cardHighlight}>
           <View style={styles.chipRow}>
             {equipment ? (
@@ -165,7 +214,6 @@ export default function DetallesAveriaTecnico() {
           <Text style={styles.subtitle}>Fecha: {formatDate(notifDate)}</Text>
         </View>
 
-        {/* ===== item ===== */}
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>Detalle (NotificationItemsSet)</Text>
 
@@ -208,6 +256,16 @@ const styles = StyleSheet.create({
   scrollContent: { padding: 16, paddingBottom: 24 },
   loadingWrap: { flex: 1, justifyContent: "center", alignItems: "center" },
   loadingText: { marginTop: 8, color: COLORS.text, fontSize: 13 },
+
+  offlineBox: {
+    marginBottom: 10,
+    padding: 10,
+    borderRadius: 12,
+    backgroundColor: "#FFFBEA",
+    borderWidth: 1,
+    borderColor: "#F7E7A3",
+  },
+  offlineText: { color: "#6b4f00", fontWeight: "800" },
 
   backRow: { flexDirection: "row", alignItems: "center", marginBottom: 12, paddingVertical: 4 },
   backText: { marginLeft: 4, color: COLORS.accent, fontWeight: "600", fontSize: 13 },
