@@ -9,7 +9,8 @@ import {
   Alert,
   Platform,
   FlatList,
-  AppState, // ✅ NEW (para refrescar al volver a la app)
+  AppState,
+  Modal,
 } from "react-native";
 import NetInfo from "@react-native-community/netinfo";
 
@@ -54,11 +55,8 @@ const FIORI = {
 /* ====================== Orden iniciada (contador) ====================== */
 const ORDER_START_KEY = (orderId) => `orderStart:${orderId}`;
 
-/**
- * ⚠️ Ya NO usamos ORDER_STATUS_URL porque ya no cambiamos estatus en SAP con este botón
- * Lo dejo comentado por si luego lo vuelves a usar.
- */
-// const ORDER_STATUS_URL = () => `/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet`;
+/* ✅ FIN local (para mostrar hora fin cuando ya finaliza) */
+const ORDER_FINISH_KEY = (orderId) => `orderFinish:${orderId}`;
 
 function msToHMS(ms) {
   const total = Math.max(0, Math.floor(ms / 1000));
@@ -85,15 +83,59 @@ async function saveOrderStart(orderId, ms) {
   } catch {}
 }
 
-// ✅ NEW: limpiar start para que no quede “fantasma”
 async function clearOrderStart(orderId) {
   try {
     await AsyncStorage.removeItem(ORDER_START_KEY(orderId));
   } catch {}
 }
 
+async function loadOrderFinish(orderId) {
+  try {
+    const raw = await AsyncStorage.getItem(ORDER_FINISH_KEY(orderId));
+    const v = raw ? Number(raw) : null;
+    return Number.isFinite(v) ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+async function saveOrderFinish(orderId, ms) {
+  try {
+    await AsyncStorage.setItem(ORDER_FINISH_KEY(orderId), String(ms));
+  } catch {}
+}
+
+async function clearOrderFinish(orderId) {
+  try {
+    await AsyncStorage.removeItem(ORDER_FINISH_KEY(orderId));
+  } catch {}
+}
+
+/* ====================== ✅ Pendiente de firma (persistir checks) ====================== */
+const PENDING_SIGN_KEY = (orderId) => `pendingSign:${orderId}`;
+
+async function loadPendingSign(orderId) {
+  try {
+    const raw = await AsyncStorage.getItem(PENDING_SIGN_KEY(orderId));
+    return raw ? JSON.parse(raw) : null; // { checkedMap, savedAt }
+  } catch {
+    return null;
+  }
+}
+
+async function savePendingSign(orderId, payload) {
+  try {
+    await AsyncStorage.setItem(PENDING_SIGN_KEY(orderId), JSON.stringify(payload));
+  } catch {}
+}
+
+async function clearPendingSign(orderId) {
+  try {
+    await AsyncStorage.removeItem(PENDING_SIGN_KEY(orderId));
+  } catch {}
+}
+
 /* ====================== Helpers generales ====================== */
-// ✅ Soporta ISO y SAP OData "/Date(1700000000000)/"
 function parseSapDateToMs(val) {
   if (!val) return null;
 
@@ -116,6 +158,45 @@ const opKey = (orderId, op) =>
   `${orderId}-${op.activity || op.Activity || ""}${
     op.subactivity || op.SubActivity ? `-${op.subactivity || op.SubActivity}` : ""
   }`;
+
+// ====== SAP helpers para fechas/horas y prorrateo (FINAL 0300 + CONFIRMATIONS) ======
+
+function msToMinutesRounded(ms) {
+  const min = Math.round(ms / 60000);
+  return Math.max(1, min); // mínimo 1 minuto
+}
+
+function sapDateFromMs(ms) {
+  const d = new Date(ms);
+  const midnight = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  return `/Date(${midnight})/`;
+}
+
+function sapTimePTFromMs(ms) {
+  const d = new Date(ms);
+  const h = d.getHours();
+  const m = d.getMinutes();
+  const s = d.getSeconds();
+  return `PT${h}H${m}M${s}S`;
+}
+
+function prorateMinutes(totalMin, n) {
+  const base = Math.floor(totalMin / n);
+  const rem = totalMin % n;
+  const arr = Array(n).fill(base);
+  for (let i = 0; i < rem; i++) arr[i] += 1;
+  return arr;
+}
+
+function buildSequentialWindows(startMs, mins) {
+  let cursor = startMs;
+  return mins.map((m) => {
+    const end = cursor + m * 60000;
+    const win = { start: cursor, end };
+    cursor = end;
+    return win;
+  });
+}
 
 /* ====================== ✅ Dirección igual que rutas-asignadas ====================== */
 function mapDireccionLikeBackend(addr) {
@@ -191,7 +272,6 @@ function mergeOpsWithLocalState(orderId, ops, state) {
   });
 }
 
-/* ====== Helper para formatear valores en Row (incluida dirección) ====== */
 function formatValueForRow(value) {
   if (value == null) return "—";
 
@@ -218,8 +298,7 @@ function formatValueForRow(value) {
       direccion,
     } = value;
 
-    const posibleFull =
-      full || direccion || value.fullAddress || value.addressString;
+    const posibleFull = full || direccion || value.fullAddress || value.addressString;
     if (posibleFull && typeof posibleFull === "string") return posibleFull;
 
     const partes = [
@@ -250,11 +329,6 @@ function formatValueForRow(value) {
   }
 }
 
-/** ============================================================
- *  ✅ Normalizador de operaciones (del endpoint backend)
- *  backend devuelve: { Activity, SubActivity, Description, ... }
- *  aquí lo convertimos a: { activity, subactivity, description, ... }
- *  ============================================================ */
 function normalizeOpsFromBackend(ops = []) {
   if (!Array.isArray(ops)) return [];
   return ops.map((op) => {
@@ -290,12 +364,18 @@ export default function DetalleOrden() {
   const signatureRef = useRef(null);
   const wasOnlineRef = useRef(false);
 
+  // ✅ modo finalizar (checkboxes en operaciones)
+  const [finalizeMode, setFinalizeMode] = useState(false);
+
+  // ✅ checks seleccionados (vive en el padre)
+  const [checkedMap, setCheckedMap] = useState({});
+
   // ===== iniciar orden + contador (SOLO LOCAL) =====
   const [startingOrder, setStartingOrder] = useState(false);
   const [orderStartedAtMs, setOrderStartedAtMs] = useState(null);
+  const [orderFinishedAtMs, setOrderFinishedAtMs] = useState(null); // ✅ NUEVO
   const [nowTick, setNowTick] = useState(Date.now());
 
-  // ✅ NEW: Rehidratar cronómetro con el id del route aunque no haya internet
   useEffect(() => {
     let mounted = true;
 
@@ -304,9 +384,14 @@ export default function DetalleOrden() {
       if (!orderIdGuess) return;
 
       const savedStart = await loadOrderStart(orderIdGuess);
-      if (mounted && savedStart) {
-        setOrderStartedAtMs(savedStart);
-        setNowTick(Date.now());
+      const savedFinish = await loadOrderFinish(orderIdGuess);
+
+      if (mounted) {
+        if (savedStart) {
+          setOrderStartedAtMs(savedStart);
+          setNowTick(Date.now());
+        }
+        if (savedFinish) setOrderFinishedAtMs(savedFinish);
       }
     })();
 
@@ -315,7 +400,6 @@ export default function DetalleOrden() {
     };
   }, [id]);
 
-  // ✅ NEW: refrescar tick al volver del background (foreground)
   useEffect(() => {
     const sub = AppState.addEventListener("change", (state) => {
       if (state === "active") setNowTick(Date.now());
@@ -328,10 +412,8 @@ export default function DetalleOrden() {
     const unsub = NetInfo.addEventListener(async (state) => {
       const online = !!(state?.isConnected && state?.isInternetReachable !== false);
 
-      // Solo cuando pasamos de OFFLINE → ONLINE
       if (online && !wasOnlineRef.current) {
         wasOnlineRef.current = true;
-
         try {
           console.log("📡 Conexión restaurada, procesando cola SAP…");
           await processSapQueue();
@@ -340,9 +422,7 @@ export default function DetalleOrden() {
         }
       }
 
-      if (!online) {
-        wasOnlineRef.current = false;
-      }
+      if (!online) wasOnlineRef.current = false;
     });
 
     return () => unsub();
@@ -365,11 +445,12 @@ export default function DetalleOrden() {
   const [noMantError, setNoMantError] = useState(null);
   const [downloadingNoMantPdf, setDownloadingNoMantPdf] = useState(false);
 
-  // finalizar orden (firma)
+  // finalizar orden (firma) -> modal de firma
   const [finishingOrder, setFinishingOrder] = useState(false);
   const [showSignModal, setShowSignModal] = useState(false);
   const [signatureData, setSignatureData] = useState(null);
   const [savingSignature, setSavingSignature] = useState(false);
+  const [savingPending0400, setSavingPending0400] = useState(false);
 
   // ===== estatus orden / bloqueo =====
   const statusCode = String(orden?.estatus_code || orden?.userstatus || "").trim();
@@ -377,19 +458,17 @@ export default function DetalleOrden() {
   const isNoMant = statusTipo === "NO_MANTENIMIENTO";
   const isOrderSinEmpezar = !statusCode;
   const isOrderPendiente0100 = statusCode === "0100";
-  const isOrderFinished = !!orden?.isFinal || ["0300", "0400", "0500"].includes(statusCode);
+
+  // 🔴 OJO: 0400 NO es "finalizada real", es PENDIENTE DE FIRMA
+  const isOrderFinishedReal = !!orden?.isFinal || ["0300", "0500"].includes(statusCode);
 
   const estatusTxt = String(orden?.estatus_label || orden?.estatus || orden?.status || "")
     .trim()
     .toUpperCase();
 
-  // ✅ considera EN_PROCESO si:
-  // - el backend te da el texto "EN_PROCESO" o "EN PROCESO"
-  // - o si tu statusCode es 0200 (tu “en proceso” real en SAP)
   const isOrderEnProceso =
     estatusTxt === "EN_PROCESO" || estatusTxt === "EN PROCESO" || statusCode === "0200";
 
-  // Tick solo cuando ya tenemos startedAt
   useEffect(() => {
     if (!orderStartedAtMs) return;
     const t = setInterval(() => setNowTick(Date.now()), 1000);
@@ -399,40 +478,46 @@ export default function DetalleOrden() {
   const checkinDone =
     !!orden?.checkin_done || !!orden?.checkin || !!orden?.checked_in || statusCode === "0200";
 
+  // ✅ Operaciones bloqueadas si:
+  // - no mantenimiento, sin empezar, 0100, finalizada real, o sin checkin
   const isOpsLocked =
-    isNoMant || isOrderSinEmpezar || isOrderPendiente0100 || isOrderFinished || !checkinDone;
+    isNoMant ||
+    isOrderSinEmpezar ||
+    isOrderPendiente0100 ||
+    isOrderFinishedReal ||
+    !checkinDone;
 
-  // ✅ habilitar iniciar cronómetro (solo EN_PROCESO y sin final/no mant y con check-in)
-  const canStartTimer = isOrderEnProceso && !isNoMant && !isOrderFinished && !!checkinDone;
+  const canStartTimer = isOrderEnProceso && !isNoMant && !isOrderFinishedReal && !!checkinDone;
 
-  /** ============================================================
-   *  ✅ OBTENER ORDEN + ✅ DIRECCIÓN + ✅ OPERACIONES + ✅ LOCAL STATE
-   *  ============================================================ */
   const obtenerOrden = async () => {
     const orderIdParam = String(id || "").trim();
 
     try {
       setLoading(true);
 
-      // 0) Cache primero (si existe, lo pintas ya)
       const cached = await loadOrdenTecnicoDetail(orderIdParam);
       if (cached?.data) {
         setOrden(cached.data);
-        // ✅ NEW: si hay cache, también intenta rehidratar contador aquí
         const cachedOrderId = String(cached?.data?.Orderid || orderIdParam).trim();
+
         const savedStartCached = await loadOrderStart(cachedOrderId);
         if (savedStartCached) {
           setOrderStartedAtMs(savedStartCached);
           setNowTick(Date.now());
         }
+
+        const savedFinishCached = await loadOrderFinish(cachedOrderId);
+        if (savedFinishCached) setOrderFinishedAtMs(savedFinishCached);
+
+        // ✅ rehidratar checks desde cache local si existe
+        const pendingCached = await loadPendingSign(cachedOrderId);
+        if (pendingCached?.checkedMap) setCheckedMap(pendingCached.checkedMap);
       }
 
-      // 1) ¿hay internet?
       const net = await NetInfo.fetch();
       const isOnline = !!(net?.isConnected && net?.isInternetReachable !== false);
 
       if (!isOnline) {
-        // ✅ NEW: OFFLINE -> si hay cache, ya pintamos; si no hay, alerta
         if (!cached?.data) {
           Alert.alert(
             "Sin conexión",
@@ -442,7 +527,6 @@ export default function DetalleOrden() {
         return;
       }
 
-      // 2) online: tu flujo normal
       const resOrden = await api.get(`/api/ordenes/sap/${orderIdParam}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -451,7 +535,6 @@ export default function DetalleOrden() {
       // Dirección
       let direccionSap = "";
       let clienteSap = "";
-
       try {
         const resAddr = await api.get(`/api/ordenes/sap/${orderIdParam}/addresses`, {
           headers: { Authorization: `Bearer ${token}` },
@@ -501,27 +584,52 @@ export default function DetalleOrden() {
       };
 
       setOrden(data);
-
-      // 3) guarda cache del detalle
       await saveOrdenTecnicoDetail(orderIdReal, data);
 
-      // ✅ NEW: si el route param y el Orderid real difieren, migra el start
+      // ✅ Si cambió el id (param vs real), migra timer/pendingSign/finish
       if (orderIdParam && orderIdParam !== orderIdReal) {
+        // start
         const oldStart = await loadOrderStart(orderIdParam);
         const realStart = await loadOrderStart(orderIdReal);
-
         if (oldStart && !realStart) {
           await saveOrderStart(orderIdReal, oldStart);
           await clearOrderStart(orderIdParam);
           setOrderStartedAtMs(oldStart);
           setNowTick(Date.now());
         }
+
+        // finish
+        const oldFinish = await loadOrderFinish(orderIdParam);
+        const realFinish = await loadOrderFinish(orderIdReal);
+        if (oldFinish && !realFinish) {
+          await saveOrderFinish(orderIdReal, oldFinish);
+          await clearOrderFinish(orderIdParam);
+          setOrderFinishedAtMs(oldFinish);
+        }
+
+        // pending sign
+        const oldPending = await loadPendingSign(orderIdParam);
+        const realPending = await loadPendingSign(orderIdReal);
+        if (oldPending && !realPending) {
+          await savePendingSign(orderIdReal, oldPending);
+          await clearPendingSign(orderIdParam);
+        }
       }
 
+      // ✅ Rehidratar checks si está en 0400 o existe guardado local
+      try {
+        const sc = String(data?.estatus_code || data?.userstatus || "").trim();
+        const isPending0400 = sc === "0400";
+
+        const pending = await loadPendingSign(orderIdReal);
+        if (pending?.checkedMap) {
+          setCheckedMap(pending.checkedMap || {});
+          if (isPending0400) setFinalizeMode(true);
+        }
+      } catch {}
+
       // Cronómetro (tu lógica + limpieza)
-      const estatusTxtLocal = String(
-        data?.estatus_label || data?.estatus || data?.status || ""
-      )
+      const estatusTxtLocal = String(data?.estatus_label || data?.estatus || data?.status || "")
         .trim()
         .toUpperCase();
       const statusCodeLocal = String(data?.estatus_code || data?.userstatus || "").trim();
@@ -531,6 +639,8 @@ export default function DetalleOrden() {
         estatusTxtLocal === "EN PROCESO" ||
         statusCodeLocal === "0200";
 
+      const isFinalLocal = ["0300", "0500"].includes(statusCodeLocal) || !!data?.isFinal;
+
       if (isEnProcesoLocal) {
         const savedStart = await loadOrderStart(orderIdReal);
         if (savedStart) {
@@ -539,12 +649,17 @@ export default function DetalleOrden() {
         }
       } else {
         setOrderStartedAtMs(null);
-        await clearOrderStart(orderIdReal); // ✅ NEW: limpia cuando ya no está en proceso
+        await clearOrderStart(orderIdReal);
+      }
+
+      // ✅ Si ya está final, intenta traer finish local (para mostrar hora fin)
+      if (isFinalLocal) {
+        const savedFinish = await loadOrderFinish(orderIdReal);
+        if (savedFinish) setOrderFinishedAtMs(savedFinish);
       }
     } catch (error) {
       console.error("Error al obtener orden (SAP):", error?.response?.data || error);
 
-      // fallback final: intenta cache
       const cached2 = await loadOrdenTecnicoDetail(orderIdParam);
       if (cached2?.data) {
         setOrden(cached2.data);
@@ -555,6 +670,12 @@ export default function DetalleOrden() {
           setOrderStartedAtMs(savedStart);
           setNowTick(Date.now());
         }
+
+        const savedFinish = await loadOrderFinish(cachedOrderId);
+        if (savedFinish) setOrderFinishedAtMs(savedFinish);
+
+        const pending = await loadPendingSign(cachedOrderId);
+        if (pending?.checkedMap) setCheckedMap(pending.checkedMap);
       } else {
         Alert.alert("Error", "No se pudo cargar la orden desde SAP");
       }
@@ -563,7 +684,6 @@ export default function DetalleOrden() {
     }
   };
 
-  // Abrir modal de componentes (SOLO VIEW)
   const openComponentsModal = async (op) => {
     try {
       setSelectedOp(op);
@@ -594,7 +714,6 @@ export default function DetalleOrden() {
     setCompList([]);
   };
 
-  // Sonido (lo dejas porque lo tienes)
   useEffect(() => {
     let mounted = true;
     let localSound = null;
@@ -619,7 +738,6 @@ export default function DetalleOrden() {
     };
   }, []);
 
-  // Navegación a aviso de avería
   const irAAvisoAveria = (e) => {
     e?.stopPropagation?.();
     if (!orden?.Orderid) {
@@ -633,11 +751,9 @@ export default function DetalleOrden() {
     });
   };
 
-  // ======= ✅ Iniciar cronómetro (SOLO LOCAL, NO CAMBIA ESTATUS) =======
   const iniciarOrden = async () => {
     if (!orden?.Orderid) return;
 
-    // solo permitir en EN_PROCESO + reglas
     const estatusTxtNow = String(orden?.estatus_label || orden?.estatus || orden?.status || "")
       .trim()
       .toUpperCase();
@@ -658,12 +774,11 @@ export default function DetalleOrden() {
       return;
     }
 
-    if (isNoMant || isOrderFinished) {
+    if (isNoMant || isOrderFinishedReal) {
       Alert.alert("No disponible", "La orden no permite iniciar cronómetro en este estado.");
       return;
     }
 
-    // si ya está iniciado, no reiniciar
     if (orderStartedAtMs) return;
 
     const orderId = String(orden.Orderid).trim();
@@ -675,6 +790,10 @@ export default function DetalleOrden() {
         onPress: async () => {
           try {
             setStartingOrder(true);
+
+            // ✅ si había fin guardado, lo limpiamos porque vuelve a correr
+            await clearOrderFinish(orderId);
+            setOrderFinishedAtMs(null);
 
             const startMs = Date.now();
             await saveOrderStart(orderId, startMs);
@@ -693,7 +812,6 @@ export default function DetalleOrden() {
     ]);
   };
 
-  // PDF No mantenimiento (igual)
   const abrirModalNoMantPdf = async () => {
     if (!orden?.Orderid) return;
 
@@ -717,9 +835,7 @@ export default function DetalleOrden() {
       const rawUrl = pdf_url.startsWith("http") ? pdf_url : `${serverRoot}${pdf_url}`;
       setNoMantPdfRawUrl(rawUrl);
 
-      const viewerUrl = `https://docs.google.com/gview?embedded=1&url=${encodeURIComponent(
-        rawUrl
-      )}`;
+      const viewerUrl = `https://docs.google.com/gview?embedded=1&url=${encodeURIComponent(rawUrl)}`;
       setNoMantPdfUrl(viewerUrl);
     } catch (error) {
       console.error("Error al obtener PDF no mantto:", error?.response?.data || error);
@@ -770,7 +886,7 @@ export default function DetalleOrden() {
     }
   };
 
-  // Finalizar orden (firma)
+  // ✅ Finalizar orden: solo activa finalizeMode
   const handleFinalizarOrden = (e) => {
     e?.stopPropagation?.();
 
@@ -780,30 +896,139 @@ export default function DetalleOrden() {
       return;
     }
 
-    // OJO: si la orden está en 0400, entramos como “pendiente_firma”
-    const statusCodeNow = String(orden?.estatus_code || orden?.userstatus || "").trim();
-    const modo = statusCodeNow === "0400" ? "pendiente_firma" : "normal";
-
-    const p = {
-      orderid,
-      cliente: String(orden?.cliente ?? ""),
-      tecnico_nombre: String(orden?.tecnico_nombre ?? user?.nombre ?? user?.email ?? ""),
-      niveles: String(orden?.niveles ?? ""),
-      pisos: String(6), // por ahora fijo a 6 columnas
-      modo,
-    };
-
-    router.push({
-      pathname: "/tecnico/ordenes/[orderid]/finalizar-mantto-elevadores",
-      params: p,
-    });
+    setFinalizeMode(true);
   };
 
+  // ✅ Guardar checks como pendiente de firma (0400)
+  const guardarPendienteDeFirma = async () => {
+    const orderId = String(orden?.Orderid || id || "").trim();
+    if (!orderId) return;
+
+    const selectedIds = Object.keys(checkedMap || {});
+    if (!selectedIds.length) {
+      Alert.alert("Sin selección", "Marca al menos una operación realizada antes de guardar.");
+      return;
+    }
+
+    try {
+      setSavingPending0400(true); // ✅ BLOQUEO ON
+
+      // 1) Guardar checks local
+      await savePendingSign(orderId, { checkedMap, savedAt: Date.now() });
+
+      // 2) Cambiar estatus SAP a 0400 (pendiente de firma) quitando 0200
+      const payload = {
+        OrderId: orderId,
+        WorkOrderHeader: { Orderid: orderId },
+        WorkOrderUserStatusSet: [
+          { UserStText: "0400", Langu: "ES", Inactive: "" },
+          { UserStText: "0200", Langu: "ES", Inactive: "X" },
+        ],
+        Return: [],
+      };
+
+      const net = await NetInfo.fetch();
+      const isOnline = !!(net?.isConnected && net?.isInternetReachable !== false);
+
+      if (!isOnline) {
+        Alert.alert(
+          "Guardado (sin internet)",
+          "Se guardaron los checks como pendiente de firma. Cuando vuelva el internet se enviará el estatus 0400."
+        );
+        // Si tienes outbox/queue, aquí sería el lugar de encolar payload.
+      } else {
+        await api.post(`/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet`, payload, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+
+        setOrden((prev) => ({
+          ...(prev || {}),
+          estatus_code: "0400",
+          userstatus: "0400",
+          estatus_label: prev?.estatus_label || "PENDIENTE DE FIRMA",
+        }));
+
+        Alert.alert("Listo", "Se guardó como pendiente de firma (0400).");
+      }
+
+      // ✅ si ya está en 0400, dejamos finalizeMode ON para continuar después
+      setFinalizeMode(false);
+    } catch (e) {
+      console.error("Error guardando pendiente de firma:", e?.response?.data || e);
+      Alert.alert("Error", "No se pudo guardar como pendiente de firma.");
+    } finally {
+      setSavingPending0400(false); // ✅ BLOQUEO OFF
+    }
+  };
+
+  // ✅ Abrir firma cliente (y guardar progreso antes)
+  const abrirFirmaCliente = async () => {
+    const orderId = String(orden?.Orderid || id || "").trim();
+    if (!orderId) return;
+
+    const selectedIds = Object.keys(checkedMap || {});
+    if (!selectedIds.length) {
+      Alert.alert("Sin selección", "Marca al menos una operación realizada antes de solicitar firma.");
+      return;
+    }
+
+    await savePendingSign(orderId, { checkedMap, savedAt: Date.now() });
+    setShowSignModal(true);
+  };
+
+  // ✅ Finalizar con firma (después limpia pending + checks)
   const confirmarFinalizarConFirma = async () => {
     if (!orden?.Orderid) return;
 
+    const orderId = String(orden.Orderid).trim();
+
+    // 1) Validaciones
     if (!signatureData) {
       Alert.alert("Falta firma", 'Pida al cliente que firme y toque "Listo" dentro del recuadro.');
+      return;
+    }
+
+    const selectedIds = Object.keys(checkedMap || {});
+    if (!selectedIds.length) {
+      Alert.alert("Sin selección", "Marca al menos una operación realizada antes de finalizar.");
+      return;
+    }
+
+    if (!orderStartedAtMs) {
+      Alert.alert(
+        "Sin cronómetro",
+        "No se detectó el inicio del cronómetro. Inicia la orden para poder prorratear tiempos."
+      );
+      return;
+    }
+
+    const finishMs = Date.now();
+    const totalMs = Math.max(0, finishMs - orderStartedAtMs);
+    const totalMin = msToMinutesRounded(totalMs);
+
+    // 2) Obtener operaciones seleccionadas desde orden.operaciones
+    const opsAll = Array.isArray(orden?.operaciones) ? orden.operaciones : [];
+
+    // ✅ seleccionar y luego DEDUP por Activity+SubActivity
+    const selectedOpsRaw = selectedIds
+      .map((idKey) => opsAll.find((op) => String(op.id) === String(idKey)))
+      .filter(Boolean);
+
+    const uniqByOp = (ops) => {
+      const map = new Map();
+      for (const op of ops) {
+        const act = String(op.activity || op.Activity || "").trim();
+        const sub = String(op.subactivity || op.SubActivity || "").trim();
+        const key = `${act}__${sub}`;
+        if (!map.has(key)) map.set(key, op);
+      }
+      return Array.from(map.values());
+    };
+
+    const selectedOps = uniqByOp(selectedOpsRaw);
+
+    if (!selectedOps.length) {
+      Alert.alert("Error", "No se encontraron las operaciones seleccionadas en la orden.");
       return;
     }
 
@@ -811,9 +1036,10 @@ export default function DetalleOrden() {
       setSavingSignature(true);
       setFinishingOrder(true);
 
+      // 3) Guardar firma (si falla, seguimos)
       try {
         await api.post(
-          `/evidencias/orden/${orden.Orderid}/firma-final`,
+          `/evidencias/orden/${orderId}/firma-final`,
           { imagen_base64: signatureData },
           { headers: { Authorization: `Bearer ${token}` } }
         );
@@ -821,32 +1047,161 @@ export default function DetalleOrden() {
         console.warn("No se pudo guardar la firma (continuo):", e?.response?.data || e);
       }
 
+      // 4) Prorrateo (minutos por operación) y ventanas consecutivas
+      const n = selectedOps.length;
+      const minsArr = prorateMinutes(totalMin, n);
+      const windows = buildSequentialWindows(orderStartedAtMs, minsArr);
+
+      // 5) Payload estatus 0300 (quita 0200 y 0400)
+      const statusPayload = {
+        OrderId: orderId,
+        WorkOrderHeader: { Orderid: orderId },
+        WorkOrderUserStatusSet: [
+          { UserStText: "0300", Langu: "ES", Inactive: "" },
+          { UserStText: "0200", Langu: "ES", Inactive: "X" },
+          { UserStText: "0400", Langu: "ES", Inactive: "X" },
+        ],
+        Return: [],
+      };
+
+      // ✅ LOG STATUS 0300
+      console.log("🟡 JSON STATUS 0300 >>>");
+      console.log(JSON.stringify(statusPayload, null, 2));
+
+      // 6) Payload confirmations (incluye SubActivity si existe)
+      const confirmationPayload = {
+        Order: "S1",
+        ConfirmationOrderSet: selectedOps.map((op, idx) => {
+          const actRaw = String(op.activity || op.Activity || "").trim();
+          const subRaw = String(op.subactivity || op.SubActivity || "").trim();
+
+          const Operation = actRaw.padStart(4, "0");
+          const SubActivity = subRaw ? subRaw.padStart(4, "0") : "";
+
+          const w = windows[idx];
+
+          const row = {
+            ConfNo: "",
+            Orderid: orderId,
+            Operation,
+            PostgDate: sapDateFromMs(finishMs),
+
+            ActWork: String(minsArr[idx]),
+            UnWork: "min",
+
+            ExecStartDate: sapDateFromMs(w.start),
+            ExecFinDate: sapDateFromMs(w.end),
+
+            ExecStartTime: sapTimePTFromMs(w.start),
+            ExecFinTime: sapTimePTFromMs(w.end),
+
+            FinConf: "X",
+          };
+
+          // ✅ CLAVE: manda suboperación cuando aplica
+          if (SubActivity) row.SubActivity = SubActivity;
+
+          return row;
+        }),
+        Return: [],
+      };
+
+      // ✅ LOG CONFIRMATIONS
+      console.log("🔵 JSON CONFIRMATIONS >>>");
+      console.log(JSON.stringify(confirmationPayload, null, 2));
+
+      // 7) Online/Offline
+      const net = await NetInfo.fetch();
+      const isOnline = !!(net?.isConnected && net?.isInternetReachable !== false);
+
+      if (!isOnline) {
+        Alert.alert(
+          "Sin internet",
+          "Se guardó la firma, pero para finalizar (0300) y mandar confirmaciones se requiere internet. Se enviará cuando regrese la conexión."
+        );
+
+        // ✅ Guardar FIN local (para mostrar) y limpiar inicio
+        await saveOrderFinish(orderId, finishMs);
+        setOrderFinishedAtMs(finishMs);
+
+        await clearOrderStart(orderId);
+        setOrderStartedAtMs(null);
+
+        await clearPendingSign(orderId);
+        setCheckedMap({});
+        setFinalizeMode(false);
+        setShowSignModal(false);
+
+        router.replace("/tecnico/ordenes");
+        return;
+      }
+
+      // 8) 1) Cambiar estatus 0300
+      const resStatus = await api.post(
+        `/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet`,
+        statusPayload,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+
+      // ✅ LOG RESPUESTA STATUS
+      console.log("🟢 RESPUESTA STATUS 0300 <<<", resStatus?.data);
+
+      // 9) 2) Mandar confirmations
+      const resConf = await api.post(
+        `/api/odata/ZCS_CREATE_CONFIRMATION_SRV/ConfirmationHeaderSet`,
+        confirmationPayload,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+
+      // ✅ LOG RESPUESTA CONFIRMATIONS + RETURN (si SAP manda warnings/errores por línea)
+      console.log("🟢 RESPUESTA CONFIRMATIONS <<<", resConf?.data);
+      console.log("🧾 RETURN CONF:", JSON.stringify(resConf?.data?.Return, null, 2));
+
+      // 10) Guardar FIN local y limpiar inicio
+      await saveOrderFinish(orderId, finishMs);
+      setOrderFinishedAtMs(finishMs);
+
+      await clearOrderStart(orderId);
+      setOrderStartedAtMs(null);
+
+      // 11) Limpiar pendiente local (checks)
+      await clearPendingSign(orderId);
+      setCheckedMap({});
+      setFinalizeMode(false);
+
       setShowSignModal(false);
 
-      Alert.alert("Orden finalizada", "La orden se marcó como finalizada.");
+      // opcional: reflejar en UI
+      setOrden((prev) => ({
+        ...(prev || {}),
+        estatus_code: "0300",
+        userstatus: "0300",
+        estatus_label: "FINALIZADA",
+        isFinal: true,
+      }));
+
+      Alert.alert("Orden finalizada", "Se cambió el estatus a 0300 y se enviaron confirmaciones.");
       router.replace("/tecnico/ordenes");
     } catch (error) {
-      console.error("Error al finalizar orden con firma:", error?.response?.data || error);
-      Alert.alert("Error", "No se pudo finalizar la orden. Intenta de nuevo.");
+      console.error("Error al finalizar (0300 + confirmaciones):", error?.response?.data || error);
+      Alert.alert("Error", "No se pudo finalizar la orden o enviar confirmaciones. Intenta de nuevo.");
     } finally {
       setSavingSignature(false);
       setFinishingOrder(false);
     }
   };
 
-  // ================== Efectos ==================
   useEffect(() => {
     obtenerOrden();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ================== Render ==================
+  /* ================== Render ================== */
   if (loading) {
     return (
       <View style={styles.container}>
         <Header title={`Orden ${id || ""}`} />
 
-        {/* ===== Barra superior: iniciar / contador (en loading) ===== */}
         {canStartTimer && !orderStartedAtMs ? (
           <View style={styles.topActionBar}>
             <TouchableOpacity
@@ -891,7 +1246,7 @@ export default function DetalleOrden() {
 
   const estatusColor = isNoMant
     ? FIORI.textMuted
-    : isOrderFinished
+    : isOrderFinishedReal
     ? FIORI.ok
     : !statusCode
     ? FIORI.err
@@ -899,16 +1254,19 @@ export default function DetalleOrden() {
     ? FIORI.err
     : statusCode === "0200"
     ? FIORI.warn
+    : statusCode === "0400"
+    ? FIORI.warn
     : FIORI.ok;
 
   const direccionValor = orden.direccion || orden.address || orden.partner_address || null;
   const allMaterials = Array.isArray(orden.componentes) ? orden.componentes : [];
 
+  const hasSelectedOps = Object.keys(checkedMap || {}).length > 0;
+
   return (
     <View style={styles.container}>
       <Header title={`Orden ${orden?.Orderid || id || ""}`} />
 
-      {/* ✅ Barra superior cuando YA CARGÓ */}
       {canStartTimer && !orderStartedAtMs ? (
         <View style={styles.topActionBar}>
           <TouchableOpacity
@@ -946,13 +1304,16 @@ export default function DetalleOrden() {
             estatusColor={estatusColor}
             isNoMant={isNoMant}
             checkinDone={checkinDone}
-            isOrderFinished={isOrderFinished}
+            isOrderFinished={isOrderFinishedReal}
             direccionValor={direccionValor}
             allMaterialsLen={allMaterials.length}
             fmtDMY={fmtDMY}
             formatValueForRow={formatValueForRow}
             onAbrirPdfNoMant={abrirModalNoMantPdf}
             onVerMaterialesOrden={() => setShowAllMaterialsModal(true)}
+            // ✅ NUEVO: para mostrar inicio/fin cuando ya finalizó
+            orderStartedAtMs={orderStartedAtMs}
+            orderFinishedAtMs={orderFinishedAtMs}
           />
         }
         renderItem={() => {
@@ -963,6 +1324,11 @@ export default function DetalleOrden() {
               styles={styles}
               FIORI={FIORI}
               onOpenComponentsView={openComponentsModal}
+              finalizeMode={finalizeMode}
+              onRequestCancelFinalize={() => setFinalizeMode(false)}
+              // ✅ NUEVO (los checks ya no viven dentro del componente)
+              checkedMap={checkedMap}
+              setCheckedMap={setCheckedMap}
             />
           );
         }}
@@ -974,25 +1340,13 @@ export default function DetalleOrden() {
             userRolId={user?.rol_id}
             finishingOrder={finishingOrder}
             statusCode={statusCode}
-            onIrManttoElevador={(e) => {
-              e?.stopPropagation?.();
-              const p = {
-                orderid: String(orden?.Orderid ?? id ?? ""),
-                equipment: String(orden?.equipment ?? orden?.Equipment ?? ""),
-                tecnico_nombre: String(orden?.tecnico_nombre ?? user?.nombre ?? user?.email ?? ""),
-                Name1: String(orden?.Name1 ?? ""),
-                Name2: String(orden?.Name2 ?? ""),
-                cliente: String(orden?.cliente ?? ""),
-                direccion:
-                  typeof direccionValor === "string" ? direccionValor : JSON.stringify(direccionValor),
-              };
-              router.push({
-                pathname: "/tecnico/ordenes/[orderid]/reporte-mant-elevadores",
-                params: p,
-              });
-            }}
-            onIrManttoEscalera={() => {}}
+            finalizeMode={finalizeMode}
+            onCancelarFinalizacion={() => setFinalizeMode(false)}
             onFinalizarOrden={handleFinalizarOrden}
+            // ✅ acciones 0400
+            onAgregarFirma={abrirFirmaCliente}
+            onGuardarPendiente={guardarPendienteDeFirma}
+            hasSelectedOps={hasSelectedOps}
           />
         }
       />
@@ -1009,16 +1363,13 @@ export default function DetalleOrden() {
         FIORI={FIORI}
         orden={orden}
         allMaterials={allMaterials}
-        // Todos materiales
         showAllMaterialsModal={showAllMaterialsModal}
         setShowAllMaterialsModal={setShowAllMaterialsModal}
-        // Materiales por operación (solo view)
         showCompModal={showCompModal}
         closeComponentsModal={closeComponentsModal}
         selectedOp={selectedOp}
         loadingComponents={loadingComponents}
         compList={compList}
-        // Firma
         showSignModal={showSignModal}
         setShowSignModal={setShowSignModal}
         signatureRef={signatureRef}
@@ -1026,7 +1377,6 @@ export default function DetalleOrden() {
         setSignatureData={setSignatureData}
         savingSignature={savingSignature}
         confirmarFinalizarConFirma={confirmarFinalizarConFirma}
-        // PDF no mantenimiento
         showNoMantPdfModal={showNoMantPdfModal}
         cerrarModalNoMantPdf={cerrarModalNoMantPdf}
         loadingNoMantPdf={loadingNoMantPdf}
@@ -1036,6 +1386,17 @@ export default function DetalleOrden() {
         descargarNoMantPdf={descargarNoMantPdf}
         downloadingNoMantPdf={downloadingNoMantPdf}
       />
+
+      {/* ✅ Overlay bloqueante cuando guardas 0400 */}
+      <Modal visible={savingPending0400} transparent animationType="fade" statusBarTranslucent>
+        <View style={styles.blockBackdrop}>
+          <View style={styles.blockCard}>
+            <ActivityIndicator size="large" color={FIORI.brand} />
+            <Text style={styles.blockTitle}>Guardando pendiente de firma…</Text>
+            <Text style={styles.blockSub}>No cierres la pantalla ni toques botones.</Text>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -1136,7 +1497,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 4,
   },
 
-  // ✅ para ListaOperacionesAgrupadas (acordeones)
   grupoCard: {
     backgroundColor: FIORI.surface,
     borderRadius: 12,
@@ -1151,21 +1511,7 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   grupoTitle: { fontSize: 14, fontWeight: "900", color: FIORI.text },
-  grupoMeta: { fontSize: 12, color: FIORI.textMuted, marginTop: 2 },
-  grupoBadge: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    borderWidth: 1,
-    borderColor: FIORI.border,
-    backgroundColor: FIORI.surfaceAlt,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 999,
-  },
-  grupoBadgeText: { fontWeight: "900", color: FIORI.text, fontSize: 12 },
 
-  // ✅ operación compacta
   operCardSmall: {
     backgroundColor: FIORI.surface,
     borderRadius: 12,
@@ -1182,7 +1528,6 @@ const styles = StyleSheet.create({
   badgeSmallText: { fontSize: 11, fontWeight: "900", color: FIORI.text },
   operTitleSmall: { fontSize: 13, fontWeight: "900", color: FIORI.text },
   operDescSmall: { fontSize: 12, color: FIORI.textMuted, marginTop: 2 },
-  operHintSmall: { fontSize: 12, color: FIORI.textMuted, fontWeight: "700" },
 
   error: { marginTop: 40, textAlign: "center", fontSize: 16, color: FIORI.err },
 
@@ -1201,7 +1546,6 @@ const styles = StyleSheet.create({
   },
   fabLabel: { color: "#000000ff", fontWeight: "800", fontSize: 13 },
 
-  // ===== Botón iniciar / contador =====
   topActionBar: {
     paddingHorizontal: 16,
     paddingTop: 10,
@@ -1243,30 +1587,6 @@ const styles = StyleSheet.create({
     letterSpacing: 0.3,
   },
 
-  block: { marginTop: 6, marginBottom: 2 },
-  blockTitle: { fontSize: 14, fontWeight: "800", color: FIORI.text, marginBottom: 8 },
-
-  grid: { flexDirection: "row", flexWrap: "wrap", marginHorizontal: -6 },
-  cardWrap: { width: "50%", paddingHorizontal: 6, marginBottom: 12 },
-  card: {
-    borderRadius: 14,
-    minHeight: 96,
-    padding: 14,
-    justifyContent: "space-between",
-    ...elev(0.6),
-  },
-  cardTop: { flexDirection: "row", justifyContent: "flex-end" },
-  iconBadge: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    backgroundColor: "rgba(255,255,255,0.25)",
-    alignItems: "center",
-    justifyContent: "center",
-    ...elev(0.2),
-  },
-  cardTitle: { color: "#fff", fontWeight: "900", fontSize: 15, lineHeight: 18 },
-
   btnFinishOrder: {
     backgroundColor: "#0B8457",
     borderRadius: 12,
@@ -1279,6 +1599,25 @@ const styles = StyleSheet.create({
     ...elev(0.7),
   },
   btnFinishOrderText: { color: "#fff", fontWeight: "900", fontSize: 15 },
+
+  /* ✅ Overlay bloqueante */
+  blockBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.35)",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 20,
+  },
+  blockCard: {
+    width: "92%",
+    maxWidth: 420,
+    backgroundColor: "#fff",
+    borderRadius: 14,
+    padding: 16,
+    alignItems: "center",
+  },
+  blockTitle: { marginTop: 10, fontWeight: "900", color: FIORI.text },
+  blockSub: { marginTop: 6, color: FIORI.textMuted, textAlign: "center", fontSize: 12 },
 });
 
 function elev(multiplier = 1) {

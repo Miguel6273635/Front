@@ -1,6 +1,7 @@
 // src/context/AuthContext.js
 import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { AppState } from "react-native";
 import { router } from "expo-router";
 import api from "../services/api";
 
@@ -70,13 +71,61 @@ export const AuthProvider = ({ children }) => {
     return `https://login.microsoftonline.com/${AZURE_TENANT_ID}/v2.0`;
   }, [AZURE_TENANT_ID]);
 
+  const REDIRECT_URI = useMemo(() => {
+    return AuthSession.makeRedirectUri({
+      scheme: "mitsuapp",
+      path: "auth",
+      useProxy: false,
+    });
+  }, []);
+
+  // ====== refresco automático (simple) ======
+  const [refreshTimer, setRefreshTimer] = useState(null);
+
+  const clearRefreshTimer = () => {
+    if (refreshTimer) {
+      clearTimeout(refreshTimer);
+      setRefreshTimer(null);
+    }
+  };
+
+  const scheduleRefresh = async () => {
+    clearRefreshTimer();
+
+    const expAt =
+      (await authGet("expires_at")) ||
+      (await AsyncStorage.getItem("token_expires_at"));
+
+    if (!expAt) return;
+
+    // refrescar 2 minutos antes de vencer (mínimo 5s)
+    const msUntil = Math.max(5000, Number(expAt) - Date.now() - 120000);
+
+    const t = setTimeout(async () => {
+      try {
+        const online = await isOnline();
+        if (!online) return; // sin red no se refresca; se hará cuando haya red o al hacer request
+
+        const r = await refreshAccessToken();
+        if (r?.ok) {
+          await scheduleRefresh(); // reprograma con el nuevo expiry
+        }
+      } catch {}
+    }, msUntil);
+
+    setRefreshTimer(t);
+  };
+
   // ✅ carga sesión desde SQLite primero (y de AsyncStorage como fallback)
   useEffect(() => {
     const loadStorage = async () => {
       try {
-        const storedToken = (await authGet("access_token")) || (await AsyncStorage.getItem("token"));
-        const storedExp = (await authGet("expires_at")) || (await AsyncStorage.getItem("token_expires_at"));
-        const storedUser = (await authGet("user_json")) || (await AsyncStorage.getItem("user"));
+        const storedToken =
+          (await authGet("access_token")) || (await AsyncStorage.getItem("token"));
+        const storedExp =
+          (await authGet("expires_at")) || (await AsyncStorage.getItem("token_expires_at"));
+        const storedUser =
+          (await authGet("user_json")) || (await AsyncStorage.getItem("user"));
 
         if (storedToken && storedExp && isExpired(storedExp, 60)) {
           await clearSessionLocal();
@@ -88,6 +137,7 @@ export const AuthProvider = ({ children }) => {
         if (storedToken && storedUser) {
           setToken(storedToken);
           setUser(JSON.parse(storedUser));
+          await scheduleRefresh(); // ✅ programa refresco si ya hay sesión
         } else {
           setToken(null);
           setUser(null);
@@ -101,9 +151,11 @@ export const AuthProvider = ({ children }) => {
     };
 
     loadStorage();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function clearSessionLocal() {
+    clearRefreshTimer();
     await AsyncStorage.multiRemove(["user", "token", "token_expires_at", "sso_code_verifier"]);
     await authDel(["access_token", "refresh_token", "expires_at", "user_json"]);
   }
@@ -111,20 +163,11 @@ export const AuthProvider = ({ children }) => {
   /* =========================
      SSO INICIAR
      ========================= */
-    /* =========================
-     SSO INICIAR
-     ========================= */
   const loginSSO = async () => {
     if (!AZURE_TENANT_ID || !AZURE_CLIENT_ID) {
       throw new Error("Faltan AZURE_TENANT_ID o AZURE_CLIENT_ID en expo.extra");
     }
     if (!ISSUER) throw new Error("ISSUER vacío. Revisa AZURE_TENANT_ID");
-
-    const redirectUri = AuthSession.makeRedirectUri({
-      scheme: "mitsuapp",
-      path: "auth",
-      useProxy: false,
-    });
 
     const discovery = await AuthSession.fetchDiscoveryAsync(ISSUER);
 
@@ -139,22 +182,22 @@ export const AuthProvider = ({ children }) => {
       `${discovery.authorizationEndpoint}` +
       `?client_id=${encodeURIComponent(AZURE_CLIENT_ID)}` +
       `&response_type=code` +
-      `&redirect_uri=${encodeURIComponent(redirectUri)}` +
+      `&redirect_uri=${encodeURIComponent(REDIRECT_URI)}` +
       `&response_mode=query` +
       `&scope=${encodeURIComponent(scopes.join(" "))}` +
       `&code_challenge=${encodeURIComponent(codeChallenge)}` +
       `&code_challenge_method=S256` +
       `&prompt=select_account`;
 
-    const result = await WebBrowser.openAuthSessionAsync(authUrl, redirectUri);
+    const result = await WebBrowser.openAuthSessionAsync(authUrl, REDIRECT_URI);
 
-    // ✅ IMPORTANTÍSIMO:
-    // - dismiss/cancel = el usuario se regresó o cerró la pantalla -> NO es error
+    // ✅ Si el usuario canceló/cerró el browser, limpiamos PKCE y regresamos "cancelled"
     if (result.type === "dismiss" || result.type === "cancel") {
+      await AsyncStorage.removeItem("sso_code_verifier");
       return { ok: false, cancelled: true, type: result.type };
     }
 
-    // - error = algo realmente falló en el browser/session
+    // ✅ Cualquier otra cosa diferente a success, lo tratamos como fallo de sesión
     if (result.type !== "success") {
       return { ok: false, cancelled: false, type: result.type };
     }
@@ -162,7 +205,6 @@ export const AuthProvider = ({ children }) => {
     // success: el callback /auth se encargará de finishSSO
     return { ok: true };
   };
-
 
   /* =========================
      REFRESH TOKEN (si existe)
@@ -177,7 +219,6 @@ export const AuthProvider = ({ children }) => {
     const discovery = await AuthSession.fetchDiscoveryAsync(ISSUER);
 
     try {
-      // expo-auth-session soporta refreshAsync
       const tokenResult = await AuthSession.refreshAsync(
         {
           clientId: AZURE_CLIENT_ID,
@@ -192,7 +233,8 @@ export const AuthProvider = ({ children }) => {
 
       if (!accessToken) return { ok: false, reason: "no_access_token_in_refresh" };
 
-      const expAt = Date.now() + (typeof expiresIn === "number" ? expiresIn : 50 * 60) * 1000;
+      const expAt =
+        Date.now() + (typeof expiresIn === "number" ? expiresIn : 50 * 60) * 1000;
 
       setToken(accessToken);
       await AsyncStorage.setItem("token", accessToken);
@@ -201,7 +243,6 @@ export const AuthProvider = ({ children }) => {
       await authSet("access_token", accessToken);
       await authSet("expires_at", String(expAt));
 
-      // a veces refresh devuelve uno nuevo
       if (tokenResult?.refreshToken) {
         await authSet("refresh_token", tokenResult.refreshToken);
       }
@@ -218,15 +259,23 @@ export const AuthProvider = ({ children }) => {
   const finishSSO = async (params) => {
     const code = params?.code;
     const error = params?.error;
+    const errorDescription = params?.error_description;
 
-    if (error) throw new Error(`SSO error: ${String(error)}`);
+    // ✅ CASO CLAVE: el usuario canceló en Microsoft y Azure devuelve access_denied
+    if (error === "access_denied" && !code) {
+      await AsyncStorage.removeItem("sso_code_verifier");
+      router.replace("/(auth)/login");
+      return { ok: false, cancelled: true };
+    }
+
+    // ✅ Otros errores reales
+    if (error) {
+      throw new Error(
+        `SSO error: ${String(error)}${errorDescription ? ` - ${String(errorDescription)}` : ""}`
+      );
+    }
+
     if (!code) throw new Error('No llegó "code" en callback');
-
-    const redirectUri = AuthSession.makeRedirectUri({
-      scheme: "mitsuapp",
-      path: "auth",
-      useProxy: false,
-    });
 
     const discovery = await AuthSession.fetchDiscoveryAsync(ISSUER);
 
@@ -237,7 +286,7 @@ export const AuthProvider = ({ children }) => {
       {
         clientId: AZURE_CLIENT_ID,
         code,
-        redirectUri,
+        redirectUri: REDIRECT_URI,
         extraParams: { code_verifier: codeVerifier },
       },
       discovery
@@ -245,11 +294,12 @@ export const AuthProvider = ({ children }) => {
 
     const accessToken = tokenResult?.accessToken;
     const expiresIn = tokenResult?.expiresIn;
-    const refreshToken = tokenResult?.refreshToken; // 👈 si Azure lo entrega
+    const refreshToken = tokenResult?.refreshToken;
 
     if (!accessToken) throw new Error("No llegó accessToken. Revisa scopes/consent de Azure.");
 
-    const expAt = Date.now() + (typeof expiresIn === "number" ? expiresIn : 50 * 60) * 1000;
+    const expAt =
+      Date.now() + (typeof expiresIn === "number" ? expiresIn : 50 * 60) * 1000;
 
     // Guarda en AsyncStorage (por compat)
     await AsyncStorage.setItem("token", accessToken);
@@ -267,7 +317,9 @@ export const AuthProvider = ({ children }) => {
     } catch (e) {
       const status = e?.response?.status;
       const detail = e?.response?.data?.detail || e?.response?.data || e?.message;
-      throw new Error(`No pude validar en /api/auth/me (${status || "sin status"}): ${String(detail)}`);
+      throw new Error(
+        `No pude validar en /api/auth/me (${status || "sin status"}): ${String(detail)}`
+      );
     }
 
     const u = meRes?.data?.user;
@@ -281,23 +333,31 @@ export const AuthProvider = ({ children }) => {
 
     await AsyncStorage.removeItem("sso_code_verifier");
 
+    await scheduleRefresh(); // ✅ programa refresco desde ya
+
     router.replace(pickHomeByRole(u.rol_id));
+    return { ok: true };
   };
 
   /* =========================
      Ensure token
      ========================= */
   const ensureValidToken = async () => {
-    const expAt = (await authGet("expires_at")) || (await AsyncStorage.getItem("token_expires_at"));
-    const tok = (await authGet("access_token")) || (await AsyncStorage.getItem("token"));
+    const expAt =
+      (await authGet("expires_at")) || (await AsyncStorage.getItem("token_expires_at"));
+    const tok =
+      (await authGet("access_token")) || (await AsyncStorage.getItem("token"));
 
     if (!tok || !expAt) return false;
 
     if (!isExpired(expAt, 60)) return true;
 
-    // expiró: intenta refresh si hay red
     const r = await refreshAccessToken();
-    return !!r.ok;
+    if (r?.ok) {
+      await scheduleRefresh();
+      return true;
+    }
+    return false;
   };
 
   /* =========================
@@ -314,6 +374,29 @@ export const AuthProvider = ({ children }) => {
 
     router.replace("/(auth)/login");
   };
+
+  // ✅ Cuando la app regresa a foreground: si ya está por vencer y hay red, intenta refrescar
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", async (state) => {
+      if (state !== "active") return;
+      try {
+        if (!user) return;
+        const online = await isOnline();
+        if (!online) return;
+        await ensureValidToken();
+      } catch {}
+    });
+    return () => sub?.remove?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user]);
+
+  // ✅ Exponer auth a api.js SIN archivo extra (simple)
+  useEffect(() => {
+    globalThis.__AUTH__ = {
+      ensureValidToken,
+      logout,
+    };
+  }, [ensureValidToken, logout]);
 
   return (
     <AuthContext.Provider

@@ -1,19 +1,19 @@
 // app/ordenes/[id]/secciones/EncabezadoDetalleOrden.js
-import React from 'react';
-import { View, Text, TouchableOpacity } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import React from "react";
+import { View, Text, TouchableOpacity } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 
 /**
  * EncabezadoDetalleOrden
- * Renderiza lo que antes estaba en ListHeaderComponent:
  * - Card con #Orden + tipo + badge estatus
- * - Banners (No mantenimiento / bloqueadas / finalizada)
+ * - Banner No mantenimiento
+ * - Banner Operaciones bloqueadas (si no hay checkin)
+ * - Banner Orden finalizada real (0300/0500) -> referencia
+ * - Banner Pendiente de firma (0400) -> continuar
  * - Panel solicitante (partners)
  * - Panel datos orden (equipo, dirección, inicio, fin)
  * - Botón ver materiales asignados
  * - Texto "Operaciones asignadas"
- *
- * Nota: recibe `styles` y `FIORI` desde index.js para NO duplicar estilos.
  */
 
 const Row = ({ label, value, styles, formatValueForRow }) => {
@@ -38,7 +38,7 @@ export default function EncabezadoDetalleOrden({
   estatusColor,
   isNoMant,
   checkinDone,
-  isOrderFinished,
+  isOrderFinished, // 👈 acá le pasamos isOrderFinishedReal desde el padre
 
   // valores listos
   direccionValor,
@@ -52,18 +52,21 @@ export default function EncabezadoDetalleOrden({
   onAbrirPdfNoMant,
   onVerMaterialesOrden,
 }) {
+  const statusCode = String(orden?.estatus_code || orden?.userstatus || "").trim();
+  const isPendingFirma0400 = statusCode === "0400";
+
   return (
     <>
       <View style={styles.headerBox}>
         <View style={{ flex: 1 }}>
           <Text style={styles.titulo}>
-            #{orden?.Orderid || id || ''} · {orden?.order_type || '—'}
+            #{orden?.Orderid || id || ""} · {orden?.order_type || "—"}
           </Text>
         </View>
 
         <View style={[styles.statusBadge, { backgroundColor: estatusColor }]}>
           <Text style={styles.statusBadgeText}>
-            {orden?.estatus_label || orden?.estatus_code || '—'}
+            {orden?.estatus_label || orden?.estatus_code || "—"}
           </Text>
         </View>
       </View>
@@ -87,6 +90,25 @@ export default function EncabezadoDetalleOrden({
           <TouchableOpacity style={styles.btnNoMantBanner} onPress={onAbrirPdfNoMant}>
             <Text style={styles.btnNoMantBannerText}>Ver PDF</Text>
           </TouchableOpacity>
+        </View>
+      )}
+
+      {/* ✅ Pendiente de firma (0400) NO es finalizada real */}
+      {!isNoMant && isPendingFirma0400 && (
+        <View style={styles.noMantBanner}>
+          <Ionicons
+            name="create-outline"
+            size={22}
+            color={FIORI.text}
+            style={{ marginRight: 10 }}
+          />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.noMantTitle}>Orden pendiente de firma</Text>
+            <Text style={styles.noMantText}>
+              Esta orden quedó en estatus 0400 (pendiente de firma). Puedes continuar el proceso
+              para capturar firma y finalizar.
+            </Text>
+          </View>
         </View>
       )}
 
@@ -130,8 +152,7 @@ export default function EncabezadoDetalleOrden({
           {orden.partners.map((p, idx) => (
             <Text key={idx} style={styles.value}>
               <Text style={styles.labelInline}>Rol: </Text>
-              {p.role}{' '}
-              <Text style={styles.labelInline}>· Partner: </Text>
+              {p.role} <Text style={styles.labelInline}>· Partner: </Text>
               {p.partner}
             </Text>
           ))}
@@ -141,10 +162,30 @@ export default function EncabezadoDetalleOrden({
       <View style={styles.panel}>
         <Text style={styles.panelTitle}>Datos de la orden</Text>
 
-        <Row label="Equipo" value={orden?.equipment} styles={styles} formatValueForRow={formatValueForRow} />
-        <Row label="Dirección" value={direccionValor} styles={styles} formatValueForRow={formatValueForRow} />
-        <Row label="Inicio" value={fmtDMY(orden?.start_date)} styles={styles} formatValueForRow={formatValueForRow} />
-        <Row label="Fin" value={fmtDMY(orden?.finish_date)} styles={styles} formatValueForRow={formatValueForRow} />
+        <Row
+          label="Equipo"
+          value={orden?.equipment}
+          styles={styles}
+          formatValueForRow={formatValueForRow}
+        />
+        <Row
+          label="Dirección"
+          value={direccionValor}
+          styles={styles}
+          formatValueForRow={formatValueForRow}
+        />
+        <Row
+          label="Inicio"
+          value={fmtDMY(orden?.start_date)}
+          styles={styles}
+          formatValueForRow={formatValueForRow}
+        />
+        <Row
+          label="Fin"
+          value={fmtDMY(orden?.finish_date)}
+          styles={styles}
+          formatValueForRow={formatValueForRow}
+        />
 
         {allMaterialsLen > 0 && (
           <TouchableOpacity

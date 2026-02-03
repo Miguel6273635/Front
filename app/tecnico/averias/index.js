@@ -12,15 +12,20 @@ import {
   Platform,
   Modal,
   ScrollView,
+  TextInput,
 } from "react-native";
 import Header from "../../../src/components/Header";
 import { router } from "expo-router";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import NetInfo from "@react-native-community/netinfo";
+import { Ionicons } from "@expo/vector-icons";
 
 import { useAuth } from "../../../src/context/AuthContext";
 import api from "../../../src/services/api";
-import { saveAveriasListCache, loadAveriasListCache } from "../../../src/offline/averiasCache";
+import {
+  saveAveriasListCache,
+  loadAveriasListCache,
+} from "../../../src/offline/averiasCache";
 
 // Paleta Fiori
 const FIORI = {
@@ -30,12 +35,22 @@ const FIORI = {
   border: "#DDE6F2",
   ink: "#0B1F3B",
   textMuted: "#63718B",
-  accent: "#0A6ED1",
+  accent: "#0A6ED1", // azul SAP
 };
 
 const MONTHS = [
-  "Enero","Febrero","Marzo","Abril","Mayo","Junio",
-  "Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre",
+  "Enero",
+  "Febrero",
+  "Marzo",
+  "Abril",
+  "Mayo",
+  "Junio",
+  "Julio",
+  "Agosto",
+  "Septiembre",
+  "Octubre",
+  "Noviembre",
+  "Diciembre",
 ];
 
 // ===== Helpers =====
@@ -104,6 +119,19 @@ const endOfMonth = (d) => new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59,
 const startOfYear = (y) => new Date(y, 0, 1, 0, 0, 0, 0);
 const endOfYear = (y) => new Date(y, 11, 31, 23, 59, 59, 999);
 
+// ===== UI helpers =====
+const normalize = (s) => String(s || "").trim().toLowerCase();
+
+// ✅ Prioridad SIEMPRE AZUL (SAP)
+const prioMeta = (p) => {
+  return {
+    label: p ? `Prio ${String(p)}` : "Prio",
+    bar: FIORI.accent,
+    chipBg: "#EAF3FF",
+    chipText: FIORI.accent,
+  };
+};
+
 export default function AveriaIndexTecnico() {
   const { user, token } = useAuth();
 
@@ -111,7 +139,10 @@ export default function AveriaIndexTecnico() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
-  const [offlineMsg, setOfflineMsg] = useState(""); // ✅ banner offline
+  const [offlineMsg, setOfflineMsg] = useState("");
+
+  // ✅ Buscador
+  const [query, setQuery] = useState("");
 
   // Filtros
   const [dateMode, setDateMode] = useState("day"); // 'all' | 'day' | 'weekRange' | 'month' | 'year'
@@ -128,7 +159,10 @@ export default function AveriaIndexTecnico() {
 
   // Mes
   const now = new Date();
-  const [monthYear, setMonthYear] = useState({ month: now.getMonth(), year: now.getFullYear() });
+  const [monthYear, setMonthYear] = useState({
+    month: now.getMonth(),
+    year: now.getFullYear(),
+  });
   const [showMonthModal, setShowMonthModal] = useState(false);
 
   // Año
@@ -203,10 +237,12 @@ export default function AveriaIndexTecnico() {
       // ✅ OFFLINE -> intenta cache
       if (!online) {
         const cached = await loadAveriasListCache({ correo, startYmd, endYmd });
-        const items = cached?.items || cached?.value?.items || []; // por si cambiaste estructura antes
+        const items = cached?.items || cached?.value?.items || [];
         if (Array.isArray(items) && items.length) {
           setAvisos(items);
-          setOfflineMsg(`Mostrando datos offline (guardados: ${new Date(cached.savedAt).toLocaleString()})`);
+          setOfflineMsg(
+            `Mostrando datos offline (guardados: ${new Date(cached.savedAt).toLocaleString()})`
+          );
         } else {
           setAvisos([]);
           setErrorMsg("Sin conexión y no hay cache para este filtro.");
@@ -262,13 +298,18 @@ export default function AveriaIndexTecnico() {
       console.error("Error cargando avisos OData:", err?.response?.data || err);
       setErrorMsg("No se pudieron cargar los avisos desde SAP. Intenta nuevamente.");
 
-      // ✅ si falló online, intenta cache como fallback
+      // ✅ fallback a cache
       try {
+        const correo = getCorreo();
+        const startYmd = ymd(start);
+        const endYmd = ymd(end);
         const cached = await loadAveriasListCache({ correo, startYmd, endYmd });
         const items = cached?.items || [];
         if (Array.isArray(items) && items.length) {
           setAvisos(items);
-          setOfflineMsg(`Mostrando último cache guardado (guardado: ${new Date(cached.savedAt).toLocaleString()})`);
+          setOfflineMsg(
+            `Mostrando último cache guardado (guardado: ${new Date(cached.savedAt).toLocaleString()})`
+          );
           setErrorMsg("");
         } else {
           setAvisos([]);
@@ -291,7 +332,12 @@ export default function AveriaIndexTecnico() {
     fetchAvisosForRange();
   };
 
-  const YearPickerContent = ({ selectedYear, onSelect, from = 2020, to = now.getFullYear() + 2 }) => {
+  const YearPickerContent = ({
+    selectedYear,
+    onSelect,
+    from = 2020,
+    to = now.getFullYear() + 2,
+  }) => {
     const years = [];
     for (let y = to; y >= from; y--) years.push(y);
     return (
@@ -302,7 +348,12 @@ export default function AveriaIndexTecnico() {
             style={[styles.yearItem, selectedYear === y && styles.yearItemActive]}
             onPress={() => onSelect(y)}
           >
-            <Text style={[styles.yearItemText, selectedYear === y && styles.yearItemTextActive]}>
+            <Text
+              style={[
+                styles.yearItemText,
+                selectedYear === y && styles.yearItemTextActive,
+              ]}
+            >
               {y}
             </Text>
           </TouchableOpacity>
@@ -311,12 +362,64 @@ export default function AveriaIndexTecnico() {
     );
   };
 
+  // ✅ Filtrado por buscador (sobre lo que ya trae SAP/cache)
+  const filteredAvisos = useMemo(() => {
+    const q = normalize(query);
+    if (!q) return avisos;
+
+    return (avisos || []).filter((it) => {
+      const a = normalize(it?.NotifNo);
+      const b = normalize(it?.Equipment);
+      const c = normalize(it?.ShortText);
+      const d = normalize(it?.FunctLoc);
+      const e = normalize(it?.CustNo);
+      return a.includes(q) || b.includes(q) || c.includes(q) || d.includes(q) || e.includes(q);
+    });
+  }, [avisos, query]);
+
+  const listHeader = () => (
+    <View style={styles.headerBox}>
+      {/* ✅ Buscador */}
+      <View style={styles.searchWrap}>
+        <Ionicons name="search" size={18} color={FIORI.textMuted} />
+        <TextInput
+          value={query}
+          onChangeText={setQuery}
+          placeholder="Buscar por Notif, equipo, texto, ubicación…"
+          placeholderTextColor="#9AA5B1"
+          style={styles.searchInput}
+          autoCorrect={false}
+          autoCapitalize="none"
+          returnKeyType="search"
+        />
+        {!!query && (
+          <TouchableOpacity
+            onPress={() => setQuery("")}
+            style={styles.clearBtn}
+            activeOpacity={0.8}
+          >
+            <Ionicons name="close-circle" size={18} color="#9AA5B1" />
+          </TouchableOpacity>
+        )}
+      </View>
+
+      <View style={styles.resultsRow}>
+        <Text style={styles.resultsText}>
+          Mostrando <Text style={styles.resultsStrong}>{filteredAvisos.length}</Text> de{" "}
+          <Text style={styles.resultsStrong}>{avisos.length}</Text>
+        </Text>
+      </View>
+    </View>
+  );
+
   const renderItem = ({ item }) => {
     const notifNo = item?.NotifNo || item?.id;
+    const pm = prioMeta(item?.Priority);
+
     return (
       <TouchableOpacity
         style={styles.card}
-        activeOpacity={0.75}
+        activeOpacity={0.82}
         onPress={() => {
           if (!notifNo) {
             Alert.alert("Aviso", "No se encontró número de notificación.");
@@ -325,20 +428,53 @@ export default function AveriaIndexTecnico() {
           router.push(`/tecnico/averias/${notifNo}/detalles`);
         }}
       >
-        <View style={styles.cardTop}>
-          <Text style={styles.cardId}>Notif: {notifNo}</Text>
-          {!!item?.Priority && <Text style={styles.prio}>Prio: {item.Priority}</Text>}
+        {/* barra lateral (siempre azul SAP) */}
+        <View style={[styles.cardBar, { backgroundColor: pm.bar }]} />
+
+        <View style={styles.cardBody}>
+          <View style={styles.cardTop}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.cardId} numberOfLines={1}>
+                Notif: {notifNo}
+              </Text>
+              <Text style={styles.cardDate}>
+                {formatDate(item?.NotifDate)}{" "}
+                <Text style={styles.cardDateMuted}>•</Text>{" "}
+                <Text style={styles.cardDateMuted}>Equipo:</Text> {item?.Equipment || "—"}
+              </Text>
+            </View>
+
+            {!!item?.Priority && (
+              <View style={[styles.prioChip, { backgroundColor: pm.chipBg }]}>
+                <Text style={[styles.prioChipText, { color: pm.chipText }]}>{pm.label}</Text>
+              </View>
+            )}
+          </View>
+
+          <Text style={styles.cardTitle} numberOfLines={2}>
+            {item?.ShortText || "Sin descripción"}
+          </Text>
+
+          <View style={styles.metaRow}>
+            <Ionicons name="location-outline" size={16} color={FIORI.textMuted} />
+            <Text style={styles.metaText} numberOfLines={1}>
+              {item?.FunctLoc || "—"}
+            </Text>
+          </View>
+
+          {!!item?.CustNo && (
+            <View style={styles.metaRow}>
+              <Ionicons name="business-outline" size={16} color={FIORI.textMuted} />
+              <Text style={styles.metaText} numberOfLines={1}>
+                Cliente: {item?.CustNo}
+              </Text>
+            </View>
+          )}
         </View>
 
-        <Text style={styles.cardTitle} numberOfLines={2}>
-          {item.ShortText || "Sin descripción"}
-        </Text>
-
-        <Text style={styles.cardSub}>Equipo: {item.Equipment || "—"}</Text>
-        <Text style={styles.cardSub}>Fecha notif: {formatDate(item.NotifDate)}</Text>
-        <Text style={styles.cardSub} numberOfLines={1}>
-          Ubicación: {item.FunctLoc || "—"}
-        </Text>
+        <View style={styles.chevWrap}>
+          <Ionicons name="chevron-forward" size={18} color="#9AA5B1" />
+        </View>
       </TouchableOpacity>
     );
   };
@@ -353,7 +489,9 @@ export default function AveriaIndexTecnico() {
             style={[styles.chip, dateMode === "all" && styles.chipActive]}
             onPress={() => setDateMode("all")}
           >
-            <Text style={[styles.chipText, dateMode === "all" && styles.chipTextActive]}>Todas</Text>
+            <Text style={[styles.chipText, dateMode === "all" && styles.chipTextActive]}>
+              Todas
+            </Text>
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -385,7 +523,9 @@ export default function AveriaIndexTecnico() {
               setShowMonthModal(true);
             }}
           >
-            <Text style={[styles.chipText, dateMode === "month" && styles.chipTextActive]}>Mes</Text>
+            <Text style={[styles.chipText, dateMode === "month" && styles.chipTextActive]}>
+              Mes
+            </Text>
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -395,7 +535,9 @@ export default function AveriaIndexTecnico() {
               setShowYearModal(true);
             }}
           >
-            <Text style={[styles.chipText, dateMode === "year" && styles.chipTextActive]}>Año</Text>
+            <Text style={[styles.chipText, dateMode === "year" && styles.chipTextActive]}>
+              Año
+            </Text>
           </TouchableOpacity>
         </View>
 
@@ -573,14 +715,15 @@ export default function AveriaIndexTecnico() {
           </View>
         ) : (
           <FlatList
-            data={avisos}
+            data={filteredAvisos}
             keyExtractor={(item, index) => item?.NotifNo?.toString() || `notif-${index}`}
             renderItem={renderItem}
+            ListHeaderComponent={listHeader}
             contentContainerStyle={{ padding: 16, paddingBottom: 120 }}
             refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
             ListEmptyComponent={
               <Text style={{ textAlign: "center", marginTop: 40, color: FIORI.textMuted }}>
-                No hay avisos con los filtros actuales.
+                {query ? "No hay resultados con esa búsqueda." : "No hay avisos con los filtros actuales."}
               </Text>
             }
           />
@@ -635,6 +778,7 @@ const styles = StyleSheet.create({
     backgroundColor: FIORI.cardSubtle,
     borderWidth: 1,
     borderColor: FIORI.border,
+    flex: 1,
   },
   smallBtnText: { color: FIORI.ink, fontWeight: "600" },
 
@@ -649,20 +793,105 @@ const styles = StyleSheet.create({
   errorText: { color: "#7a0000", fontWeight: "700" },
   errorRetry: { marginTop: 4, color: FIORI.accent, fontWeight: "800" },
 
+  // ===== search header =====
+  headerBox: {
+    marginBottom: 12,
+  },
+  searchWrap: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    backgroundColor: FIORI.cardBg,
+    borderWidth: 1,
+    borderColor: FIORI.border,
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 14,
+    color: FIORI.ink,
+    paddingVertical: 0,
+  },
+  clearBtn: {
+    paddingLeft: 4,
+    paddingVertical: 2,
+  },
+  resultsRow: {
+    marginTop: 8,
+    flexDirection: "row",
+    justifyContent: "space-between",
+  },
+  resultsText: { color: FIORI.textMuted, fontSize: 12 },
+  resultsStrong: { color: FIORI.ink, fontWeight: "800" },
+
+  // ===== cards =====
   card: {
     backgroundColor: "#fff",
-    borderRadius: 12,
-    padding: 14,
+    borderRadius: 14,
     marginBottom: 12,
     borderWidth: 1,
-    borderColor: "#e5e7eb",
+    borderColor: FIORI.border,
+    flexDirection: "row",
+    overflow: "hidden",
+    ...Platform.select({
+      ios: {
+        shadowColor: "#000",
+        shadowOpacity: 0.06,
+        shadowRadius: 12,
+        shadowOffset: { width: 0, height: 6 },
+      },
+      android: { elevation: 2 },
+    }),
   },
-  cardTop: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
-  cardId: { fontWeight: "bold", fontSize: 14, color: "#111827" },
-  prio: { fontSize: 12, color: "#6b7280", fontWeight: "700" },
-  cardTitle: { marginTop: 6, fontSize: 15, fontWeight: "700", color: "#111827" },
-  cardSub: { marginTop: 2, color: "#6b7280" },
+  cardBar: { width: 6 }, // azul SAP
+  cardBody: { flex: 1, padding: 14 },
+  chevWrap: {
+    width: 40,
+    alignItems: "center",
+    justifyContent: "center",
+    borderLeftWidth: 1,
+    borderLeftColor: "#EEF2F7",
+    backgroundColor: "#FAFBFD",
+  },
+  cardTop: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    gap: 10,
+  },
+  cardId: { fontWeight: "900", fontSize: 14, color: FIORI.ink },
+  cardDate: { marginTop: 2, fontSize: 12, color: FIORI.textMuted },
+  cardDateMuted: { color: "#9AA5B1" },
 
+  prioChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: "#E9EEF6",
+    alignSelf: "flex-start",
+  },
+  prioChipText: { fontSize: 12, fontWeight: "900" },
+
+  cardTitle: {
+    marginTop: 10,
+    fontSize: 15,
+    fontWeight: "800",
+    color: FIORI.ink,
+    lineHeight: 20,
+  },
+
+  metaRow: {
+    marginTop: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  metaText: { flex: 1, color: FIORI.textMuted, fontWeight: "600" },
+
+  // ===== modals =====
   modalBackdrop: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.4)",
@@ -679,11 +908,26 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: FIORI.border,
   },
-  modalHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 10 },
+  modalHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 10,
+  },
   modalHeaderTitle: { fontSize: 18, fontWeight: "700", color: FIORI.ink },
-  modalHeaderBtn: { fontSize: 22, fontWeight: "900", color: FIORI.accent, paddingHorizontal: 12 },
+  modalHeaderBtn: {
+    fontSize: 22,
+    fontWeight: "900",
+    color: FIORI.accent,
+    paddingHorizontal: 12,
+  },
 
-  monthGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8, justifyContent: "space-between" },
+  monthGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    justifyContent: "space-between",
+  },
   monthCell: {
     width: "31.5%",
     backgroundColor: FIORI.cardSubtle,

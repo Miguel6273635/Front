@@ -18,7 +18,6 @@ const jsonParse = (s, fallback) => {
 
 async function isOnlineNow() {
   const st = await NetInfo.fetch();
-  // ✅ Online si conectado y reachability NO es false (true o null)
   return !!st?.isConnected && st?.isInternetReachable !== false;
 }
 
@@ -29,15 +28,12 @@ export async function fetchMetaAviso(orderid, token) {
 
   const k = keyMeta(orderid);
 
-  // ✅ cache primero (rápido)
   const cachedRaw = await AsyncStorage.getItem(k);
   const cached = cachedRaw ? jsonParse(cachedRaw, null) : null;
 
-  // ✅ Si está offline, regresa cache directo (si hay)
   const online = await isOnlineNow();
   if (!online) {
     if (cached?.data) return cached.data;
-    // si no hay cache, fuerza error claro
     throw new Error("Sin conexión y no hay datos cacheados de la meta del aviso.");
   }
 
@@ -50,7 +46,6 @@ export async function fetchMetaAviso(orderid, token) {
     await AsyncStorage.setItem(k, JSON.stringify(payload));
     return res.data;
   } catch (e) {
-    // ✅ fallback a cache
     if (cached?.data) return cached.data;
     throw e;
   }
@@ -60,26 +55,20 @@ export async function fetchCatalogoCircunstancia(catalogo, token) {
   const cat = String(catalogo || "").trim().toUpperCase();
   const k = keyCatalog(cat);
 
-  // ✅ cache primero
   const cachedRaw = await AsyncStorage.getItem(k);
   const cached = cachedRaw ? jsonParse(cachedRaw, null) : null;
 
-  // ✅ offline -> cache
   const online = await isOnlineNow();
   if (!online) {
     if (cached?.data) return cached.data;
-    // sin cache, regresa [] para no romper UI
     return [];
   }
 
   try {
-    const res = await api.get(
-      `/api/aviso-averia/catalogos/circunstancia`,
-      {
-        params: { catalogo: cat },
-        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-      }
-    );
+    const res = await api.get(`/api/aviso-averia/catalogos/circunstancia`, {
+      params: { catalogo: cat },
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    });
 
     const payload = { savedAt: Date.now(), data: res.data };
     await AsyncStorage.setItem(k, JSON.stringify(payload));
@@ -91,7 +80,6 @@ export async function fetchCatalogoCircunstancia(catalogo, token) {
 }
 
 export async function crearAvisoAveriaSap(payload, token) {
-  // ✅ online normal (offline lo resuelve la vista con outbox)
   try {
     const res = await api.post(`/api/aviso-averia/create`, payload, {
       headers: token ? { Authorization: `Bearer ${token}` } : undefined,

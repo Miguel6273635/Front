@@ -1,4 +1,4 @@
-// app/tecnico/ordenes/[id]/aviso-averia.js
+// app/tecnico/ordenes/[orderid]/aviso-averia.js
 import React, { useEffect, useState } from "react";
 import {
   View,
@@ -10,8 +10,14 @@ import {
   ActivityIndicator,
   Alert,
   Image,
+  Platform,
 } from "react-native";
 import * as ImagePicker from "expo-image-picker";
+import * as ImageManipulator from "expo-image-manipulator";
+
+// ✅ En tu SDK, los métodos legacy se deben importar del legacy:
+import * as LegacyFS from "expo-file-system/legacy";
+
 import Header from "../../../../src/components/Header";
 import { useLocalSearchParams, router } from "expo-router";
 import { useAuth } from "../../../../src/context/AuthContext";
@@ -23,7 +29,6 @@ import {
   crearAvisoAveriaSap,
 } from "../../../../src/services/avisoAveriaSap";
 
-// ✅ encola el JSON cuando no hay red
 import { enqueueCrearAvisoAveria } from "../../../../src/offline/avisoAveriaOutbox";
 
 const FIORI = {
@@ -47,9 +52,44 @@ const Chip = ({ active, label, onPress }) => (
   </TouchableOpacity>
 );
 
+/**
+ * ✅ Convierte un file:// a base64 usando la API legacy
+ * - En tu Expo, readAsStringAsync desde "expo-file-system" ya no se permite.
+ * - Usamos encoding: "base64" (string).
+ */
+async function uriToBase64(uri) {
+  if (!uri) return null;
+
+  const b64 = await LegacyFS.readAsStringAsync(uri, {
+    encoding: "base64",
+  });
+
+  return b64 || null;
+}
+
+/**
+ * ✅ Asegura file:// cuando el uri venga content:// (Android)
+ */
+async function ensureFileUri(uri, ext = "jpg") {
+  if (!uri) return null;
+  if (!uri.startsWith("content://")) return uri;
+
+  const dest = `${LegacyFS.cacheDirectory}aviso_${Date.now()}.${ext}`;
+  await LegacyFS.copyAsync({ from: uri, to: dest });
+  return dest;
+}
+
 export default function AvisoAveriaSapScreen() {
   const params = useLocalSearchParams();
-  const rawId = params.id || params.orderid || params.Orderid || params.ordenId || null;
+
+  const rawId =
+    params.orderid ||
+    params.id ||
+    params.Orderid ||
+    params.ordenId ||
+    params.orderId ||
+    null;
+
   const orderid = rawId ? String(rawId).trim() : null;
 
   const { token, user } = useAuth();
@@ -63,22 +103,19 @@ export default function AvisoAveriaSapScreen() {
   const [catS, setCatS] = useState([]);
   const [catT, setCatT] = useState([]);
 
-  // daños y causas son ARREGLOS (máx 2)
-  const [selR, setSelR] = useState([]); // daños (R)
-  const [selS, setSelS] = useState(null); // localización (S) única
-  const [selT, setSelT] = useState([]); // causas (T)
+  const [selR, setSelR] = useState([]);
+  const [selS, setSelS] = useState(null);
+  const [selT, setSelT] = useState([]);
 
   const [shortText, setShortText] = useState("");
-  const [itemDescript, setItemDescript] = useState(""); // falla (ItemsSet[].Descript)
+  const [itemDescript, setItemDescript] = useState("");
   const [causaText, setCausaText] = useState("");
-
-  // descripción pieza (NotificationTextSet[].TextLine)
   const [piezaDescripcion, setPiezaDescripcion] = useState("");
 
   const [saving, setSaving] = useState(false);
 
-  // Foto evidencia (local)
   const [evidenceUri, setEvidenceUri] = useState(null);
+  const [evidenceMeta, setEvidenceMeta] = useState(null);
 
   useEffect(() => {
     let alive = true;
@@ -109,14 +146,10 @@ export default function AvisoAveriaSapScreen() {
         setCatR(Array.isArray(r) ? r : []);
         setCatS(Array.isArray(s) ? s : []);
         setCatT(Array.isArray(t) ? t : []);
-
         setShortText(metaRes?.ShortTextDefault || "");
       } catch (e) {
         console.error("Error cargando aviso de avería:", e?.response?.data || e);
-        Alert.alert(
-          "Error",
-          e?.message || "No se pudo cargar la información del aviso."
-        );
+        Alert.alert("Error", e?.message || "No se pudo cargar la información del aviso.");
       } finally {
         if (alive) setLoading(false);
       }
@@ -135,6 +168,76 @@ export default function AvisoAveriaSapScreen() {
       return prev;
     }
     return [...prev, item];
+  };
+
+  const handleTakePhoto = async () => {
+    try {
+      const { status } = await ImagePicker.requestCameraPermissionsAsync();
+      if (status !== "granted") {
+        Alert.alert("Permiso requerido", "Necesitas otorgar permiso de cámara para tomar una foto.");
+        return;
+      }
+
+      const result = await ImagePicker.launchCameraAsync({
+        allowsEditing: false,
+        quality: 0.7,
+        base64: false,
+      });
+
+      if (result.canceled) return;
+
+      const asset = result.assets?.[0];
+      let uri = asset?.uri;
+
+      if (!uri) {
+        Alert.alert("Error", "No se recibió la imagen de la cámara.");
+        return;
+      }
+
+      // ✅ content:// -> file://
+      uri = await ensureFileUri(uri, "jpg");
+
+      // ✅ manipulación (sale como file://)
+      const manipulated = await ImageManipulator.manipulateAsync(
+        uri,
+        [{ resize: { width: 1280 } }],
+        { compress: 0.75, format: ImageManipulator.SaveFormat.JPEG }
+      );
+
+      const finalUri = manipulated?.uri || uri;
+
+      // ✅ Base64 por legacy (ya NO truena)
+      const base64 = await uriToBase64(finalUri);
+      if (!base64) {
+        Alert.alert("Error", "No se pudo convertir la imagen a Base64.");
+        return;
+      }
+
+      setEvidenceUri(finalUri);
+
+      const fileName = `aviso_${String(orderid || "orden")}_${Date.now()}.jpg`;
+
+      let sizeBytes = null;
+      try {
+        const info = await LegacyFS.getInfoAsync(finalUri);
+        sizeBytes = info?.size ?? null;
+      } catch {}
+
+      setEvidenceMeta({
+        fileName,
+        mimeType: "image/jpeg",
+        base64,
+        sizeBytes,
+      });
+
+      console.log("[AVISO-AVERIA] evidenceUri =", finalUri);
+      console.log("[AVISO-AVERIA] base64 length =", base64?.length);
+      console.log("[AVISO-AVERIA] mimeType =", "image/jpeg");
+      console.log("[AVISO-AVERIA] platform =", Platform.OS);
+    } catch (e) {
+      console.error("Error al tomar foto:", e);
+      Alert.alert("Error", e?.message || "No se pudo abrir la cámara o convertir la imagen.");
+    }
   };
 
   const onGuardar = async () => {
@@ -164,6 +267,10 @@ export default function AvisoAveriaSapScreen() {
       return Alert.alert("Falta usuario", "No se encontró el email del usuario loggeado.");
     }
 
+    if (!evidenceMeta?.base64) {
+      return Alert.alert("Falta evidencia", "Toma una foto de evidencia para adjuntarla al aviso.");
+    }
+
     const payload = {
       equipment: meta.Equipment,
       docNumber: meta.DocNumber,
@@ -172,29 +279,28 @@ export default function AvisoAveriaSapScreen() {
       itemDescript,
       piezaDescripcion,
       causaText,
-
-      // ✅ email del técnico/loggeado
       email: emailUsuario,
-
       piezaCircList: selR,
       lugarCirc: selS,
       causasCirc: selT,
+
+      // ✅ Según tu JSON: DocId vacío
+      Attachments: [
+        {
+          DocId: " ",
+          FileName: evidenceMeta.fileName,
+          MimeType: evidenceMeta.mimeType, // "image/jpeg"
+          Base64: evidenceMeta.base64,
+        },
+      ],
     };
 
     try {
       setSaving(true);
 
-      console.log("=======================================");
-      console.log("[AVISO-AVERIA] JSON ARMADO (payload):");
-      console.log(JSON.stringify(payload, null, 2));
-      console.log("=======================================");
-
       const online = await isOnlineNow();
-
-      // ✅ OFFLINE: encolar JSON
       if (!online) {
         const r = await enqueueCrearAvisoAveria({ payload });
-
         if (r?.ok) {
           Alert.alert(
             "Guardado offline",
@@ -207,9 +313,7 @@ export default function AvisoAveriaSapScreen() {
         return;
       }
 
-      // ✅ ONLINE: enviar normal
       const res = await crearAvisoAveriaSap(payload, token);
-      console.log("[AVISO-AVERIA] respuesta backend crearAvisoAveriaSap:", res);
 
       if (res?.ok) {
         const notifNo =
@@ -225,20 +329,18 @@ export default function AvisoAveriaSapScreen() {
             : null);
 
         const backendMsg = res?.sapMessage;
-        let message = "";
-
-        if (backendMsg && notifNo) message = `${backendMsg}\nNo. de aviso: ${notifNo}`;
-        else if (backendMsg) message = backendMsg;
-        else if (notifNo) message = `Se creó el aviso en SAP.\nNo. de aviso: ${notifNo}`;
-        else message = "Se creó el aviso en SAP (no se recibió número de aviso).";
+        const message =
+          backendMsg && notifNo
+            ? `${backendMsg}\nNo. de aviso: ${notifNo}`
+            : backendMsg
+            ? backendMsg
+            : notifNo
+            ? `Se creó el aviso en SAP.\nNo. de aviso: ${notifNo}`
+            : "Se creó el aviso en SAP (no se recibió número de aviso).";
 
         Alert.alert("Aviso creado", message, [{ text: "OK", onPress: () => router.back() }]);
       } else {
-        Alert.alert(
-          "Aviso no creado",
-          res?.error ||
-            "Hubo un problema al crear el aviso en SAP. Revisa conexión o intenta más tarde."
-        );
+        Alert.alert("Aviso no creado", res?.error || "Hubo un problema al crear el aviso en SAP.");
       }
     } catch (e) {
       console.error("Error al crear aviso de avería:", e?.response?.data || e);
@@ -250,28 +352,6 @@ export default function AvisoAveriaSapScreen() {
       Alert.alert("Error", msg);
     } finally {
       setSaving(false);
-    }
-  };
-
-  const handleTakePhoto = async () => {
-    try {
-      const { status } = await ImagePicker.requestCameraPermissionsAsync();
-      if (status !== "granted") {
-        Alert.alert("Permiso requerido", "Necesitas otorgar permiso de cámara para tomar una foto.");
-        return;
-      }
-
-      const result = await ImagePicker.launchCameraAsync({
-        allowsEditing: false,
-        quality: 0.7,
-      });
-
-      if (!result.canceled && result.assets && result.assets.length > 0) {
-        setEvidenceUri(result.assets[0].uri);
-      }
-    } catch (e) {
-      console.error("Error al tomar foto:", e);
-      Alert.alert("Error", "No se pudo abrir la cámara.");
     }
   };
 
@@ -322,26 +402,16 @@ export default function AvisoAveriaSapScreen() {
 
         <Text style={styles.section}>Encabezado del aviso</Text>
         <View style={styles.card}>
-          <Text style={styles.label}>Descripción breve (ShortText)</Text>
-          <TextInput
-            style={styles.input}
-            value={shortText}
-            onChangeText={setShortText}
-            placeholder="Breve descripción del aviso"
-          />
+          <Text style={styles.label}>Descripción breve</Text>
+          <TextInput style={styles.input} value={shortText} onChangeText={setShortText} />
 
-          <Text style={styles.label}>Descripción de la pieza (NotificationTextSet)</Text>
-          <TextInput
-            style={styles.input}
-            value={piezaDescripcion}
-            onChangeText={setPiezaDescripcion}
-            placeholder="Ej: sensor, polea, etc."
-          />
+          <Text style={styles.label}>Descripción de la pieza</Text>
+          <TextInput style={styles.input} value={piezaDescripcion} onChangeText={setPiezaDescripcion} />
         </View>
 
         <Text style={styles.section}>Falla en la pieza / daño</Text>
         <View style={styles.card}>
-          <Text style={styles.label}>Descripción de la falla (Descript)</Text>
+          <Text style={styles.label}>Descripción de la falla</Text>
           <TextInput
             style={[styles.input, { height: 100, textAlignVertical: "top" }]}
             multiline
@@ -349,9 +419,7 @@ export default function AvisoAveriaSapScreen() {
             onChangeText={setItemDescript}
           />
 
-          <Text style={[styles.label, { marginTop: 10 }]}>
-            Código de daño (Catálogo = R) – máx 2
-          </Text>
+          <Text style={[styles.label, { marginTop: 10 }]}>Código de daño (Catálogo = R) – máx 2</Text>
 
           <View style={styles.chipsWrap}>
             {catR.map((c) => {
@@ -392,9 +460,7 @@ export default function AvisoAveriaSapScreen() {
             onChangeText={setCausaText}
           />
 
-          <Text style={[styles.label, { marginTop: 10 }]}>
-            Código de causa (Catálogo = T) – máx 2
-          </Text>
+          <Text style={[styles.label, { marginTop: 10 }]}>Código de causa (Catálogo = T) – máx 2</Text>
 
           <View style={styles.chipsWrap}>
             {catT.map((c) => {
@@ -425,6 +491,11 @@ export default function AvisoAveriaSapScreen() {
                 style={{ width: "100%", height: 200, borderRadius: 12, marginTop: 6 }}
                 resizeMode="cover"
               />
+              <Text style={[styles.label, { marginTop: 8 }]}>
+                {evidenceMeta?.sizeBytes != null
+                  ? `Tamaño: ${Math.round(evidenceMeta.sizeBytes / 1024)} KB`
+                  : ""}
+              </Text>
             </View>
           ) : (
             <Text style={[styles.label, { marginTop: 8 }]}>Aún no se ha tomado ninguna foto.</Text>
@@ -445,9 +516,7 @@ export default function AvisoAveriaSapScreen() {
 
 const styles = StyleSheet.create({
   center: { flex: 1, justifyContent: "center", alignItems: "center" },
-
   section: { marginTop: 18, fontSize: 18, fontWeight: "800", color: FIORI.text },
-
   card: {
     backgroundColor: FIORI.card,
     borderRadius: 14,
@@ -456,10 +525,8 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: FIORI.border,
   },
-
   label: { fontSize: 12, color: FIORI.textMuted, marginTop: 6 },
   value: { fontSize: 15, color: FIORI.text, fontWeight: "600" },
-
   input: {
     borderWidth: 1,
     borderColor: FIORI.border,
@@ -471,9 +538,7 @@ const styles = StyleSheet.create({
     backgroundColor: "#FFFFFF",
     marginTop: 4,
   },
-
   chipsWrap: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 8 },
-
   chip: {
     borderWidth: 1,
     borderColor: FIORI.border,
@@ -485,7 +550,6 @@ const styles = StyleSheet.create({
   chipOn: { backgroundColor: FIORI.primary, borderColor: FIORI.primary },
   chipText: { fontSize: 11, color: FIORI.text, fontWeight: "700" },
   chipTextOn: { color: "#FFFFFF" },
-
   btnPrimary: {
     marginTop: 20,
     backgroundColor: FIORI.danger,
@@ -495,7 +559,6 @@ const styles = StyleSheet.create({
   },
   btnPrimaryDisabled: { opacity: 0.7 },
   btnPrimaryText: { color: "#FFFFFF", fontWeight: "900", fontSize: 16 },
-
   btnSecondary: {
     backgroundColor: "#111827",
     paddingVertical: 10,

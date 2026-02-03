@@ -29,17 +29,40 @@ api.interceptors.request.use(
   (error) => Promise.reject(error)
 );
 
-// ✅ Response error log
+// ✅ Response error log + manejo 401 (mínimo y seguro)
 api.interceptors.response.use(
   (res) => res,
-  (err) => {
+  async (err) => {
+    const status = err?.response?.status;
+    const original = err?.config;
+
     console.log("[API ERROR]", {
       message: err?.message,
       url: err?.config?.url,
       baseURL: err?.config?.baseURL,
-      status: err?.response?.status,
+      status,
       data: err?.response?.data,
     });
+
+    // ✅ Si el token venció: intenta refrescar 1 vez y reintenta la petición
+    if (status === 401 && original && !original._retry) {
+      original._retry = true;
+
+      try {
+        const auth = globalThis.__AUTH__;
+        const ok = await auth?.ensureValidToken?.();
+
+        if (ok) {
+          const newToken = await AsyncStorage.getItem("token");
+          if (newToken) original.headers.Authorization = `Bearer ${newToken}`;
+          return api(original);
+        }
+
+        // si no se pudo refrescar, cerramos sesión de forma limpia
+        await auth?.logout?.();
+      } catch {}
+    }
+
     return Promise.reject(err);
   }
 );
