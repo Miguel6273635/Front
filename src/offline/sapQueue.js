@@ -3,7 +3,8 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import NetInfo from "@react-native-community/netinfo";
 import api from "../services/api";
 
-const QUEUE_KEY = "sapQueue:v1";
+const QUEUE_KEY = "sapQueue:v2";
+const MAX_TRIES = 8; // evita loops eternos
 
 function nowMs() {
   return Date.now();
@@ -12,20 +13,6 @@ function nowMs() {
 function uid() {
   return `${Date.now()}_${Math.random().toString(16).slice(2)}`;
 }
-
-/**
- * Item schema:
- * {
- *   id, type: "STATUS" | "PDF" | "EVIDENCE",
- *   orderId,
- *   endpoint,
- *   payload,
- *   createdAt,
- *   updatedAt,
- *   tries,
- *   lastError
- * }
- */
 
 async function loadQueue() {
   try {
@@ -43,32 +30,107 @@ async function saveQueue(items) {
 }
 
 /**
- * ✅ Encola, pero:
- * - Si ya existe un item del MISMO (type + orderId), lo reemplaza (se queda el "último JSON")
+ * Item schema:
+ * {
+ *   id,
+ *   key?: string, // opcional (dedupe)
+ *   type: "STATUS" | "CONFIRMATIONS" | "SIGNATURE" | "PDF" | "GENERIC",
+ *   orderId,
+ *   endpoint,
+ *   method: "POST" | "PATCH" | "PUT",
+ *   payload,
+ *   createdAt,
+ *   updatedAt,
+ *   tries,
+ *   lastError
+ * }
  */
-export async function upsertSapQueueItem({ type, orderId, endpoint, payload }) {
-  const q = await loadQueue();
-  const idx = q.findIndex(
-    (x) => x?.type === type && String(x?.orderId) === String(orderId)
-  );
 
+function normalizeMethod(method) {
+  const m = String(method || "POST").toUpperCase();
+  return ["POST", "PATCH", "PUT"].includes(m) ? m : "POST";
+}
+
+function normalizeEndpoint(endpoint) {
+  if (!endpoint) return "";
+  // soporta absoluto o relativo
+  return String(endpoint).trim();
+}
+
+function normalizeType(type) {
+  const t = String(type || "GENERIC").toUpperCase();
+  const allowed = ["STATUS", "CONFIRMATIONS", "SIGNATURE", "PDF", "GENERIC"];
+  return allowed.includes(t) ? t : "GENERIC";
+}
+
+/**
+ * Inserta o actualiza un item.
+ * - Si pasas key, intenta "dedupe": reemplaza el existente con misma key+orderId+type+endpoint+method.
+ * - Si NO pasas key, simplemente encola (push).
+ */
+export async function upsertSapQueueItem({
+  type,
+  orderId,
+  endpoint,
+  method = "POST",
+  payload,
+  key, // opcional
+}) {
   const item = {
-    id: idx >= 0 ? q[idx].id : uid(),
-    type,
-    orderId: String(orderId),
-    endpoint,
+    id: uid(),
+    key: key ? String(key) : undefined,
+    type: normalizeType(type),
+    orderId: String(orderId || "").trim(),
+    endpoint: normalizeEndpoint(endpoint),
+    method: normalizeMethod(method),
     payload,
-    createdAt: idx >= 0 ? q[idx].createdAt : nowMs(),
+    createdAt: nowMs(),
     updatedAt: nowMs(),
-    tries: idx >= 0 ? q[idx].tries || 0 : 0,
+    tries: 0,
     lastError: null,
   };
 
-  if (idx >= 0) q[idx] = item;
-  else q.push(item);
+  const q = await loadQueue();
 
+  if (item.key) {
+    const idx = q.findIndex(
+      (x) =>
+        x &&
+        x.key === item.key &&
+        String(x.orderId || "").trim() === item.orderId &&
+        String(x.type || "").toUpperCase() === item.type &&
+        String(x.endpoint || "").trim() === item.endpoint &&
+        normalizeMethod(x.method) === item.method
+    );
+
+    if (idx >= 0) {
+      // reemplaza manteniendo tries/createdAt
+      const prev = q[idx];
+      q[idx] = {
+        ...prev,
+        ...item,
+        id: prev.id || item.id,
+        createdAt: prev.createdAt || item.createdAt,
+        tries: prev.tries || 0,
+        lastError: prev.lastError || null,
+        updatedAt: nowMs(),
+      };
+      await saveQueue(q);
+      return q[idx];
+    }
+  }
+
+  q.push(item);
   await saveQueue(q);
   return item;
+}
+
+/**
+ * ✅ Tu función original: enqueueSapItem
+ * La dejamos por compatibilidad (por si la usas en otros lados).
+ */
+export async function enqueueSapItem({ type, orderId, endpoint, method = "POST", payload, key }) {
+  return upsertSapQueueItem({ type, orderId, endpoint, method, payload, key });
 }
 
 export async function getSapQueue() {
@@ -79,102 +141,63 @@ export async function clearSapQueue() {
   await saveQueue([]);
 }
 
-async function isOnlineNow() {
-  const net = await NetInfo.fetch();
-  return !!(net?.isConnected && net?.isInternetReachable !== false);
-}
-
 /**
- * ✅ Procesa cola en orden:
- * 1) EVIDENCE
- * 2) PDF
- * 3) STATUS
- *
- * - Si algo falla, se detiene para no romper orden de envíos.
- * - Reintenta después.
- *
- * Opcional:
- * - ensureValidToken(): function que renueva token si hace falta, debe regresar true/false
- * - apiInstance: axios instance (si no pasas, usa api importado)
+ * Procesa cola (solo si hay internet).
+ * Pasa token para Authorization header.
  */
-export async function processSapQueue({ ensureValidToken, apiInstance } = {}) {
-  const online = await isOnlineNow();
-  const currentQueue = await loadQueue();
+export async function processSapQueue(token) {
+  const net = await NetInfo.fetch();
+  const isOnline = !!(net?.isConnected && net?.isInternetReachable !== false);
+  if (!isOnline) return { ok: false, reason: "offline" };
 
-  if (!online)
-    return {
-      ok: false,
-      reason: "offline",
-      processed: 0,
-      remaining: currentQueue.length,
-    };
-
-  let q = currentQueue;
+  let q = await loadQueue();
   if (!q.length) return { ok: true, processed: 0, remaining: 0 };
 
-  // ✅ prioridad: EVIDENCE primero, luego PDF, luego STATUS
-  q = q.sort((a, b) => {
-    const prio = (t) => {
-      if (t === "EVIDENCE") return 0;
-      if (t === "PDF") return 1;
-      return 2; // STATUS
-    };
-    const pa = prio(a?.type);
-    const pb = prio(b?.type);
-    if (pa !== pb) return pa - pb;
-    return (a?.createdAt || 0) - (b?.createdAt || 0);
-  });
+  const headers = token ? { Authorization: `Bearer ${token}` } : undefined;
 
+  const keep = [];
   let processed = 0;
-  const newQueue = [];
-
-  const axiosClient = apiInstance || api;
+  let dropped = 0;
 
   for (const item of q) {
+    // si ya falló mucho, lo descartamos para no ciclar infinito
+    const tries = Number(item?.tries || 0);
+    if (tries >= MAX_TRIES) {
+      dropped += 1;
+      continue;
+    }
+
     try {
-      if (ensureValidToken) {
-        const ok = await ensureValidToken();
-        if (!ok) {
-          newQueue.push(item);
-          break;
-        }
+      const method = normalizeMethod(item.method).toLowerCase();
+      const endpoint = normalizeEndpoint(item.endpoint);
+
+      if (!endpoint) throw new Error("Queue item sin endpoint");
+
+      if (method === "post") {
+        await api.post(endpoint, item.payload, { headers });
+      } else if (method === "patch") {
+        await api.patch(endpoint, item.payload, { headers });
+      } else if (method === "put") {
+        await api.put(endpoint, item.payload, { headers });
+      } else {
+        throw new Error(`Método no soportado: ${item.method}`);
       }
 
-      await axiosClient.post(item.endpoint, item.payload, {
-        headers: { "Content-Type": "application/json" },
-      });
-
       processed += 1;
-      // ✅ éxito: NO re-agregamos el item
     } catch (e) {
-      const tries = (item?.tries || 0) + 1;
-      const err =
-        e?.response?.data ||
-        e?.response?.status ||
-        e?.message ||
-        String(e);
+      const msg = e?.response?.data
+        ? JSON.stringify(e.response.data)
+        : e?.message || String(e);
 
-      newQueue.push({
+      keep.push({
         ...item,
-        tries,
-        lastError: err,
+        tries: tries + 1,
         updatedAt: nowMs(),
+        lastError: msg,
       });
-
-      // ✅ detenemos para reintentar luego (evita mandar status sin evidencia/pdf)
-      break;
     }
   }
 
-  // ✅ agrega los que no alcanzamos a procesar (sin duplicar)
-  const processedIds = new Set(q.slice(0, processed).map((x) => x.id));
-  for (const item of q) {
-    if (!processedIds.has(item.id) && !newQueue.find((x) => x.id === item.id)) {
-      newQueue.push(item);
-    }
-  }
-
-  await saveQueue(newQueue);
-
-  return { ok: true, processed, remaining: newQueue.length };
+  await saveQueue(keep);
+  return { ok: true, processed, remaining: keep.length, dropped };
 }

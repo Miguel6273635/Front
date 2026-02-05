@@ -33,7 +33,9 @@ import EncabezadoDetalleOrden from "./secciones/EncabezadoDetalleOrden";
 import ModalesDetalleOrden from "./secciones/ModalesDetalleOrden";
 import { ListaOperacionesAgrupadas } from "./secciones/ListaOperacionesDetalle";
 import PieDetalleOrden from "./secciones/PieDetalleOrden";
-import { processSapQueue } from "../../../../src/offline/sapQueue";
+
+// ✅ Cola offline SAP
+import { processSapQueue, upsertSapQueueItem } from "../../../../src/offline/sapQueue";
 
 /* ====================== Paleta SAP Fiori (Horizon) ====================== */
 const FIORI = {
@@ -54,10 +56,16 @@ const FIORI = {
 
 /* ====================== Orden iniciada (contador) ====================== */
 const ORDER_START_KEY = (orderId) => `orderStart:${orderId}`;
-
 /* ✅ FIN local (para mostrar hora fin cuando ya finaliza) */
 const ORDER_FINISH_KEY = (orderId) => `orderFinish:${orderId}`;
 
+/* ====================== ✅ Pendiente de firma (persistir checks) ====================== */
+const PENDING_SIGN_KEY = (orderId) => `pendingSign:${orderId}`;
+
+/* ===== Estado local de operaciones (SIN BD) ===== */
+const OPSTATE_KEY = (orderId) => `opState:${orderId}`;
+
+/* ====================== Utils tiempo ====================== */
 function msToHMS(ms) {
   const total = Math.max(0, Math.floor(ms / 1000));
   const h = Math.floor(total / 3600);
@@ -111,9 +119,6 @@ async function clearOrderFinish(orderId) {
   } catch {}
 }
 
-/* ====================== ✅ Pendiente de firma (persistir checks) ====================== */
-const PENDING_SIGN_KEY = (orderId) => `pendingSign:${orderId}`;
-
 async function loadPendingSign(orderId) {
   try {
     const raw = await AsyncStorage.getItem(PENDING_SIGN_KEY(orderId));
@@ -132,6 +137,21 @@ async function savePendingSign(orderId, payload) {
 async function clearPendingSign(orderId) {
   try {
     await AsyncStorage.removeItem(PENDING_SIGN_KEY(orderId));
+  } catch {}
+}
+
+async function loadOpState(orderId) {
+  try {
+    const raw = await AsyncStorage.getItem(OPSTATE_KEY(orderId));
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+async function saveOpState(orderId, state) {
+  try {
+    await AsyncStorage.setItem(OPSTATE_KEY(orderId), JSON.stringify(state || {}));
   } catch {}
 }
 
@@ -159,11 +179,10 @@ const opKey = (orderId, op) =>
     op.subactivity || op.SubActivity ? `-${op.subactivity || op.SubActivity}` : ""
   }`;
 
-// ====== SAP helpers para fechas/horas y prorrateo (FINAL 0300 + CONFIRMATIONS) ======
-
+/* ====== SAP helpers para fechas/horas y prorrateo (FINAL 0300 + CONFIRMATIONS) ====== */
 function msToMinutesRounded(ms) {
   const min = Math.round(ms / 60000);
-  return Math.max(1, min); // mínimo 1 minuto
+  return Math.max(1, min);
 }
 
 function sapDateFromMs(ms) {
@@ -235,17 +254,6 @@ function pickSecondAddress(results = []) {
   return results.length >= 2 ? results[1] : results[0];
 }
 
-/* ===== Estado local de operaciones (SIN BD) ===== */
-const OPSTATE_KEY = (orderId) => `opState:${orderId}`;
-async function loadOpState(orderId) {
-  try {
-    const raw = await AsyncStorage.getItem(OPSTATE_KEY(orderId));
-    return raw ? JSON.parse(raw) : {};
-  } catch {
-    return {};
-  }
-}
-
 function mergeOpsWithLocalState(orderId, ops, state) {
   return (ops || []).map((o) => {
     const id = o.id || opKey(orderId, o);
@@ -254,9 +262,7 @@ function mergeOpsWithLocalState(orderId, ops, state) {
     const sapEstatus = (o.estatus || "pendiente").toLowerCase();
 
     const estatusFinal =
-      sapEstatus === "finalizada"
-        ? "finalizada"
-        : st.estatus || sapEstatus || "pendiente";
+      sapEstatus === "finalizada" ? "finalizada" : st.estatus || sapEstatus || "pendiente";
 
     return {
       ...o,
@@ -366,14 +372,13 @@ export default function DetalleOrden() {
 
   // ✅ modo finalizar (checkboxes en operaciones)
   const [finalizeMode, setFinalizeMode] = useState(false);
-
   // ✅ checks seleccionados (vive en el padre)
   const [checkedMap, setCheckedMap] = useState({});
 
   // ===== iniciar orden + contador (SOLO LOCAL) =====
   const [startingOrder, setStartingOrder] = useState(false);
   const [orderStartedAtMs, setOrderStartedAtMs] = useState(null);
-  const [orderFinishedAtMs, setOrderFinishedAtMs] = useState(null); // ✅ NUEVO
+  const [orderFinishedAtMs, setOrderFinishedAtMs] = useState(null);
   const [nowTick, setNowTick] = useState(Date.now());
 
   useEffect(() => {
@@ -481,13 +486,93 @@ export default function DetalleOrden() {
   // ✅ Operaciones bloqueadas si:
   // - no mantenimiento, sin empezar, 0100, finalizada real, o sin checkin
   const isOpsLocked =
-    isNoMant ||
-    isOrderSinEmpezar ||
-    isOrderPendiente0100 ||
-    isOrderFinishedReal ||
-    !checkinDone;
+    isNoMant || isOrderSinEmpezar || isOrderPendiente0100 || isOrderFinishedReal || !checkinDone;
 
   const canStartTimer = isOrderEnProceso && !isNoMant && !isOrderFinishedReal && !!checkinDone;
+
+  /* ====================== Helpers Offline (UI + cache + opstate + queue) ====================== */
+  const updateLocalOpsAsFinalizadas = async (orderId, selectedOpIds) => {
+    // 1) OPSTATE (para que pinte FIN / color aunque no venga de SAP)
+    const current = await loadOpState(orderId);
+    const next = { ...(current || {}) };
+
+    for (const opId of selectedOpIds) {
+      next[opId] = {
+        ...(next[opId] || {}),
+        estatus: "finalizada",
+        finished_at: next[opId]?.finished_at ?? Date.now(),
+      };
+    }
+
+    await saveOpState(orderId, next);
+
+    // 2) UI en memoria
+    setOrden((prev) => {
+      const ops = Array.isArray(prev?.operaciones) ? prev.operaciones : [];
+      const ops2 = ops.map((o) => {
+        const oid = String(o?.id ?? "");
+        if (selectedOpIds.includes(oid)) return { ...o, estatus: "finalizada" };
+        return o;
+      });
+      return { ...(prev || {}), operaciones: ops2 };
+    });
+
+    // 3) Cache de detalle (para que al abrir offline se vea igual)
+    try {
+      const cached = await loadOrdenTecnicoDetail(orderId);
+      const base = cached?.data || orden || {};
+      const ops = Array.isArray(base?.operaciones) ? base.operaciones : [];
+      const ops2 = ops.map((o) => {
+        const oid = String(o?.id ?? "");
+        if (selectedOpIds.includes(oid)) return { ...o, estatus: "finalizada" };
+        return o;
+      });
+      await saveOrdenTecnicoDetail(orderId, { ...(base || {}), operaciones: ops2 });
+    } catch {}
+  };
+
+  const updateLocalOrderAsFinalizada0300 = async (orderId, finishMs) => {
+    // 1) FIN local para UI
+    await saveOrderFinish(orderId, finishMs);
+    setOrderFinishedAtMs(finishMs);
+
+    // 2) Para que NO se pueda modificar más en esta pantalla
+    setOrden((prev) => ({
+      ...(prev || {}),
+      estatus_code: "0300",
+      userstatus: "0300",
+      estatus_label: "FINALIZADA",
+      isFinal: true,
+    }));
+
+    // 3) Cache del detalle
+    try {
+      const cached = await loadOrdenTecnicoDetail(orderId);
+      const base = cached?.data || orden || {};
+      await saveOrdenTecnicoDetail(orderId, {
+        ...(base || {}),
+        estatus_code: "0300",
+        userstatus: "0300",
+        estatus_label: "FINALIZADA",
+        isFinal: true,
+      });
+    } catch {}
+  };
+
+  const enqueueSap = async ({ type, orderId, endpoint, payload }) => {
+    // ✅ Evita tu error: si el export no existe, falla con mensaje claro
+    if (typeof upsertSapQueueItem !== "function") {
+      throw new Error(
+        "upsertSapQueueItem no existe en src/offline/sapQueue.js. Asegúrate de exportarla."
+      );
+    }
+    await upsertSapQueueItem({
+      type,
+      orderId,
+      endpoint,
+      payload,
+    });
+  };
 
   const obtenerOrden = async () => {
     const orderIdParam = String(id || "").trim();
@@ -519,10 +604,7 @@ export default function DetalleOrden() {
 
       if (!isOnline) {
         if (!cached?.data) {
-          Alert.alert(
-            "Sin conexión",
-            "No hay internet y no hay detalle guardado aún para esta orden."
-          );
+          Alert.alert("Sin conexión", "No hay internet y no hay detalle guardado aún para esta orden.");
         }
         return;
       }
@@ -635,9 +717,7 @@ export default function DetalleOrden() {
       const statusCodeLocal = String(data?.estatus_code || data?.userstatus || "").trim();
 
       const isEnProcesoLocal =
-        estatusTxtLocal === "EN_PROCESO" ||
-        estatusTxtLocal === "EN PROCESO" ||
-        statusCodeLocal === "0200";
+        estatusTxtLocal === "EN_PROCESO" || estatusTxtLocal === "EN PROCESO" || statusCodeLocal === "0200";
 
       const isFinalLocal = ["0300", "0500"].includes(statusCodeLocal) || !!data?.isFinal;
 
@@ -720,9 +800,7 @@ export default function DetalleOrden() {
 
     (async () => {
       try {
-        const { sound } = await Audio.Sound.createAsync(
-          require("../../../../assets/alert.mp3")
-        );
+        const { sound } = await Audio.Sound.createAsync(require("../../../../assets/alert.mp3"));
         localSound = sound;
         if (mounted) setSoundObj(sound);
       } catch (e) {
@@ -862,8 +940,7 @@ export default function DetalleOrden() {
     try {
       setDownloadingNoMantPdf(true);
 
-      const filename =
-        noMantPdfRawUrl.split("/").pop() || `carta-no-mantto_${orden?.Orderid || ""}.pdf`;
+      const filename = noMantPdfRawUrl.split("/").pop() || `carta-no-mantto_${orden?.Orderid || ""}.pdf`;
       const localUri = FileSystem.documentDirectory + filename;
 
       const { uri } = await FileSystem.downloadAsync(noMantPdfRawUrl, localUri);
@@ -911,13 +988,13 @@ export default function DetalleOrden() {
     }
 
     try {
-      setSavingPending0400(true); // ✅ BLOQUEO ON
+      setSavingPending0400(true);
 
       // 1) Guardar checks local
       await savePendingSign(orderId, { checkedMap, savedAt: Date.now() });
 
-      // 2) Cambiar estatus SAP a 0400 (pendiente de firma) quitando 0200
-      const payload = {
+      // 2) Payload SAP 0400 (quita 0200)
+      const payload0400 = {
         OrderId: orderId,
         WorkOrderHeader: { Orderid: orderId },
         WorkOrderUserStatusSet: [
@@ -931,13 +1008,38 @@ export default function DetalleOrden() {
       const isOnline = !!(net?.isConnected && net?.isInternetReachable !== false);
 
       if (!isOnline) {
+        // ✅ Encolar para cuando haya red
+        await enqueueSap({
+          type: "STATUS",
+          orderId,
+          endpoint: "/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet",
+          payload: payload0400,
+        });
+
+        // ✅ UI local (para que se vea 0400 aunque no haya red)
+        setOrden((prev) => ({
+          ...(prev || {}),
+          estatus_code: "0400",
+          userstatus: "0400",
+          estatus_label: prev?.estatus_label || "PENDIENTE DE FIRMA",
+        }));
+        try {
+          const cached = await loadOrdenTecnicoDetail(orderId);
+          const base = cached?.data || orden || {};
+          await saveOrdenTecnicoDetail(orderId, {
+            ...(base || {}),
+            estatus_code: "0400",
+            userstatus: "0400",
+            estatus_label: base?.estatus_label || "PENDIENTE DE FIRMA",
+          });
+        } catch {}
+
         Alert.alert(
           "Guardado (sin internet)",
           "Se guardaron los checks como pendiente de firma. Cuando vuelva el internet se enviará el estatus 0400."
         );
-        // Si tienes outbox/queue, aquí sería el lugar de encolar payload.
       } else {
-        await api.post(`/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet`, payload, {
+        await api.post(`/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet`, payload0400, {
           headers: { Authorization: `Bearer ${token}` },
         });
 
@@ -951,13 +1053,12 @@ export default function DetalleOrden() {
         Alert.alert("Listo", "Se guardó como pendiente de firma (0400).");
       }
 
-      // ✅ si ya está en 0400, dejamos finalizeMode ON para continuar después
       setFinalizeMode(false);
     } catch (e) {
       console.error("Error guardando pendiente de firma:", e?.response?.data || e);
       Alert.alert("Error", "No se pudo guardar como pendiente de firma.");
     } finally {
-      setSavingPending0400(false); // ✅ BLOQUEO OFF
+      setSavingPending0400(false);
     }
   };
 
@@ -976,13 +1077,12 @@ export default function DetalleOrden() {
     setShowSignModal(true);
   };
 
-  // ✅ Finalizar con firma (después limpia pending + checks)
+  // ✅ Finalizar con firma (0300 + confirmations)
   const confirmarFinalizarConFirma = async () => {
     if (!orden?.Orderid) return;
 
     const orderId = String(orden.Orderid).trim();
 
-    // 1) Validaciones
     if (!signatureData) {
       Alert.alert("Falta firma", 'Pida al cliente que firme y toque "Listo" dentro del recuadro.');
       return;
@@ -1036,24 +1136,13 @@ export default function DetalleOrden() {
       setSavingSignature(true);
       setFinishingOrder(true);
 
-      // 3) Guardar firma (si falla, seguimos)
-      try {
-        await api.post(
-          `/evidencias/orden/${orderId}/firma-final`,
-          { imagen_base64: signatureData },
-          { headers: { Authorization: `Bearer ${token}` } }
-        );
-      } catch (e) {
-        console.warn("No se pudo guardar la firma (continuo):", e?.response?.data || e);
-      }
-
-      // 4) Prorrateo (minutos por operación) y ventanas consecutivas
+      // 3) Prorrateo (minutos por operación) y ventanas consecutivas
       const n = selectedOps.length;
       const minsArr = prorateMinutes(totalMin, n);
       const windows = buildSequentialWindows(orderStartedAtMs, minsArr);
 
-      // 5) Payload estatus 0300 (quita 0200 y 0400)
-      const statusPayload = {
+      // 4) Payload estatus 0300 (quita 0200 y 0400)
+      const statusPayload0300 = {
         OrderId: orderId,
         WorkOrderHeader: { Orderid: orderId },
         WorkOrderUserStatusSet: [
@@ -1064,11 +1153,7 @@ export default function DetalleOrden() {
         Return: [],
       };
 
-      // ✅ LOG STATUS 0300
-      console.log("🟡 JSON STATUS 0300 >>>");
-      console.log(JSON.stringify(statusPayload, null, 2));
-
-      // 6) Payload confirmations (incluye SubActivity si existe)
+      // 5) Payload confirmations
       const confirmationPayload = {
         Order: "S1",
         ConfirmationOrderSet: selectedOps.map((op, idx) => {
@@ -1098,32 +1183,46 @@ export default function DetalleOrden() {
             FinConf: "X",
           };
 
-          // ✅ CLAVE: manda suboperación cuando aplica
           if (SubActivity) row.SubActivity = SubActivity;
-
           return row;
         }),
         Return: [],
       };
 
-      // ✅ LOG CONFIRMATIONS
-      console.log("🔵 JSON CONFIRMATIONS >>>");
-      console.log(JSON.stringify(confirmationPayload, null, 2));
-
-      // 7) Online/Offline
       const net = await NetInfo.fetch();
       const isOnline = !!(net?.isConnected && net?.isInternetReachable !== false);
 
       if (!isOnline) {
-        Alert.alert(
-          "Sin internet",
-          "Se guardó la firma, pero para finalizar (0300) y mandar confirmaciones se requiere internet. Se enviará cuando regrese la conexión."
-        );
+        // ✅ 1) UI inmediata: cambiar orden a 0300 y pintar operaciones finalizadas
+        await updateLocalOpsAsFinalizadas(orderId, selectedIds);
+        await updateLocalOrderAsFinalizada0300(orderId, finishMs);
 
-        // ✅ Guardar FIN local (para mostrar) y limpiar inicio
-        await saveOrderFinish(orderId, finishMs);
-        setOrderFinishedAtMs(finishMs);
+        // ✅ 2) Encolar TODO para cuando vuelva red:
+        // 2.1) Firma (backend propio)
+        await enqueueSap({
+          type: "SIGNATURE",
+          orderId,
+          endpoint: `/evidencias/orden/${orderId}/firma-final`,
+          payload: { imagen_base64: signatureData },
+        });
 
+        // 2.2) Status 0300 (SAP OData)
+        await enqueueSap({
+          type: "STATUS",
+          orderId,
+          endpoint: "/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet",
+          payload: statusPayload0300,
+        });
+
+        // 2.3) Confirmations (SAP OData)
+        await enqueueSap({
+          type: "CONFIRMATIONS",
+          orderId,
+          endpoint: "/api/odata/ZCS_CREATE_CONFIRMATION_SRV/ConfirmationHeaderSet",
+          payload: confirmationPayload,
+        });
+
+        // ✅ 3) Limpieza local (cronómetro / pending / UI)
         await clearOrderStart(orderId);
         setOrderStartedAtMs(null);
 
@@ -1132,53 +1231,48 @@ export default function DetalleOrden() {
         setFinalizeMode(false);
         setShowSignModal(false);
 
+        Alert.alert(
+          "Finalizado (offline)",
+          "Se marcó la orden como 0300 localmente y se pintaron las operaciones. Cuando vuelva internet se enviará firma + estatus 0300 + confirmaciones."
+        );
+
         router.replace("/tecnico/ordenes");
         return;
       }
 
-      // 8) 1) Cambiar estatus 0300
-      const resStatus = await api.post(
-        `/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet`,
-        statusPayload,
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
+      // ===== ONLINE =====
+      // 1) Firma
+      try {
+        await api.post(
+          `/evidencias/orden/${orderId}/firma-final`,
+          { imagen_base64: signatureData },
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
+      } catch (e) {
+        console.warn("No se pudo guardar la firma (continuo):", e?.response?.data || e);
+      }
 
-      // ✅ LOG RESPUESTA STATUS
-      console.log("🟢 RESPUESTA STATUS 0300 <<<", resStatus?.data);
+      // 2) Status 0300
+      await api.post(`/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet`, statusPayload0300, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
 
-      // 9) 2) Mandar confirmations
-      const resConf = await api.post(
-        `/api/odata/ZCS_CREATE_CONFIRMATION_SRV/ConfirmationHeaderSet`,
-        confirmationPayload,
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
+      // 3) Confirmations
+      await api.post(`/api/odata/ZCS_CREATE_CONFIRMATION_SRV/ConfirmationHeaderSet`, confirmationPayload, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
 
-      // ✅ LOG RESPUESTA CONFIRMATIONS + RETURN (si SAP manda warnings/errores por línea)
-      console.log("🟢 RESPUESTA CONFIRMATIONS <<<", resConf?.data);
-      console.log("🧾 RETURN CONF:", JSON.stringify(resConf?.data?.Return, null, 2));
-
-      // 10) Guardar FIN local y limpiar inicio
-      await saveOrderFinish(orderId, finishMs);
-      setOrderFinishedAtMs(finishMs);
+      // ✅ UI/cache local (igual que offline, pero ya “real”)
+      await updateLocalOpsAsFinalizadas(orderId, selectedIds);
+      await updateLocalOrderAsFinalizada0300(orderId, finishMs);
 
       await clearOrderStart(orderId);
       setOrderStartedAtMs(null);
 
-      // 11) Limpiar pendiente local (checks)
       await clearPendingSign(orderId);
       setCheckedMap({});
       setFinalizeMode(false);
-
       setShowSignModal(false);
-
-      // opcional: reflejar en UI
-      setOrden((prev) => ({
-        ...(prev || {}),
-        estatus_code: "0300",
-        userstatus: "0300",
-        estatus_label: "FINALIZADA",
-        isFinal: true,
-      }));
 
       Alert.alert("Orden finalizada", "Se cambió el estatus a 0300 y se enviaron confirmaciones.");
       router.replace("/tecnico/ordenes");
@@ -1211,9 +1305,7 @@ export default function DetalleOrden() {
               disabled={startingOrder}
             >
               <Ionicons name="play-circle-outline" size={18} color="#fff" />
-              <Text style={styles.startOrderBtnText}>
-                {startingOrder ? "Iniciando..." : "Iniciar orden"}
-              </Text>
+              <Text style={styles.startOrderBtnText}>{startingOrder ? "Iniciando..." : "Iniciar orden"}</Text>
             </TouchableOpacity>
           </View>
         ) : isOrderEnProceso && orderStartedAtMs ? (
@@ -1227,9 +1319,7 @@ export default function DetalleOrden() {
 
         <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
           <ActivityIndicator size="large" color={FIORI.brand} />
-          <Text style={{ marginTop: 10, color: FIORI.textMuted, fontWeight: "700" }}>
-            Cargando orden…
-          </Text>
+          <Text style={{ marginTop: 10, color: FIORI.textMuted, fontWeight: "700" }}>Cargando orden…</Text>
         </View>
       </View>
     );
@@ -1260,7 +1350,6 @@ export default function DetalleOrden() {
 
   const direccionValor = orden.direccion || orden.address || orden.partner_address || null;
   const allMaterials = Array.isArray(orden.componentes) ? orden.componentes : [];
-
   const hasSelectedOps = Object.keys(checkedMap || {}).length > 0;
 
   return (
@@ -1276,9 +1365,7 @@ export default function DetalleOrden() {
             disabled={startingOrder}
           >
             <Ionicons name="play-circle-outline" size={18} color="#fff" />
-            <Text style={styles.startOrderBtnText}>
-              {startingOrder ? "Iniciando..." : "Iniciar orden"}
-            </Text>
+            <Text style={styles.startOrderBtnText}>{startingOrder ? "Iniciando..." : "Iniciar orden"}</Text>
           </TouchableOpacity>
         </View>
       ) : isOrderEnProceso && orderStartedAtMs ? (
@@ -1311,7 +1398,6 @@ export default function DetalleOrden() {
             formatValueForRow={formatValueForRow}
             onAbrirPdfNoMant={abrirModalNoMantPdf}
             onVerMaterialesOrden={() => setShowAllMaterialsModal(true)}
-            // ✅ NUEVO: para mostrar inicio/fin cuando ya finalizó
             orderStartedAtMs={orderStartedAtMs}
             orderFinishedAtMs={orderFinishedAtMs}
           />
@@ -1326,9 +1412,9 @@ export default function DetalleOrden() {
               onOpenComponentsView={openComponentsModal}
               finalizeMode={finalizeMode}
               onRequestCancelFinalize={() => setFinalizeMode(false)}
-              // ✅ NUEVO (los checks ya no viven dentro del componente)
               checkedMap={checkedMap}
               setCheckedMap={setCheckedMap}
+              orderId={String(orden?.Orderid || id || "").trim()}   // ✅ NUEVO
             />
           );
         }}
@@ -1343,7 +1429,6 @@ export default function DetalleOrden() {
             finalizeMode={finalizeMode}
             onCancelarFinalizacion={() => setFinalizeMode(false)}
             onFinalizarOrden={handleFinalizarOrden}
-            // ✅ acciones 0400
             onAgregarFirma={abrirFirmaCliente}
             onGuardarPendiente={guardarPendienteDeFirma}
             hasSelectedOps={hasSelectedOps}
@@ -1440,12 +1525,7 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     ...elev(0.3),
   },
-  noMantTitle: {
-    fontSize: 14,
-    fontWeight: "800",
-    color: FIORI.text,
-    marginBottom: 4,
-  },
+  noMantTitle: { fontSize: 14, fontWeight: "800", color: FIORI.text, marginBottom: 4 },
   noMantText: { fontSize: 12, color: FIORI.textMuted },
   btnNoMantBanner: {
     marginLeft: 10,
@@ -1505,11 +1585,7 @@ const styles = StyleSheet.create({
     padding: 12,
     ...elev(0.4),
   },
-  grupoHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-  },
+  grupoHeader: { flexDirection: "row", alignItems: "center", gap: 8 },
   grupoTitle: { fontSize: 14, fontWeight: "900", color: FIORI.text },
 
   operCardSmall: {
@@ -1519,12 +1595,7 @@ const styles = StyleSheet.create({
     borderColor: FIORI.borderSoft,
     padding: 10,
   },
-  badgeSmall: {
-    borderRadius: 999,
-    borderWidth: 1,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-  },
+  badgeSmall: { borderRadius: 999, borderWidth: 1, paddingHorizontal: 10, paddingVertical: 6 },
   badgeSmallText: { fontSize: 11, fontWeight: "900", color: FIORI.text },
   operTitleSmall: { fontSize: 13, fontWeight: "900", color: FIORI.text },
   operDescSmall: { fontSize: 12, color: FIORI.textMuted, marginTop: 2 },
@@ -1546,11 +1617,7 @@ const styles = StyleSheet.create({
   },
   fabLabel: { color: "#000000ff", fontWeight: "800", fontSize: 13 },
 
-  topActionBar: {
-    paddingHorizontal: 16,
-    paddingTop: 10,
-    paddingBottom: 6,
-  },
+  topActionBar: { paddingHorizontal: 16, paddingTop: 10, paddingBottom: 6 },
   startOrderBtn: {
     alignSelf: "flex-start",
     flexDirection: "row",
@@ -1562,11 +1629,7 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     ...elev(0.6),
   },
-  startOrderBtnText: {
-    color: "#fff",
-    fontWeight: "900",
-    fontSize: 13,
-  },
+  startOrderBtnText: { color: "#fff", fontWeight: "900", fontSize: 13 },
   timerPill: {
     alignSelf: "flex-start",
     flexDirection: "row",
@@ -1580,12 +1643,7 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     ...elev(0.3),
   },
-  timerText: {
-    color: FIORI.text,
-    fontWeight: "900",
-    fontSize: 13,
-    letterSpacing: 0.3,
-  },
+  timerText: { color: FIORI.text, fontWeight: "900", fontSize: 13, letterSpacing: 0.3 },
 
   btnFinishOrder: {
     backgroundColor: "#0B8457",
@@ -1599,6 +1657,72 @@ const styles = StyleSheet.create({
     ...elev(0.7),
   },
   btnFinishOrderText: { color: "#fff", fontWeight: "900", fontSize: 15 },
+
+  /* ====== Modales (los usa ModalesDetalleOrden) ====== */
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.45)",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 18,
+  },
+  modalCard: {
+    width: "100%",
+    maxWidth: 560,
+    backgroundColor: "#fff",
+    borderRadius: 16,
+    overflow: "hidden",
+    ...Platform.select({
+      ios: { shadowColor: "#000", shadowOpacity: 0.12, shadowRadius: 16, shadowOffset: { width: 0, height: 8 } },
+      android: { elevation: 6 },
+      default: {},
+    }),
+  },
+  modalHeader: {
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: "#E8EEF7",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+    backgroundColor: FIORI.brand,
+  },
+  modalTitle: { fontSize: 14, fontWeight: "900", color: "#fff", flex: 1 },
+  modalCloseBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: "rgba(255,255,255,0.25)",
+  },
+  compRow: {
+    borderWidth: 1,
+    borderColor: FIORI.borderSoft,
+    backgroundColor: FIORI.surfaceAlt,
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 10,
+  },
+  compTitle: { fontWeight: "900", color: FIORI.text, marginBottom: 4 },
+  compSub: { color: FIORI.textMuted, fontWeight: "700", marginBottom: 6 },
+  compMeta: { color: FIORI.textMuted, fontSize: 12 },
+  modalFooterRow: {
+    padding: 12,
+    borderTopWidth: 1,
+    borderTopColor: "#E8EEF7",
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    gap: 10,
+  },
+  smallBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: FIORI.borderSoft,
+  },
+  smallBtnText: { fontWeight: "900", color: FIORI.text, fontSize: 13 },
 
   /* ✅ Overlay bloqueante */
   blockBackdrop: {

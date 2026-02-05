@@ -57,26 +57,25 @@ function sortItemKey(a, b) {
 
 /**
  * ✅ ID estable "fallback" si no viene id del backend
- * (pero OJO: si viene op.id real, debemos respetarlo)
+ * - Si viene op.id real, se respeta
+ * - Si NO viene, genera MISMO FORMATO que tu index:
+ *   `${orderId}-${activity}-${subactivity?}`
+ *
+ * Esto evita que en OFFLINE los checks guarden ids que luego NO hacen match
+ * al finalizar (prorrateo).
  */
-function opStableId(cat, itemKey, op, idx) {
+function opStableId(orderId, op, idx) {
   const existing = safeStr(op?.id);
   if (existing) return existing;
 
   const activity = normalizeActivity(op);
   const sub = normalizeSubActivity(op);
-  const base = `${activity}${sub ? `-${sub}` : ""}`.trim();
-  return base || `${cat}__${itemKey}__${idx}`;
-}
 
-/**
- * ✅ SIEMPRE usa el id real si existe; si no, usa fallback estable
- * Esto evita que los checks usen ids inventados que luego no hacen match
- * con orden.operaciones al finalizar (prorrateo).
- */
-function getOpId(op, fallback) {
-  const existing = safeStr(op?.id);
-  return existing || fallback;
+  const oid = safeStr(orderId);
+  const key = `${oid}-${activity}${sub ? `-${sub}` : ""}`.trim();
+
+  // Fallback extremo (si viniera activity vacío)
+  return key && key !== "-" ? key : `fallback__${idx}`;
 }
 
 /** ==========================================================
@@ -133,6 +132,9 @@ export function ListaOperacionesAgrupadas({
   // ✅ vienen del padre
   checkedMap = {},
   setCheckedMap,
+
+  // ✅ NUEVO: para que el fallback id tenga el formato correcto
+  orderId,
 }) {
   const grouped = useMemo(() => agruparPorUsr00YUsr01(operaciones), [operaciones]);
 
@@ -306,11 +308,10 @@ export function ListaOperacionesAgrupadas({
                     const k = `${cat}__${itemKey}`;
                     const isItemOpen = !!itemOpen?.[k];
 
-                    // ✅ IMPORTANTE: ids para "marcar todo" deben coincidir con op.id real si existe
-                    const opIds = opsItem.map((op, idx) => {
-                      const stable = opStableId(cat, itemKey, op, idx);
-                      return getOpId(op, stable);
-                    });
+                    // ✅ IDs SIEMPRE consistentes:
+                    // - si op.id existe => se usa
+                    // - si NO existe => fallback = `${orderId}-${activity}-${sub}`
+                    const opIds = opsItem.map((op, idx) => opStableId(orderId, op, idx));
 
                     const checkedCount = opIds.filter((id) => isOpChecked(id)).length;
                     const allChecked = opIds.length > 0 && checkedCount === opIds.length;
@@ -391,9 +392,7 @@ export function ListaOperacionesAgrupadas({
                         {isItemOpen && (
                           <View style={{ paddingTop: 10, gap: 8 }}>
                             {opsItem.map((op, idx) => {
-                              // ✅ IMPORTANTÍSIMO: NO sobrescribir op.id
-                              const stable = opStableId(cat, itemKey, op, idx);
-                              const realId = getOpId(op, stable);
+                              const realId = opStableId(orderId, op, idx);
                               const checked = isOpChecked(realId);
 
                               return (
@@ -401,7 +400,7 @@ export function ListaOperacionesAgrupadas({
                                   key={realId}
                                   op={{
                                     ...op,
-                                    // ✅ NO ponemos id: realId (para no cambiar el id real del backend)
+                                    // ✅ normalizamos campos para UI, pero NO tocamos op.id
                                     activity: normalizeActivity(op),
                                     subactivity: normalizeSubActivity(op),
                                     description: normalizeDescription(op),
@@ -505,12 +504,7 @@ export function ItemOperacionDetalle({
           </TouchableOpacity>
         ) : null}
 
-        <View
-          style={[
-            styles.badgeSmall,
-            { backgroundColor: badgeBg, borderColor: FIORI.borderSoft },
-          ]}
-        >
+        <View style={[styles.badgeSmall, { backgroundColor: badgeBg, borderColor: FIORI.borderSoft }]}>
           <Text style={styles.badgeSmallText}>{badgeText}</Text>
         </View>
 

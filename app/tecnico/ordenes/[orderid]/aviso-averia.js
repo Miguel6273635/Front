@@ -358,7 +358,7 @@ export default function AvisoAveriaSapScreen() {
   if (loading) {
     return (
       <View style={{ flex: 1, backgroundColor: FIORI.bg }}>
-        <Header title="Aviso de avería (SAP)" />
+        <Header title="Aviso de avería" />
         <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
           <ActivityIndicator size="large" color={FIORI.primary} />
           <Text style={{ marginTop: 10, color: FIORI.textMuted, fontWeight: "700" }}>
@@ -372,7 +372,7 @@ export default function AvisoAveriaSapScreen() {
   if (!meta) {
     return (
       <View style={{ flex: 1, backgroundColor: FIORI.bg }}>
-        <Header title="Aviso de avería (SAP)" />
+        <Header title="Aviso de avería" />
         <View style={styles.center}>
           <Text style={{ color: FIORI.text }}>No se pudo obtener la información de la orden.</Text>
         </View>
@@ -382,7 +382,7 @@ export default function AvisoAveriaSapScreen() {
 
   return (
     <View style={{ flex: 1, backgroundColor: FIORI.bg }}>
-      <Header title="Aviso de avería (SAP)" />
+      <Header title="Aviso de avería" />
 
       <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 140 }}>
         <Text style={styles.section}>Datos base</Text>
