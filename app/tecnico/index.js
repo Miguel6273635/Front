@@ -17,6 +17,7 @@ const TILES = [
   { key: 'ordenes', title: 'Órdenes de servicio', icon: 'document-text-outline', onPress: () => router.push('/tecnico/ordenes') },
   { key: 'averias', title: 'Aviso de avería', icon: 'warning-outline', onPress: () => router.push('/tecnico/averias') },
   { key: 'rutas', title: 'Ruta asignada', icon: 'navigate-outline', onPress: () => router.push('/tecnico/rutas') },
+  { key: 'no_mantenimiento', title: 'No mantenimiento', icon: 'ban-outline', onPress: () => router.push('/tecnico/no_mantenimiento') },
   { key: 'documentos', title: 'Documentos de mantenimiento', icon: 'documents-outline', onPress: () => router.push('/tecnico/documentos') },
 
 ];

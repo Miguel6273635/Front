@@ -10,6 +10,7 @@ import {
   Platform,
   Modal,
   Pressable,
+  TextInput,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import Header from "../../../src/components/Header";
@@ -185,7 +186,6 @@ function mapOrdenSapToUi(o) {
     orderid: String(o?.Orderid ?? ""),
     equipment: String(o?.Equipment ?? ""),
     nombre_orden: String(o?.ShortText ?? ""),
-    // ✅ AQUÍ: parseamos de una vez el SAP raw
     startdate: sapDateToMs(o?.StartDate),
     finishdate: sapDateToMs(o?.FinishDate),
     userstatus: String(o?.Userstatus ?? ""),
@@ -195,7 +195,6 @@ function mapOrdenSapToUi(o) {
 
 /* =========================
    ✅ Normalizar un item "sea como sea"
-   (cubre: SAP raw, cache, y cualquier mezcla)
    ========================= */
 function normalizeOrdenItem(item) {
   if (!item) return null;
@@ -280,6 +279,15 @@ export default function ListaOrdenesSupervisor() {
 
   const [statusCatalog, setStatusCatalog] = useState({});
   const [loadingCatalog, setLoadingCatalog] = useState(false);
+
+  // ✅ Buscador
+  const [query, setQuery] = useState("");
+  const [debouncedQuery, setDebouncedQuery] = useState("");
+
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedQuery(query.trim()), 180);
+    return () => clearTimeout(t);
+  }, [query]);
 
   const { start, end } = useMemo(() => {
     if (dateMode === "day") {
@@ -405,6 +413,30 @@ export default function ListaOrdenesSupervisor() {
 
   const onRefresh = () => cargar();
 
+  // ✅ Lista filtrada por buscador (orderid / equipo / nombre / estatus)
+  const filteredOrdenes = useMemo(() => {
+    const q = debouncedQuery.toLowerCase();
+    if (!q) return ordenes;
+
+    return ordenes.filter((o) => {
+      const orderid = String(o?.orderid ?? "").toLowerCase();
+      const eq = String(o?.equipment ?? "").toLowerCase();
+      const nombre = String(o?.nombre_orden ?? "").toLowerCase();
+
+      const st = resolveUserstatus(o?.userstatus ?? o?.Userstatus, statusCatalog);
+      const stLabel = String(st?.label ?? "").toLowerCase();
+      const stCode = String(st?.code ?? "").toLowerCase();
+
+      return (
+        orderid.includes(q) ||
+        eq.includes(q) ||
+        nombre.includes(q) ||
+        stLabel.includes(q) ||
+        stCode.includes(q)
+      );
+    });
+  }, [ordenes, debouncedQuery, statusCatalog]);
+
   const renderItem = ({ item }) => {
     const st = resolveUserstatus(item?.userstatus ?? item?.Userstatus, statusCatalog);
     const color = st.color;
@@ -418,8 +450,6 @@ export default function ListaOrdenesSupervisor() {
       st.type === "no_mantto" ? "close-circle-outline" :
       "ellipse-outline";
 
-    // ✅ AQUÍ ES DONDE SE ARREGLA LO DE "VACÍO":
-    // usamos el campo normalizado (number) y si no, parseamos el raw.
     const startMs =
       typeof item?.startdate === "number"
         ? item.startdate
@@ -463,7 +493,6 @@ export default function ListaOrdenesSupervisor() {
             </View>
           </View>
 
-          {/* ✅ FECHAS (UTC estable: NO se recorre al día anterior) */}
           <View style={styles.metaRow}>
             <View style={styles.metaItem}>
               <Ionicons name="calendar-outline" size={14} color={COLORS.text} />
@@ -485,6 +514,26 @@ export default function ListaOrdenesSupervisor() {
       <Header title="Órdenes del Supervisor" />
 
       <View style={styles.filtersWrap}>
+        {/* ✅ Buscador */}
+        <View style={styles.searchWrap}>
+          <Ionicons name="search" size={16} color={COLORS.muted} style={{ marginRight: 8 }} />
+          <TextInput
+            value={query}
+            onChangeText={setQuery}
+            placeholder="Buscar por #orden, equipo, nombre o estatus…"
+            placeholderTextColor="#8A97A6"
+            autoCorrect={false}
+            autoCapitalize="none"
+            returnKeyType="search"
+            style={styles.searchInput}
+          />
+          {!!query && (
+            <TouchableOpacity onPress={() => setQuery("")} style={styles.clearBtn} hitSlop={10}>
+              <Ionicons name="close-circle" size={18} color={COLORS.muted} />
+            </TouchableOpacity>
+          )}
+        </View>
+
         <View style={styles.chipsRow}>
           <TouchableOpacity
             style={[styles.chip, dateMode === "all" && styles.chipActive]}
@@ -538,6 +587,7 @@ export default function ListaOrdenesSupervisor() {
         <Text style={styles.activeRangeText}>
           {activeRangeText}
           {loadingCatalog ? " · cargando catálogo…" : ""}
+          {debouncedQuery ? ` · búsqueda: "${debouncedQuery}"` : ""}
         </Text>
 
         {showDayPicker && (
@@ -670,17 +720,25 @@ export default function ListaOrdenesSupervisor() {
         </Pressable>
       </Modal>
 
-      <Text style={styles.pageSubtitle}>{loading ? "Cargando..." : `${ordenes.length} órdenes`}</Text>
+      <Text style={styles.pageSubtitle}>
+        {loading
+          ? "Cargando..."
+          : `${filteredOrdenes.length} órdenes${debouncedQuery ? " (filtradas)" : ""}`}
+      </Text>
 
       {loading ? (
         <ActivityIndicator size="large" color={COLORS.accent} style={{ marginTop: 40 }} />
       ) : (
         <FlatList
-          data={ordenes}
+          data={filteredOrdenes}
           keyExtractor={(it) => String(it.orderid)}
           renderItem={renderItem}
           contentContainerStyle={styles.listContent}
-          ListEmptyComponent={<Text style={styles.emptyText}>No hay órdenes en este rango.</Text>}
+          ListEmptyComponent={
+            <Text style={styles.emptyText}>
+              {debouncedQuery ? "No se encontraron órdenes con ese criterio." : "No hay órdenes en este rango."}
+            </Text>
+          }
         />
       )}
     </View>
@@ -702,6 +760,26 @@ const styles = StyleSheet.create({
       android: { elevation: 1 },
     }),
   },
+
+  // ✅ Buscador
+  searchWrap: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#F5F7FA",
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: Platform.OS === "ios" ? 10 : 8,
+    marginBottom: 10,
+  },
+  searchInput: {
+    flex: 1,
+    color: COLORS.title,
+    fontWeight: "600",
+    paddingVertical: 0,
+  },
+  clearBtn: { marginLeft: 8 },
 
   chipsRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, alignItems: "center" },
   chip: { borderWidth: 1, borderColor: COLORS.border, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 6, backgroundColor: COLORS.cardBg },

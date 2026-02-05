@@ -12,6 +12,10 @@ import {
   Modal,
   Image,
   Platform,
+  Keyboard,
+  Animated,
+  InputAccessoryView,
+  KeyboardAvoidingView,
 } from "react-native";
 import Header from "../../../../src/components/Header";
 import { useLocalSearchParams, router } from "expo-router";
@@ -29,7 +33,10 @@ import * as Sharing from "expo-sharing";
 import * as IntentLauncher from "expo-intent-launcher";
 import { Linking } from "react-native";
 
-import { AREAS_TRABAJO, RIESGOS_POSIBLES } from "../../../../src/constants/catalogosRiesgos";
+import {
+  AREAS_TRABAJO,
+  RIESGOS_POSIBLES,
+} from "../../../../src/constants/catalogosRiesgos";
 import { subirPdfOrden } from "../../../../src/services/riesgosSap";
 import { buildTbmkyHtml } from "../../../../src/services/templates/tbmkyPdfTemplate";
 
@@ -185,8 +192,10 @@ export default function FormularioRiesgosScreen() {
   const [pdfLocalUri, setPdfLocalUri] = useState(null);
   const [downloadingPdf, setDownloadingPdf] = useState(false);
 
-  const esRutinaria = (orderType) => ["Z1", "Z2", "Z3"].includes(orderType || "");
-  const toBase64 = (data) => (data || "").replace(/^data:image\/\w+;base64,/, "");
+  const esRutinaria = (orderType) =>
+    ["Z1", "Z2", "Z3"].includes(orderType || "");
+  const toBase64 = (data) =>
+    (data || "").replace(/^data:image\/\w+;base64,/, "");
   const toDataUrl = (b64) => `data:image/png;base64,${b64}`;
   const sanitize = (s) => (s || "").replace(/\s/g, "");
 
@@ -202,8 +211,98 @@ export default function FormularioRiesgosScreen() {
   // Áreas locales
   const areaOptions = useMemo(
     () => AREAS_TRABAJO.map((a) => ({ label: a.label, value: a.id })),
-    []
+    [],
   );
+
+  // ==========================================================
+  // ✅ MEJORA: “ver lo que escribes” + barra arriba del teclado
+  // ==========================================================
+  const ACCESSORY_ID = "TBMKY_ACCESSORY";
+  const [activeField, setActiveField] = useState(null); // { key, label, i, j }
+
+  const keyboardBottom = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    const showSub = Keyboard.addListener("keyboardDidShow", (e) => {
+      const h = e?.endCoordinates?.height || 0;
+      Animated.timing(keyboardBottom, {
+        toValue: h,
+        duration: 180,
+        useNativeDriver: false,
+      }).start();
+    });
+
+    const hideSub = Keyboard.addListener("keyboardDidHide", () => {
+      Animated.timing(keyboardBottom, {
+        toValue: 0,
+        duration: 180,
+        useNativeDriver: false,
+      }).start();
+    });
+
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, [keyboardBottom]);
+
+  const activeValue = useMemo(() => {
+    if (!activeField?.key) return "";
+
+    const safe = (v) => String(v ?? "");
+
+    switch (activeField.key) {
+      case "tec2_nombre":
+        return safe(trabajadores?.[1]?.nombre);
+      case "tec2_cargo":
+        return safe(trabajadores?.[1]?.cargo);
+
+      case "jefe":
+        return safe(jefeInmediato);
+      case "actividad":
+        return safe(actividadDia);
+
+      case "herramientas":
+        return safe(herramientas);
+
+      case "causa": {
+        const i = activeField?.i ?? 0;
+        return safe(causasTop?.[i]);
+      }
+
+      case "medida": {
+        const i = activeField?.i ?? 0;
+        const j = activeField?.j ?? 0;
+        return safe(medidasTop?.[i]?.[j]);
+      }
+
+      case "accion": {
+        const i = activeField?.i ?? 0;
+        return safe(acciones?.[i]);
+      }
+
+      default:
+        return "";
+    }
+  }, [
+    activeField,
+    trabajadores,
+    jefeInmediato,
+    actividadDia,
+    herramientas,
+    causasTop,
+    medidasTop,
+    acciones,
+  ]);
+
+  // mostrar el final si es largo, para que veas lo último que tecleas
+  const kbPreviewValue = useMemo(() => {
+    const t = String(activeValue ?? "");
+    if (!t) return "";
+    const MAX = 160;
+    if (t.length <= MAX) return t;
+    return "…" + t.slice(t.length - MAX);
+  }, [activeValue]);
 
   // ==========================
   // ✅ 1) Hydrate draft
@@ -233,25 +332,33 @@ export default function FormularioRiesgosScreen() {
           if (t.length >= 2) setTrabajadores([t[0], t[1]]);
         }
 
-        if (typeof d.centroTrabajo === "string") setCentroTrabajo(d.centroTrabajo || "TLP1");
+        if (typeof d.centroTrabajo === "string")
+          setCentroTrabajo(d.centroTrabajo || "TLP1");
         if (d.selectedArea) setSelectedArea(d.selectedArea);
-        if (typeof d.jefeInmediato === "string") setJefeInmediato(d.jefeInmediato);
+        if (typeof d.jefeInmediato === "string")
+          setJefeInmediato(d.jefeInmediato);
         if (typeof d.actividadDia === "string") setActividadDia(d.actividadDia);
 
         if (Array.isArray(d.sintomas)) setSintomas(d.sintomas);
-        if (d.eppSeleccionado && typeof d.eppSeleccionado === "object") setEppSeleccionado(d.eppSeleccionado);
+        if (d.eppSeleccionado && typeof d.eppSeleccionado === "object")
+          setEppSeleccionado(d.eppSeleccionado);
         if (typeof d.herramientas === "string") setHerramientas(d.herramientas);
 
-        if (Array.isArray(d.riesgosSeleccionadosIds)) setRiesgosSeleccionadosIds(d.riesgosSeleccionadosIds);
-        if (Array.isArray(d.topSeleccionIds)) setTopSeleccionIds(d.topSeleccionIds);
-        if (Array.isArray(d.riesgosTopText)) setRiesgosTopText(d.riesgosTopText);
+        if (Array.isArray(d.riesgosSeleccionadosIds))
+          setRiesgosSeleccionadosIds(d.riesgosSeleccionadosIds);
+        if (Array.isArray(d.topSeleccionIds))
+          setTopSeleccionIds(d.topSeleccionIds);
+        if (Array.isArray(d.riesgosTopText))
+          setRiesgosTopText(d.riesgosTopText);
         if (Array.isArray(d.causasTop)) setCausasTop(d.causasTop);
         if (Array.isArray(d.medidasTop)) setMedidasTop(d.medidasTop);
         if (Array.isArray(d.acciones)) setAcciones(d.acciones);
 
-        if (typeof d.firmaTecnico === "string") setFirmaTecnico(d.firmaTecnico || null);
+        if (typeof d.firmaTecnico === "string")
+          setFirmaTecnico(d.firmaTecnico || null);
 
-        if (typeof d.pdfLocalUri === "string") setPdfLocalUri(d.pdfLocalUri || null);
+        if (typeof d.pdfLocalUri === "string")
+          setPdfLocalUri(d.pdfLocalUri || null);
       } catch (e) {
         console.log("[TBMKY] hydrateDraft error:", e);
       } finally {
@@ -289,11 +396,14 @@ export default function FormularioRiesgosScreen() {
         setOrden(ord);
         setCentroTrabajo("TLP1");
 
-        const startIso = ord?.StartDate || ord?.start_date || ord?.Startdate || ord?.startDate;
+        const startIso =
+          ord?.StartDate || ord?.start_date || ord?.Startdate || ord?.startDate;
         const startDate = startIso ? new Date(startIso) : new Date();
         if (!fecha) theDateFormatter(setFecha, startDate);
 
-        const ot = String(ord?.order_type || ord?.OrderType || ord?.orderType || "").trim();
+        const ot = String(
+          ord?.order_type || ord?.OrderType || ord?.orderType || "",
+        ).trim();
         if (typeof rutinaria !== "boolean" || rutinaria === false) {
           setRutinaria(esRutinaria(ot));
         }
@@ -304,7 +414,12 @@ export default function FormularioRiesgosScreen() {
           if (existing) return copia;
 
           copia[0] = {
-            nombre: ord?.tecnico_nombre || ord?.nombre || user?.nombre || user?.name || "",
+            nombre:
+              ord?.tecnico_nombre ||
+              ord?.nombre ||
+              user?.nombre ||
+              user?.name ||
+              "",
             cargo: ord?.tecnico_cargo || user?.puesto || user?.rol || "Técnico",
           };
           return copia;
@@ -313,11 +428,11 @@ export default function FormularioRiesgosScreen() {
         // ✅ Traer Razón social / Dirección desde ToAddresses (2do nodo)
         try {
           const addrRes = await api.get(
-            `/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet('${orderid}')/ToAddresses?$format=json`
+            `/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet('${orderid}')/ToAddresses?$format=json`,
           );
 
           const results = addrRes?.data?.d?.results || [];
-          const node = results?.[1] || null; // 👈 segundo nodo SIEMPRE (si no existe, se queda null)
+          const node = results?.[1] || null; // 👈 segundo nodo
 
           if (node) {
             const rs = buildRazonSocial(node);
@@ -326,7 +441,6 @@ export default function FormularioRiesgosScreen() {
             setRazonSocial(rs);
             setDireccion(dir);
 
-            // ✅ Log solo una vez
             if (!addrLogOnceRef.current) {
               addrLogOnceRef.current = true;
               console.log("[TBMKY] ToAddresses OK (2do nodo):", {
@@ -340,10 +454,12 @@ export default function FormularioRiesgosScreen() {
               });
             }
           } else {
-            // si no hay nodo 2
             if (!addrLogOnceRef.current) {
               addrLogOnceRef.current = true;
-              console.log("[TBMKY] ToAddresses sin 2do nodo. results length =", results?.length || 0);
+              console.log(
+                "[TBMKY] ToAddresses sin 2do nodo. results length =",
+                results?.length || 0,
+              );
             }
           }
         } catch (e) {
@@ -411,7 +527,7 @@ export default function FormularioRiesgosScreen() {
       acciones,
       firmaTecnico,
       pdfLocalUri,
-    ]
+    ],
   );
 
   useEffect(() => {
@@ -445,7 +561,11 @@ export default function FormularioRiesgosScreen() {
   // Toggles
   const toggleSintoma = (sintoma) => {
     if (lockedAfterPdf) return;
-    setSintomas((prev) => (prev.includes(sintoma) ? prev.filter((s) => s !== sintoma) : [...prev, sintoma]));
+    setSintomas((prev) =>
+      prev.includes(sintoma)
+        ? prev.filter((s) => s !== sintoma)
+        : [...prev, sintoma],
+    );
   };
 
   const toggleEppCampo = (item, campo) => {
@@ -458,7 +578,9 @@ export default function FormularioRiesgosScreen() {
 
   const toggleRiesgo = (id) => {
     if (lockedAfterPdf) return;
-    setRiesgosSeleccionadosIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+    setRiesgosSeleccionadosIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
+    );
   };
 
   const opcionesTop1 = useMemo(
@@ -466,65 +588,95 @@ export default function FormularioRiesgosScreen() {
       riesgosBD
         .filter((r) => riesgosSeleccionadosIds.includes(r.id))
         .map((r) => ({ label: r.riesgo, value: r.id })),
-    [riesgosBD, riesgosSeleccionadosIds]
+    [riesgosBD, riesgosSeleccionadosIds],
   );
 
   const opcionesTop2 = useMemo(() => {
     const usados = new Set([topSeleccionIds[0]].filter(Boolean));
     return riesgosBD
-      .filter((r) => riesgosSeleccionadosIds.includes(r.id) && !usados.has(r.id))
+      .filter(
+        (r) => riesgosSeleccionadosIds.includes(r.id) && !usados.has(r.id),
+      )
       .map((r) => ({ label: r.riesgo, value: r.id }));
   }, [riesgosBD, riesgosSeleccionadosIds, topSeleccionIds]);
 
   const opcionesTop3 = useMemo(() => {
-    const usados = new Set([topSeleccionIds[0], topSeleccionIds[1]].filter(Boolean));
+    const usados = new Set(
+      [topSeleccionIds[0], topSeleccionIds[1]].filter(Boolean),
+    );
     return riesgosBD
-      .filter((r) => riesgosSeleccionadosIds.includes(r.id) && !usados.has(r.id))
+      .filter(
+        (r) => riesgosSeleccionadosIds.includes(r.id) && !usados.has(r.id),
+      )
       .map((r) => ({ label: r.riesgo, value: r.id }));
   }, [riesgosBD, riesgosSeleccionadosIds, topSeleccionIds]);
 
   useEffect(() => {
     // si desmarcan riesgo, quita top si ya no existe
-    setTopSeleccionIds((prev) => prev.map((v) => (v && !riesgosSeleccionadosIds.includes(v) ? null : v)));
+    setTopSeleccionIds((prev) =>
+      prev.map((v) => (v && !riesgosSeleccionadosIds.includes(v) ? null : v)),
+    );
   }, [riesgosSeleccionadosIds]);
 
   const aplicarTop = () => {
     if (lockedAfterPdf) return;
 
     if (!topSeleccionIds[0] || !topSeleccionIds[1] || !topSeleccionIds[2]) {
-      Alert.alert("TOP 3 incompleto", "Elige TOP 1, TOP 2 y TOP 3 (sin repetir).");
+      Alert.alert(
+        "TOP 3 incompleto",
+        "Elige TOP 1, TOP 2 y TOP 3 (sin repetir).",
+      );
       return;
     }
 
-    const nombres = topSeleccionIds.map((id) => riesgosBD.find((x) => x.id === id)?.riesgo || "");
+    const nombres = topSeleccionIds.map(
+      (id) => riesgosBD.find((x) => x.id === id)?.riesgo || "",
+    );
 
     // reset de campos si cambió el riesgo top
-    setCausasTop((prev) => prev.map((c, i) => (riesgosTopText[i] !== nombres[i] ? "" : c)));
-    setMedidasTop((prev) => prev.map((fila, i) => (riesgosTopText[i] !== nombres[i] ? ["", "", ""] : fila)));
-    setAcciones((prev) => prev.map((a, i) => (riesgosTopText[i] !== nombres[i] ? "" : a)));
+    setCausasTop((prev) =>
+      prev.map((c, i) => (riesgosTopText[i] !== nombres[i] ? "" : c)),
+    );
+    setMedidasTop((prev) =>
+      prev.map((fila, i) =>
+        riesgosTopText[i] !== nombres[i] ? ["", "", ""] : fila,
+      ),
+    );
+    setAcciones((prev) =>
+      prev.map((a, i) => (riesgosTopText[i] !== nombres[i] ? "" : a)),
+    );
 
     setRiesgosTopText(nombres);
 
     Alert.alert(
       "TOP 3 aplicado",
-      "Listo ✅\n\nAhora abajo se autollenarán los bloques de TOP 1/2/3 para que captures causas, medidas y acciones."
+      "Listo ✅\n\nAhora abajo se autollenarán los bloques de TOP 1/2/3 para que captures causas, medidas y acciones.",
     );
   };
 
   const autollenarTopDesdeSeleccionados = () => {
     if (lockedAfterPdf) return;
     if (riesgosSeleccionadosIds.length < 3) {
-      Alert.alert("Selecciona riesgos", "Marca al menos 3 riesgos en 'Riesgos presentes'.");
+      Alert.alert(
+        "Selecciona riesgos",
+        "Marca al menos 3 riesgos en 'Riesgos presentes'.",
+      );
       return;
     }
-    setTopSeleccionIds([riesgosSeleccionadosIds[0], riesgosSeleccionadosIds[1], riesgosSeleccionadosIds[2]]);
+    setTopSeleccionIds([
+      riesgosSeleccionadosIds[0],
+      riesgosSeleccionadosIds[1],
+      riesgosSeleccionadosIds[2],
+    ]);
   };
 
   // -------------------------
   // ✅ PDF LOCAL
   // -------------------------
   const leerPdfBase64 = async (localUri) => {
-    const b64 = await FileSystem.readAsStringAsync(localUri, { encoding: "base64" });
+    const b64 = await FileSystem.readAsStringAsync(localUri, {
+      encoding: "base64",
+    });
     return b64;
   };
 
@@ -533,7 +685,10 @@ export default function FormularioRiesgosScreen() {
     const safeFecha = String(payload.fecha || "").replace(/[^0-9-]/g, "");
     const fileName = `TBMKY_${payload.orderid}_${safeFecha}.pdf`;
 
-    const { uri, base64 } = await Print.printToFileAsync({ html, base64: true });
+    const { uri, base64 } = await Print.printToFileAsync({
+      html,
+      base64: true,
+    });
 
     const dest = `${FileSystem.documentDirectory}${fileName}`;
     let finalUri = uri;
@@ -557,7 +712,6 @@ export default function FormularioRiesgosScreen() {
   const closePdfModal = () => {
     setShowPdfModal(false);
     setLockedAfterPdf(true);
-    // saca de la pantalla para que no sigan moviéndole
     router.replace("/tecnico/ordenes");
   };
 
@@ -577,11 +731,15 @@ export default function FormularioRiesgosScreen() {
       }
 
       const canShare = await Sharing.isAvailableAsync();
-      if (canShare) await Sharing.shareAsync(pdfLocalUri, { mimeType: "application/pdf" });
+      if (canShare)
+        await Sharing.shareAsync(pdfLocalUri, { mimeType: "application/pdf" });
       else await Linking.openURL(pdfLocalUri);
     } catch (e) {
       console.error(e);
-      Alert.alert("No se pudo abrir", "Instala un visor de PDF (Adobe/Drive/etc).");
+      Alert.alert(
+        "No se pudo abrir",
+        "Instala un visor de PDF (Adobe/Drive/etc).",
+      );
     } finally {
       setDownloadingPdf(false);
     }
@@ -591,7 +749,8 @@ export default function FormularioRiesgosScreen() {
     try {
       if (!pdfLocalUri) return Alert.alert("Sin PDF", "Primero genera el PDF.");
       const canShare = await Sharing.isAvailableAsync();
-      if (!canShare) return Alert.alert("No disponible", "Compartir no está disponible.");
+      if (!canShare)
+        return Alert.alert("No disponible", "Compartir no está disponible.");
       await Sharing.shareAsync(pdfLocalUri, { mimeType: "application/pdf" });
     } catch (e) {
       console.error(e);
@@ -613,8 +772,9 @@ export default function FormularioRiesgosScreen() {
   const paso2Ok = useMemo(() => true, []);
 
   const topAplicadoOk = useMemo(
-    () => !!riesgosTopText?.[0] && !!riesgosTopText?.[1] && !!riesgosTopText?.[2],
-    [riesgosTopText]
+    () =>
+      !!riesgosTopText?.[0] && !!riesgosTopText?.[1] && !!riesgosTopText?.[2],
+    [riesgosTopText],
   );
 
   const paso3Ok = useMemo(() => {
@@ -636,7 +796,10 @@ export default function FormularioRiesgosScreen() {
 
   const goNext = () => {
     if (!canNext) {
-      Alert.alert("Falta información", "Completa los campos requeridos para continuar.");
+      Alert.alert(
+        "Falta información",
+        "Completa los campos requeridos para continuar.",
+      );
       return;
     }
     setPaso((p) => Math.min(4, p + 1));
@@ -644,9 +807,10 @@ export default function FormularioRiesgosScreen() {
 
   const goPrev = () => setPaso((p) => Math.max(1, p - 1));
 
-  // ✅ cada vez que cambie paso, manda arriba
+  // ✅ cada vez que cambie paso, manda arriba y limpia preview
   useEffect(() => {
     scrollToTop();
+    setActiveField(null);
   }, [paso]);
 
   // -------------------------
@@ -655,21 +819,33 @@ export default function FormularioRiesgosScreen() {
   const onGuardarYGenerarPdf = async () => {
     if (saving) return;
 
-    if (!canSubmit) return Alert.alert("Falta firma", "Captura la firma del técnico.");
+    if (!canSubmit)
+      return Alert.alert("Falta firma", "Captura la firma del técnico.");
 
-    if (!selectedArea) return Alert.alert("Falta información", "Selecciona el área de trabajo.");
-    if (!jefeInmediato.trim()) return Alert.alert("Falta información", "Jefe inmediato vacío.");
-    if (!actividadDia.trim()) return Alert.alert("Falta información", "Actividad del día vacía.");
+    if (!selectedArea)
+      return Alert.alert("Falta información", "Selecciona el área de trabajo.");
+    if (!jefeInmediato.trim())
+      return Alert.alert("Falta información", "Jefe inmediato vacío.");
+    if (!actividadDia.trim())
+      return Alert.alert("Falta información", "Actividad del día vacía.");
 
-    if (!topAplicadoOk) return Alert.alert("TOP 3 incompleto", "Selecciona y aplica TOP 1, TOP 2 y TOP 3.");
+    if (!topAplicadoOk)
+      return Alert.alert(
+        "TOP 3 incompleto",
+        "Selecciona y aplica TOP 1, TOP 2 y TOP 3.",
+      );
     if (!acciones.every((a) => String(a || "").trim())) {
-      return Alert.alert("Acciones incompletas", "Escribe las 3 acciones (una por TOP).");
+      return Alert.alert(
+        "Acciones incompletas",
+        "Escribe las 3 acciones (una por TOP).",
+      );
     }
 
     try {
       setSaving(true);
 
-      const selectedAreaLabel = areaOptions.find((a) => a.value === selectedArea)?.label || "";
+      const selectedAreaLabel =
+        areaOptions.find((a) => a.value === selectedArea)?.label || "";
 
       const payload = {
         orderid: orden?.Orderid || orden?.orderid || orderid,
@@ -707,13 +883,19 @@ export default function FormularioRiesgosScreen() {
 
         // Extra por si template los usa:
         equipment: orden?.Equipment || orden?.equipment || "",
-        razon_social: razonSocial || orden?.razon_social || orden?.partner_name || "",
-        direccion: direccion || orden?.direccion || orden?.partner_address || "",
+        razon_social:
+          razonSocial || orden?.razon_social || orden?.partner_name || "",
+        direccion:
+          direccion || orden?.direccion || orden?.partner_address || "",
         order_type: orden?.order_type || orden?.OrderType || "",
       };
 
       // 1) Generar PDF
-      const { uri: localUri, base64: base64Pdf, fileName } = await generarPdfLocalYBase64(payload);
+      const {
+        uri: localUri,
+        base64: base64Pdf,
+        fileName,
+      } = await generarPdfLocalYBase64(payload);
       setPdfLocalUri(localUri);
 
       if (!base64Pdf || String(base64Pdf).trim().length < 200) {
@@ -732,11 +914,14 @@ export default function FormularioRiesgosScreen() {
           fileName,
         });
       } catch (sendErr) {
-        console.log("[TBMKY] enviar submit error:", sendErr?.response?.data || sendErr);
+        console.log(
+          "[TBMKY] enviar submit error:",
+          sendErr?.response?.data || sendErr,
+        );
         Alert.alert(
           "Guardado local",
           `Se generó el PDF, pero no se pudo enviar a SAP para la orden #${payload.orderid}.`,
-          [{ text: "OK" }]
+          [{ text: "OK" }],
         );
         return;
       }
@@ -745,7 +930,7 @@ export default function FormularioRiesgosScreen() {
         Alert.alert(
           "Guardado local",
           `Se generó el PDF, pero SAP no confirmó el envío para la orden #${payload.orderid}.`,
-          [{ text: "OK" }]
+          [{ text: "OK" }],
         );
         return;
       }
@@ -755,15 +940,17 @@ export default function FormularioRiesgosScreen() {
         await AsyncStorage.removeItem(DRAFT_KEY);
       } catch {}
 
-      // ✅ alert solo para abrir pdf / compartir / cerrar
       Alert.alert(
         "Listo",
         `TBM/KY enviado a SAP ✅\nOrden #${payload.orderid}.`,
-        [{ text: "Opciones de PDF", onPress: openPdfModal }]
+        [{ text: "Opciones de PDF", onPress: openPdfModal }],
       );
     } catch (e) {
       console.error("TBMKY error:", e?.response?.data || e);
-      Alert.alert("Error", "No se pudo completar el proceso (PDF/SAP/estatus).");
+      Alert.alert(
+        "Error",
+        "No se pudo completar el proceso (PDF/SAP/estatus).",
+      );
     } finally {
       setSaving(false);
     }
@@ -773,7 +960,11 @@ export default function FormularioRiesgosScreen() {
     return (
       <View style={{ flex: 1, backgroundColor: FIORI.pageBg }}>
         <Header title="Predicción de riesgos (TBM/KY)" />
-        <ActivityIndicator style={{ marginTop: 40 }} size="large" color={FIORI.accent} />
+        <ActivityIndicator
+          style={{ marginTop: 40 }}
+          size="large"
+          color={FIORI.accent}
+        />
       </View>
     );
   }
@@ -789,14 +980,33 @@ export default function FormularioRiesgosScreen() {
           const done = paso > n;
           return (
             <View key={n} style={styles.stepItem}>
-              <View style={[styles.stepCircle, active && styles.stepCircleActive, done && styles.stepCircleDone]}>
+              <View
+                style={[
+                  styles.stepCircle,
+                  active && styles.stepCircleActive,
+                  done && styles.stepCircleDone,
+                ]}
+              >
                 {done ? (
                   <Ionicons name="checkmark" size={14} color="#fff" />
                 ) : (
-                  <Text style={[styles.stepCircleText, (active || done) && styles.stepCircleTextActive]}>{n}</Text>
+                  <Text
+                    style={[
+                      styles.stepCircleText,
+                      (active || done) && styles.stepCircleTextActive,
+                    ]}
+                  >
+                    {n}
+                  </Text>
                 )}
               </View>
-              <Text style={[styles.stepLabel, active && styles.stepLabelActive, done && styles.stepLabelDone]}>
+              <Text
+                style={[
+                  styles.stepLabel,
+                  active && styles.stepLabelActive,
+                  done && styles.stepLabelDone,
+                ]}
+              >
                 Paso {n}
               </Text>
             </View>
@@ -804,442 +1014,718 @@ export default function FormularioRiesgosScreen() {
         })}
       </View>
 
-      <ScrollView ref={scrollRef} contentContainerStyle={styles.scroll}>
-        {/* Encabezado */}
-        <View style={styles.headerCard}>
-          <View style={styles.headerRow}>
-            <View style={styles.pill}>
-              <Ionicons name="document-text-outline" size={14} color={FIORI.accent} />
-              <Text style={styles.pillText}>Orden {orden?.Orderid || orderid}</Text>
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        keyboardVerticalOffset={Platform.OS === "ios" ? 90 : 0}
+      >
+        <ScrollView
+          ref={scrollRef}
+          contentContainerStyle={styles.scroll}
+          keyboardShouldPersistTaps="handled"
+        >
+          {/* Encabezado */}
+          <View style={styles.headerCard}>
+            <View style={styles.headerRow}>
+              <View style={styles.pill}>
+                <Ionicons
+                  name="document-text-outline"
+                  size={14}
+                  color={FIORI.accent}
+                />
+                <Text style={styles.pillText}>
+                  Orden {orden?.Orderid || orderid}
+                </Text>
+              </View>
+
+              <View
+                style={[
+                  styles.badge,
+                  rutinaria ? styles.badgeOk : styles.badgeWarn,
+                ]}
+              >
+                <Text style={styles.badgeText}>
+                  {rutinaria ? "RUTINARIA" : "NO RUTINARIA"}
+                </Text>
+              </View>
             </View>
 
-            <View style={[styles.badge, rutinaria ? styles.badgeOk : styles.badgeWarn]}>
-              <Text style={styles.badgeText}>{rutinaria ? "RUTINARIA" : "NO RUTINARIA"}</Text>
+            <View style={{ marginTop: 8, gap: 4 }}>
+              <HeaderRow label="Fecha" value={fecha} />
+              <HeaderRow label="Equipo" value={"ELEVADORES"} />
+              <HeaderRow
+                label="Equipo SAP"
+                value={orden?.Equipment || orden?.equipment || "—"}
+              />
+              <HeaderRow
+                label="Razón social"
+                value={
+                  razonSocial ||
+                  orden?.razon_social ||
+                  orden?.partner_name ||
+                  "—"
+                }
+                multiline
+              />
+              <HeaderRow
+                label="Dirección"
+                value={
+                  direccion || orden?.direccion || orden?.partner_address || "—"
+                }
+                multiline
+              />
+              <HeaderRow
+                label="Tipo orden"
+                value={orden?.order_type || orden?.OrderType || "—"}
+              />
             </View>
-          </View>
 
-          <View style={{ marginTop: 8, gap: 4 }}>
-            <HeaderRow label="Fecha" value={fecha} />
-            <HeaderRow label="Equipo" value={"ELEVADORES"} />
-            <HeaderRow label="Equipo SAP" value={orden?.Equipment || orden?.equipment || "—"} />
-            <HeaderRow label="Razón social" value={razonSocial || orden?.razon_social || orden?.partner_name || "—"} multiline />
-            <HeaderRow label="Dirección" value={direccion || orden?.direccion || orden?.partner_address || "—"} multiline />
-            <HeaderRow label="Tipo orden" value={orden?.order_type || orden?.OrderType || "—"} />
-          </View>
+            <View
+              style={{
+                flexDirection: "row",
+                gap: 10,
+                marginTop: 10,
+                flexWrap: "wrap",
+              }}
+            >
+              {!!pdfLocalUri && (
+                <TouchableOpacity
+                  style={[styles.smallBtn, { backgroundColor: FIORI.accent }]}
+                  onPress={openPdfModal}
+                  disabled={lockedAfterPdf}
+                >
+                  <Text style={[styles.smallBtnText, { color: "#fff" }]}>
+                    Opciones de PDF
+                  </Text>
+                </TouchableOpacity>
+              )}
 
-          <View style={{ flexDirection: "row", gap: 10, marginTop: 10, flexWrap: "wrap" }}>
-            {!!pdfLocalUri && (
               <TouchableOpacity
-                style={[styles.smallBtn, { backgroundColor: FIORI.accent }]}
-                onPress={openPdfModal}
+                style={[styles.smallBtn, { backgroundColor: "#111827" }]}
+                onPress={clearDraft}
                 disabled={lockedAfterPdf}
               >
-                <Text style={[styles.smallBtnText, { color: "#fff" }]}>Opciones de PDF</Text>
+                <Text style={[styles.smallBtnText, { color: "#fff" }]}>
+                  Borrar borrador
+                </Text>
               </TouchableOpacity>
-            )}
+            </View>
 
-            <TouchableOpacity
-              style={[styles.smallBtn, { backgroundColor: "#111827" }]}
-              onPress={clearDraft}
-              disabled={lockedAfterPdf}
-            >
-              <Text style={[styles.smallBtnText, { color: "#fff" }]}>Borrar borrador</Text>
-            </TouchableOpacity>
+            {!!lockedAfterPdf && (
+              <Text
+                style={{ marginTop: 8, fontSize: 12, color: FIORI.textMuted }}
+              >
+                Este formulario ya se envió. Regresando a órdenes…
+              </Text>
+            )}
           </View>
 
-          {!!lockedAfterPdf && (
-            <Text style={{ marginTop: 8, fontSize: 12, color: FIORI.textMuted }}>
-              Este formulario ya se envió. Regresando a órdenes…
-            </Text>
-          )}
-        </View>
+          {/* PASO 1 */}
+          {paso === 1 && (
+            <View>
+              <SectionTitle title="1. Identificación del área de trabajo" />
 
-        {/* PASO 1 */}
-        {paso === 1 && (
-          <View>
-            <SectionTitle title="1. Identificación del área de trabajo" />
-
-            <SectionSubTitle text="Tipo de equipo (fijo)" />
-            <View style={[styles.fixedTile, { borderColor: FIORI.accent }]}>
-              <MaterialCommunityIcons name="elevator-passenger" size={22} color={FIORI.accent} />
-              <Text style={{ fontWeight: "900", color: FIORI.ink }}>ELEVADORES</Text>
-              <Text style={{ color: FIORI.textMuted, fontSize: 12 }}>No editable</Text>
-            </View>
-
-            <SectionSubTitle text="Técnico asignado (no editable)" />
-            <View style={styles.card}>
-              <LabeledInput label="Nombre" value={trabajadores[0].nombre} editable={false} />
-              <LabeledInput label="Cargo" value={trabajadores[0].cargo || "Técnico"} editable={false} />
-              <LabeledInput label="Fecha" value={fecha} editable={false} />
-            </View>
-
-            <SectionSubTitle text="Técnico 2 (opcional)" />
-            <View style={styles.card}>
-              <LabeledInput
-                label="Nombre"
-                value={trabajadores[1].nombre}
-                onChangeText={(v) => {
-                  if (lockedAfterPdf) return;
-                  const copia = [...trabajadores];
-                  copia[1].nombre = v;
-                  setTrabajadores(copia);
-                }}
-                editable={!lockedAfterPdf}
-              />
-              <LabeledInput
-                label="Cargo"
-                value={trabajadores[1].cargo}
-                onChangeText={(v) => {
-                  if (lockedAfterPdf) return;
-                  const copia = [...trabajadores];
-                  copia[1].cargo = v;
-                  setTrabajadores(copia);
-                }}
-                editable={!lockedAfterPdf}
-              />
-            </View>
-
-            <SectionSubTitle text="Datos del área (requerido)" />
-            <LabeledInput label="Centro de trabajo" value={centroTrabajo || "TLP1"} editable={false} />
-
-            <Text style={styles.fieldLabel}>Área de trabajo *</Text>
-            <Dropdown
-              style={styles.dropdown}
-              data={areaOptions}
-              labelField="label"
-              valueField="value"
-              placeholder="Seleccionar área..."
-              value={selectedArea}
-              onChange={(item) => !lockedAfterPdf && setSelectedArea(item.value)}
-              disable={lockedAfterPdf}
-            />
-
-            {!!selectedArea && (
-              <>
-                <LabeledInput label="Jefe inmediato *" value={jefeInmediato} onChangeText={setJefeInmediato} editable={!lockedAfterPdf} />
-                <LabeledInput
-                  label="Actividad del día *"
-                  value={actividadDia}
-                  onChangeText={setActividadDia}
-                  multiline
-                  height={80}
-                  editable={!lockedAfterPdf}
+              <SectionSubTitle text="Tipo de equipo (fijo)" />
+              <View style={[styles.fixedTile, { borderColor: FIORI.accent }]}>
+                <MaterialCommunityIcons
+                  name="elevator-passenger"
+                  size={22}
+                  color={FIORI.accent}
                 />
-              </>
-            )}
+                <Text style={{ fontWeight: "900", color: FIORI.ink }}>
+                  ELEVADORES
+                </Text>
+                <Text style={{ color: FIORI.textMuted, fontSize: 12 }}>
+                  No editable
+                </Text>
+              </View>
 
-            {!paso1Ok && (
-              <Text style={{ color: FIORI.textMuted, fontSize: 12, marginTop: 6 }}>
-                Completa: Área, Jefe inmediato y Actividad del día para continuar.
-              </Text>
-            )}
-          </View>
-        )}
+              <SectionSubTitle text="Técnico asignado (no editable)" />
+              <View style={styles.card}>
+                <LabeledInput
+                  label="Nombre"
+                  value={trabajadores[0].nombre}
+                  editable={false}
+                />
+                <LabeledInput
+                  label="Cargo"
+                  value={trabajadores[0].cargo || "Técnico"}
+                  editable={false}
+                />
+                <LabeledInput label="Fecha" value={fecha} editable={false} />
+              </View>
 
-        {/* PASO 2 */}
-        {paso === 2 && (
-          <View>
-            <SectionTitle title="2. Chequeo individual de salud y EPP" />
+              <SectionSubTitle text="Técnico 2 (opcional)" />
+              <View style={styles.card}>
+                <LabeledInput
+                  label="Nombre"
+                  value={trabajadores[1].nombre}
+                  onChangeText={(v) => {
+                    if (lockedAfterPdf) return;
+                    const copia = [...trabajadores];
+                    copia[1].nombre = v;
+                    setTrabajadores(copia);
+                  }}
+                  editable={!lockedAfterPdf}
+                  onFocus={() =>
+                    setActiveField({
+                      key: "tec2_nombre",
+                      label: "Técnico 2 — Nombre",
+                    })
+                  }
+                  onBlur={() => setActiveField(null)}
+                  inputAccessoryViewID={
+                    Platform.OS === "ios" ? ACCESSORY_ID : undefined
+                  }
+                />
+                <LabeledInput
+                  label="Cargo"
+                  value={trabajadores[1].cargo}
+                  onChangeText={(v) => {
+                    if (lockedAfterPdf) return;
+                    const copia = [...trabajadores];
+                    copia[1].cargo = v;
+                    setTrabajadores(copia);
+                  }}
+                  editable={!lockedAfterPdf}
+                  onFocus={() =>
+                    setActiveField({
+                      key: "tec2_cargo",
+                      label: "Técnico 2 — Cargo",
+                    })
+                  }
+                  onBlur={() => setActiveField(null)}
+                  inputAccessoryViewID={
+                    Platform.OS === "ios" ? ACCESSORY_ID : undefined
+                  }
+                />
+              </View>
 
-            <SectionSubTitle text="Chequeo individual de salud" />
-            <View style={styles.card}>
-              {sintomasIniciales.map((s) => (
-                <TouchableOpacity key={s} style={styles.checkboxRow} onPress={() => toggleSintoma(s)} disabled={lockedAfterPdf}>
-                  <Ionicons name={sintomas.includes(s) ? "checkbox" : "square-outline"} size={20} color={FIORI.accent} />
-                  <Text style={styles.checkboxLabel}>{s}</Text>
-                </TouchableOpacity>
-              ))}
+              <SectionSubTitle text="Datos del área (requerido)" />
+              <LabeledInput
+                label="Centro de trabajo"
+                value={centroTrabajo || "TLP1"}
+                editable={false}
+              />
+
+              <Text style={styles.fieldLabel}>Área de trabajo *</Text>
+              <Dropdown
+                style={styles.dropdown}
+                data={areaOptions}
+                labelField="label"
+                valueField="value"
+                placeholder="Seleccionar área..."
+                value={selectedArea}
+                onChange={(item) =>
+                  !lockedAfterPdf && setSelectedArea(item.value)
+                }
+                disable={lockedAfterPdf}
+              />
+
+              {!!selectedArea && (
+                <>
+                  <LabeledInput
+                    label="Jefe inmediato *"
+                    value={jefeInmediato}
+                    onChangeText={setJefeInmediato}
+                    editable={!lockedAfterPdf}
+                    onFocus={() =>
+                      setActiveField({ key: "jefe", label: "Jefe inmediato" })
+                    }
+                    onBlur={() => setActiveField(null)}
+                    inputAccessoryViewID={
+                      Platform.OS === "ios" ? ACCESSORY_ID : undefined
+                    }
+                  />
+                  <LabeledInput
+                    label="Actividad del día *"
+                    value={actividadDia}
+                    onChangeText={setActividadDia}
+                    multiline
+                    height={80}
+                    editable={!lockedAfterPdf}
+                    onFocus={() =>
+                      setActiveField({
+                        key: "actividad",
+                        label: "Actividad del día",
+                      })
+                    }
+                    onBlur={() => setActiveField(null)}
+                    inputAccessoryViewID={
+                      Platform.OS === "ios" ? ACCESSORY_ID : undefined
+                    }
+                  />
+                </>
+              )}
+
+              {!paso1Ok && (
+                <Text
+                  style={{ color: FIORI.textMuted, fontSize: 12, marginTop: 6 }}
+                >
+                  Completa: Área, Jefe inmediato y Actividad del día para
+                  continuar.
+                </Text>
+              )}
             </View>
+          )}
 
-            <SectionSubTitle text="Equipo de protección personal (EPP)" />
-            <View style={styles.eppGrid}>
-              {EPP_LIST.map((epp) => {
-                const iconName = getMdiIconName(epp);
-                return (
-                  <View key={epp} style={styles.eppItem}>
-                    <View style={styles.eppHeader}>
-                      <MaterialCommunityIcons name={iconName} size={18} color={FIORI.ink} style={{ marginRight: 4 }} />
-                      <Text style={styles.eppLabel}>{epp}</Text>
-                    </View>
+          {/* PASO 2 */}
+          {paso === 2 && (
+            <View>
+              <SectionTitle title="2. Chequeo individual de salud y EPP" />
 
-                    <View style={styles.eppButtons}>
-                      <TouchableOpacity
-                        style={[styles.eppBox, eppSeleccionado[epp]?.M && styles.eppBoxOnM]}
-                        onPress={() => toggleEppCampo(epp, "M")}
-                        disabled={lockedAfterPdf}
-                      >
-                        <MaterialCommunityIcons
-                          name={eppSeleccionado[epp]?.M ? "check-circle" : "circle-outline"}
-                          size={16}
-                          color={eppSeleccionado[epp]?.M ? "#fff" : FIORI.accent}
-                        />
-                        <Text style={[styles.eppBoxText, eppSeleccionado[epp]?.M && styles.eppBoxTextOn]}>M</Text>
-                      </TouchableOpacity>
-
-                      <TouchableOpacity
-                        style={[styles.eppBox, eppSeleccionado[epp]?.A && styles.eppBoxOnA]}
-                        onPress={() => toggleEppCampo(epp, "A")}
-                        disabled={lockedAfterPdf}
-                      >
-                        <MaterialCommunityIcons
-                          name={eppSeleccionado[epp]?.A ? "check-circle" : "circle-outline"}
-                          size={16}
-                          color={eppSeleccionado[epp]?.A ? "#fff" : FIORI.warning}
-                        />
-                        <Text style={[styles.eppBoxText, eppSeleccionado[epp]?.A && styles.eppBoxTextOn]}>A</Text>
-                      </TouchableOpacity>
-                    </View>
-                  </View>
-                );
-              })}
-            </View>
-
-            <LabeledInput
-              label="Herramientas especiales"
-              value={herramientas}
-              onChangeText={setHerramientas}
-              multiline
-              height={60}
-              editable={!lockedAfterPdf}
-            />
-          </View>
-        )}
-
-        {/* PASO 3 */}
-        {paso === 3 && (
-          <View>
-            <SectionTitle title="3. Análisis de riesgos (guiado)" />
-
-            {/* TAREA 1 */}
-            <View style={styles.taskCard}>
-              <Text style={styles.taskTitle}>Tarea 1 — Marca riesgos presentes (mínimo 3)</Text>
-              <Text style={styles.taskHint}>
-                Selecciona todos los riesgos que apliquen. Cuando marques 3 o más, se habilita la selección de TOP 3.
-              </Text>
-
-              <View style={[styles.card, { marginBottom: 0 }]}>
-                {riesgosBD.map((r) => (
+              <SectionSubTitle text="Chequeo individual de salud" />
+              <View style={styles.card}>
+                {sintomasIniciales.map((s) => (
                   <TouchableOpacity
-                    key={r.id}
+                    key={s}
                     style={styles.checkboxRow}
-                    onPress={() => toggleRiesgo(r.id)}
+                    onPress={() => toggleSintoma(s)}
                     disabled={lockedAfterPdf}
                   >
                     <Ionicons
-                      name={riesgosSeleccionadosIds.includes(r.id) ? "checkbox" : "square-outline"}
+                      name={
+                        sintomas.includes(s) ? "checkbox" : "square-outline"
+                      }
                       size={20}
                       color={FIORI.accent}
                     />
-                    <Text style={styles.checkboxLabel}>{r.riesgo}</Text>
+                    <Text style={styles.checkboxLabel}>{s}</Text>
                   </TouchableOpacity>
                 ))}
               </View>
-            </View>
 
-            {/* TAREA 2 */}
-            {riesgosSeleccionadosIds.length >= 3 ? (
+              <SectionSubTitle text="Equipo de protección personal (EPP)" />
+              <View style={styles.eppGrid}>
+                {EPP_LIST.map((epp) => {
+                  const iconName = getMdiIconName(epp);
+                  return (
+                    <View key={epp} style={styles.eppItem}>
+                      <View style={styles.eppHeader}>
+                        <MaterialCommunityIcons
+                          name={iconName}
+                          size={18}
+                          color={FIORI.ink}
+                          style={{ marginRight: 4 }}
+                        />
+                        <Text style={styles.eppLabel}>{epp}</Text>
+                      </View>
+
+                      <View style={styles.eppButtons}>
+                        <TouchableOpacity
+                          style={[
+                            styles.eppBox,
+                            eppSeleccionado[epp]?.M && styles.eppBoxOnM,
+                          ]}
+                          onPress={() => toggleEppCampo(epp, "M")}
+                          disabled={lockedAfterPdf}
+                        >
+                          <MaterialCommunityIcons
+                            name={
+                              eppSeleccionado[epp]?.M
+                                ? "check-circle"
+                                : "circle-outline"
+                            }
+                            size={16}
+                            color={
+                              eppSeleccionado[epp]?.M ? "#fff" : FIORI.accent
+                            }
+                          />
+                          <Text
+                            style={[
+                              styles.eppBoxText,
+                              eppSeleccionado[epp]?.M && styles.eppBoxTextOn,
+                            ]}
+                          >
+                            M
+                          </Text>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                          style={[
+                            styles.eppBox,
+                            eppSeleccionado[epp]?.A && styles.eppBoxOnA,
+                          ]}
+                          onPress={() => toggleEppCampo(epp, "A")}
+                          disabled={lockedAfterPdf}
+                        >
+                          <MaterialCommunityIcons
+                            name={
+                              eppSeleccionado[epp]?.A
+                                ? "check-circle"
+                                : "circle-outline"
+                            }
+                            size={16}
+                            color={
+                              eppSeleccionado[epp]?.A ? "#fff" : FIORI.warning
+                            }
+                          />
+                          <Text
+                            style={[
+                              styles.eppBoxText,
+                              eppSeleccionado[epp]?.A && styles.eppBoxTextOn,
+                            ]}
+                          >
+                            A
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  );
+                })}
+              </View>
+
+              <LabeledInput
+                label="Herramientas especiales"
+                value={herramientas}
+                onChangeText={setHerramientas}
+                multiline
+                height={60}
+                editable={!lockedAfterPdf}
+                onFocus={() =>
+                  setActiveField({
+                    key: "herramientas",
+                    label: "Herramientas especiales",
+                  })
+                }
+                onBlur={() => setActiveField(null)}
+                inputAccessoryViewID={
+                  Platform.OS === "ios" ? ACCESSORY_ID : undefined
+                }
+              />
+            </View>
+          )}
+
+          {/* PASO 3 */}
+          {paso === 3 && (
+            <View>
+              <SectionTitle title="3. Análisis de riesgos (guiado)" />
+
+              {/* TAREA 1 */}
               <View style={styles.taskCard}>
-                <Text style={styles.taskTitle}>Tarea 2 — Elige TOP 1 / TOP 2 / TOP 3 (sin repetir)</Text>
+                <Text style={styles.taskTitle}>
+                  Tarea 1 — Marca riesgos presentes (mínimo 3)
+                </Text>
                 <Text style={styles.taskHint}>
-                  Al presionar <Text style={{ fontWeight: "900" }}>“Aplicar TOP 3”</Text>, se autollenarán abajo los bloques para capturar causas,
-                  medidas y acciones.
+                  Selecciona todos los riesgos que apliquen. Cuando marques 3 o
+                  más, se habilita la selección de TOP 3.
                 </Text>
 
-                <View style={styles.card}>
-
-                  <Text style={styles.miniLabel}>TOP 1</Text>
-                  <Dropdown
-                    style={styles.dropdown}
-                    data={opcionesTop1}
-                    labelField="label"
-                    valueField="value"
-                    placeholder="Elige riesgo TOP 1"
-                    value={topSeleccionIds[0]}
-                    onChange={(item) => !lockedAfterPdf && setTopSeleccionIds([item.value, topSeleccionIds[1], topSeleccionIds[2]])}
-                    disable={lockedAfterPdf}
-                  />
-
-                  <Text style={styles.miniLabel}>TOP 2</Text>
-                  <Dropdown
-                    style={styles.dropdown}
-                    data={opcionesTop2}
-                    labelField="label"
-                    valueField="value"
-                    placeholder="Elige riesgo TOP 2"
-                    value={topSeleccionIds[1]}
-                    onChange={(item) => !lockedAfterPdf && setTopSeleccionIds([topSeleccionIds[0], item.value, topSeleccionIds[2]])}
-                    disable={lockedAfterPdf}
-                  />
-
-                  <Text style={styles.miniLabel}>TOP 3</Text>
-                  <Dropdown
-                    style={styles.dropdown}
-                    data={opcionesTop3}
-                    labelField="label"
-                    valueField="value"
-                    placeholder="Elige riesgo TOP 3"
-                    value={topSeleccionIds[2]}
-                    onChange={(item) => !lockedAfterPdf && setTopSeleccionIds([topSeleccionIds[0], topSeleccionIds[1], item.value])}
-                    disable={lockedAfterPdf}
-                  />
-
-                  <View style={styles.topActionsRow}>
-                    {/*<TouchableOpacity
-                      style={[styles.smallBtn, { backgroundColor: FIORI.borderStrong }]}
-                      onPress={autollenarTopDesdeSeleccionados}
-                      disabled={lockedAfterPdf}
-                    >
-                      <Text style={[styles.smallBtnText, { color: FIORI.ink }]}>Autollenar primeros 3</Text>
-                    </TouchableOpacity>*/}
+                <View style={[styles.card, { marginBottom: 0 }]}>
+                  {riesgosBD.map((r) => (
                     <TouchableOpacity
-                      style={[styles.smallBtn, { backgroundColor: FIORI.accent }]}
-                      onPress={aplicarTop}
+                      key={r.id}
+                      style={styles.checkboxRow}
+                      onPress={() => toggleRiesgo(r.id)}
                       disabled={lockedAfterPdf}
                     >
-                      <Text style={[styles.smallBtnText, { color: "#fff" }]}>Aplicar TOP 3</Text>
+                      <Ionicons
+                        name={
+                          riesgosSeleccionadosIds.includes(r.id)
+                            ? "checkbox"
+                            : "square-outline"
+                        }
+                        size={20}
+                        color={FIORI.accent}
+                      />
+                      <Text style={styles.checkboxLabel}>{r.riesgo}</Text>
                     </TouchableOpacity>
-                  </View>
+                  ))}
                 </View>
               </View>
-            ) : (
-              <Text style={{ color: FIORI.textMuted, fontSize: 12 }}>
-                Marca al menos 3 riesgos para habilitar la selección TOP 3.
-              </Text>
-            )}
 
-            {/* TAREA 3 + 4 */}
-            {topAplicadoOk ? (
-              <>
+              {/* TAREA 2 */}
+              {riesgosSeleccionadosIds.length >= 3 ? (
                 <View style={styles.taskCard}>
-                  <Text style={styles.taskTitle}>Tarea 3 — Causas y medidas de control (para cada TOP)</Text>
+                  <Text style={styles.taskTitle}>
+                    Tarea 2 — Elige TOP 1 / TOP 2 / TOP 3 (sin repetir)
+                  </Text>
                   <Text style={styles.taskHint}>
-                    Aquí se autollenaron los riesgos TOP. Ahora captura la causa y 3 medidas por cada uno.
+                    Al presionar{" "}
+                    <Text style={{ fontWeight: "900" }}>“Aplicar TOP 3”</Text>,
+                    se autollenarán abajo los bloques para capturar causas,
+                    medidas y acciones.
                   </Text>
 
-                  {riesgosTopText.map((r, i) => (
-                    <View key={i} style={styles.card}>
-                      <Text style={styles.cardTitle}>TOP {i + 1} — {r || "Sin seleccionar"}</Text>
+                  <View style={styles.card}>
+                    <Text style={styles.miniLabel}>TOP 1</Text>
+                    <Dropdown
+                      style={styles.dropdown}
+                      data={opcionesTop1}
+                      labelField="label"
+                      valueField="value"
+                      placeholder="Elige riesgo TOP 1"
+                      value={topSeleccionIds[0]}
+                      onChange={(item) =>
+                        !lockedAfterPdf &&
+                        setTopSeleccionIds([
+                          item.value,
+                          topSeleccionIds[1],
+                          topSeleccionIds[2],
+                        ])
+                      }
+                      disable={lockedAfterPdf}
+                    />
 
+                    <Text style={styles.miniLabel}>TOP 2</Text>
+                    <Dropdown
+                      style={styles.dropdown}
+                      data={opcionesTop2}
+                      labelField="label"
+                      valueField="value"
+                      placeholder="Elige riesgo TOP 2"
+                      value={topSeleccionIds[1]}
+                      onChange={(item) =>
+                        !lockedAfterPdf &&
+                        setTopSeleccionIds([
+                          topSeleccionIds[0],
+                          item.value,
+                          topSeleccionIds[2],
+                        ])
+                      }
+                      disable={lockedAfterPdf}
+                    />
+
+                    <Text style={styles.miniLabel}>TOP 3</Text>
+                    <Dropdown
+                      style={styles.dropdown}
+                      data={opcionesTop3}
+                      labelField="label"
+                      valueField="value"
+                      placeholder="Elige riesgo TOP 3"
+                      value={topSeleccionIds[2]}
+                      onChange={(item) =>
+                        !lockedAfterPdf &&
+                        setTopSeleccionIds([
+                          topSeleccionIds[0],
+                          topSeleccionIds[1],
+                          item.value,
+                        ])
+                      }
+                      disable={lockedAfterPdf}
+                    />
+
+                    <View style={styles.topActionsRow}>
+                      <TouchableOpacity
+                        style={[
+                          styles.smallBtn,
+                          { backgroundColor: FIORI.accent },
+                        ]}
+                        onPress={aplicarTop}
+                        disabled={lockedAfterPdf}
+                      >
+                        <Text style={[styles.smallBtnText, { color: "#fff" }]}>
+                          Aplicar TOP 3
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                </View>
+              ) : (
+                <Text style={{ color: FIORI.textMuted, fontSize: 12 }}>
+                  Marca al menos 3 riesgos para habilitar la selección TOP 3.
+                </Text>
+              )}
+
+              {/* TAREA 3 + 4 */}
+              {topAplicadoOk ? (
+                <>
+                  <View style={styles.taskCard}>
+                    <Text style={styles.taskTitle}>
+                      Tarea 3 — Causas y medidas de control (para cada TOP)
+                    </Text>
+                    <Text style={styles.taskHint}>
+                      Aquí se autollenaron los riesgos TOP. Ahora captura la
+                      causa y 3 medidas por cada uno.
+                    </Text>
+
+                    {riesgosTopText.map((r, i) => (
+                      <View key={i} style={styles.card}>
+                        <Text style={styles.cardTitle}>
+                          TOP {i + 1} — {r || "Sin seleccionar"}
+                        </Text>
+
+                        <LabeledInput
+                          label="¿Por qué puede pasar?"
+                          value={causasTop[i]}
+                          onChangeText={(v) => {
+                            if (lockedAfterPdf) return;
+                            const nuevo = [...causasTop];
+                            nuevo[i] = v;
+                            setCausasTop(nuevo);
+                          }}
+                          multiline
+                          editable={!lockedAfterPdf}
+                          onFocus={() =>
+                            setActiveField({
+                              key: "causa",
+                              i,
+                              label: `TOP ${i + 1} — Causa`,
+                            })
+                          }
+                          onBlur={() => setActiveField(null)}
+                          inputAccessoryViewID={
+                            Platform.OS === "ios" ? ACCESSORY_ID : undefined
+                          }
+                        />
+
+                        <Text style={styles.miniLabel}>Medidas de control</Text>
+                        {[0, 1, 2].map((idxM) => (
+                          <TextInput
+                            key={idxM}
+                            placeholder={`Medida ${idxM + 1}`}
+                            style={styles.input}
+                            value={medidasTop[i][idxM]}
+                            onChangeText={(v) => {
+                              if (lockedAfterPdf) return;
+                              const m = medidasTop.map((fila) => [...fila]);
+                              m[i][idxM] = v;
+                              setMedidasTop(m);
+                            }}
+                            editable={!lockedAfterPdf}
+                            onFocus={() =>
+                              setActiveField({
+                                key: "medida",
+                                i,
+                                j: idxM,
+                                label: `TOP ${i + 1} — Medida ${idxM + 1}`,
+                              })
+                            }
+                            onBlur={() => setActiveField(null)}
+                            inputAccessoryViewID={
+                              Platform.OS === "ios" ? ACCESSORY_ID : undefined
+                            }
+                            placeholderTextColor="#9CA3AF"
+                          />
+                        ))}
+                      </View>
+                    ))}
+                  </View>
+
+                  <View style={styles.taskCard}>
+                    <Text style={styles.taskTitle}>
+                      Tarea 4 — Acciones a realizar (1 por TOP) *
+                    </Text>
+                    <Text style={styles.taskHint}>
+                      Escribe una acción concreta para cada TOP. Estas acciones
+                      se reflejan en el PDF.
+                    </Text>
+
+                    {acciones.map((a, i) => (
                       <LabeledInput
-                        label="¿Por qué puede pasar?"
-                        value={causasTop[i]}
+                        key={i}
+                        label={`Acción para TOP ${i + 1} *`}
+                        value={acciones[i]}
                         onChangeText={(v) => {
                           if (lockedAfterPdf) return;
-                          const nuevo = [...causasTop];
+                          const nuevo = [...acciones];
                           nuevo[i] = v;
-                          setCausasTop(nuevo);
+                          setAcciones(nuevo);
                         }}
                         multiline
                         editable={!lockedAfterPdf}
+                        onFocus={() =>
+                          setActiveField({
+                            key: "accion",
+                            i,
+                            label: `TOP ${i + 1} — Acción`,
+                          })
+                        }
+                        onBlur={() => setActiveField(null)}
+                        inputAccessoryViewID={
+                          Platform.OS === "ios" ? ACCESSORY_ID : undefined
+                        }
                       />
+                    ))}
 
-                      <Text style={styles.miniLabel}>Medidas de control</Text>
-                      {[0, 1, 2].map((idxM) => (
-                        <TextInput
-                          key={idxM}
-                          placeholder={`Medida ${idxM + 1}`}
-                          style={styles.input}
-                          value={medidasTop[i][idxM]}
-                          onChangeText={(v) => {
-                            if (lockedAfterPdf) return;
-                            const m = medidasTop.map((fila) => [...fila]);
-                            m[i][idxM] = v;
-                            setMedidasTop(m);
-                          }}
-                          editable={!lockedAfterPdf}
-                        />
-                      ))}
-                    </View>
-                  ))}
-                </View>
-
-                <View style={styles.taskCard}>
-                  <Text style={styles.taskTitle}>Tarea 4 — Acciones a realizar (1 por TOP) *</Text>
-                  <Text style={styles.taskHint}>
-                    Escribe una acción concreta para cada TOP. Estas acciones se reflejan en el PDF.
+                    {!paso3Ok && (
+                      <Text style={{ color: FIORI.textMuted, fontSize: 12 }}>
+                        Para continuar: selecciona ≥3 riesgos, aplica TOP 3 y
+                        escribe las 3 acciones.
+                      </Text>
+                    )}
+                  </View>
+                </>
+              ) : (
+                riesgosSeleccionadosIds.length >= 3 && (
+                  <Text
+                    style={{
+                      color: FIORI.textMuted,
+                      fontSize: 12,
+                      marginTop: 6,
+                    }}
+                  >
+                    Selecciona TOP 1/2/3 y presiona “Aplicar TOP 3” para
+                    habilitar las tareas 3 y 4.
                   </Text>
+                )
+              )}
+            </View>
+          )}
 
-                  {acciones.map((a, i) => (
-                    <LabeledInput
-                      key={i}
-                      label={`Acción para TOP ${i + 1} *`}
-                      value={acciones[i]}
-                      onChangeText={(v) => {
-                        if (lockedAfterPdf) return;
-                        const nuevo = [...acciones];
-                        nuevo[i] = v;
-                        setAcciones(nuevo);
-                      }}
-                      multiline
-                      editable={!lockedAfterPdf}
+          {/* PASO 4 */}
+          {paso === 4 && (
+            <View>
+              <SectionTitle title="4. Firma del técnico" />
+
+              <SectionSubTitle text="Firma del técnico (obligatoria)" />
+              <View style={styles.card}>
+                <View style={styles.firmaBox}>
+                  {firmaTecnico ? (
+                    <Image
+                      source={{ uri: toDataUrl(firmaTecnico) }}
+                      style={styles.firmaPreview}
+                      resizeMode="contain"
                     />
-                  ))}
-
-                  {!paso3Ok && (
-                    <Text style={{ color: FIORI.textMuted, fontSize: 12 }}>
-                      Para continuar: selecciona ≥3 riesgos, aplica TOP 3 y escribe las 3 acciones.
-                    </Text>
+                  ) : (
+                    <Text style={{ color: FIORI.textMuted }}>Sin firma</Text>
                   )}
                 </View>
-              </>
-            ) : (
-              riesgosSeleccionadosIds.length >= 3 && (
-                <Text style={{ color: FIORI.textMuted, fontSize: 12, marginTop: 6 }}>
-                  Selecciona TOP 1/2/3 y presiona “Aplicar TOP 3” para habilitar las tareas 3 y 4.
-                </Text>
-              )
-            )}
-          </View>
-        )}
 
-        {/* PASO 4 */}
-        {paso === 4 && (
-          <View>
-            <SectionTitle title="4. Firma del técnico" />
-
-            <SectionSubTitle text="Firma del técnico (obligatoria)" />
-            <View style={styles.card}>
-              <View style={styles.firmaBox}>
-                {firmaTecnico ? (
-                  <Image source={{ uri: toDataUrl(firmaTecnico) }} style={styles.firmaPreview} resizeMode="contain" />
-                ) : (
-                  <Text style={{ color: FIORI.textMuted }}>Sin firma</Text>
-                )}
-              </View>
-
-              <View style={styles.firmaBtnRow}>
-                <TouchableOpacity
-                  style={[styles.smallBtn, { backgroundColor: FIORI.accent }]}
-                  onPress={() => setModalFirma({ open: true, tipo: "tecnico" })}
-                  disabled={lockedAfterPdf}
-                >
-                  <Text style={[styles.smallBtnText, { color: "#fff" }]}>Firmar</Text>
-                </TouchableOpacity>
-                {firmaTecnico && (
+                <View style={styles.firmaBtnRow}>
                   <TouchableOpacity
-                    style={[styles.smallBtn, { backgroundColor: "#6b7280" }]}
-                    onPress={() => !lockedAfterPdf && setFirmaTecnico(null)}
+                    style={[styles.smallBtn, { backgroundColor: FIORI.accent }]}
+                    onPress={() =>
+                      setModalFirma({ open: true, tipo: "tecnico" })
+                    }
                     disabled={lockedAfterPdf}
                   >
-                    <Text style={[styles.smallBtnText, { color: "#fff" }]}>Borrar</Text>
+                    <Text style={[styles.smallBtnText, { color: "#fff" }]}>
+                      Firmar
+                    </Text>
                   </TouchableOpacity>
-                )}
+                  {firmaTecnico && (
+                    <TouchableOpacity
+                      style={[styles.smallBtn, { backgroundColor: "#6b7280" }]}
+                      onPress={() => !lockedAfterPdf && setFirmaTecnico(null)}
+                      disabled={lockedAfterPdf}
+                    >
+                      <Text style={[styles.smallBtnText, { color: "#fff" }]}>
+                        Borrar
+                      </Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
               </View>
-            </View>
 
-            {!paso4Ok && (
-              <Text style={{ color: FIORI.textMuted, fontSize: 12 }}>
-                Captura la firma del técnico para poder enviar.
-              </Text>
-            )}
-          </View>
-        )}
-      </ScrollView>
+              {!paso4Ok && (
+                <Text style={{ color: FIORI.textMuted, fontSize: 12 }}>
+                  Captura la firma del técnico para poder enviar.
+                </Text>
+              )}
+            </View>
+          )}
+        </ScrollView>
+      </KeyboardAvoidingView>
 
       {/* Controles de paso */}
       <View style={styles.footerNav}>
         {paso > 1 && (
-          <TouchableOpacity onPress={goPrev} style={[styles.navBtn, styles.navBtnSecondary]} disabled={lockedAfterPdf}>
+          <TouchableOpacity
+            onPress={goPrev}
+            style={[styles.navBtn, styles.navBtnSecondary]}
+            disabled={lockedAfterPdf}
+          >
             <Text style={[styles.navBtnTextSecondary]}>Atrás</Text>
           </TouchableOpacity>
         )}
@@ -1247,7 +1733,11 @@ export default function FormularioRiesgosScreen() {
         {paso < 4 && (
           <TouchableOpacity
             onPress={goNext}
-            style={[styles.navBtn, styles.navBtnPrimary, !canNext && { opacity: 0.5 }]}
+            style={[
+              styles.navBtn,
+              styles.navBtnPrimary,
+              !canNext && { opacity: 0.5 },
+            ]}
             disabled={lockedAfterPdf}
           >
             <Text style={styles.navBtnTextPrimary}>Siguiente</Text>
@@ -1264,17 +1754,29 @@ export default function FormularioRiesgosScreen() {
             ]}
             disabled={saving || !canSubmit || lockedAfterPdf}
           >
-            {saving ? <ActivityIndicator color="#fff" /> : <Text style={styles.navBtnTextPrimary}>Guardar y enviar a SAP</Text>}
+            {saving ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <Text style={styles.navBtnTextPrimary}>
+                Guardar y enviar a SAP
+              </Text>
+            )}
           </TouchableOpacity>
         )}
       </View>
 
       {/* Modal de firma */}
-      <Modal visible={modalFirma.open} animationType="slide" onRequestClose={() => setModalFirma({ open: false, tipo: null })}>
+      <Modal
+        visible={modalFirma.open}
+        animationType="slide"
+        onRequestClose={() => setModalFirma({ open: false, tipo: null })}
+      >
         <View style={{ flex: 1, backgroundColor: "#fff" }}>
           <View style={styles.modalHeader}>
             <Text style={styles.modalHeaderTitle}>Firma del técnico</Text>
-            <TouchableOpacity onPress={() => setModalFirma({ open: false, tipo: null })}>
+            <TouchableOpacity
+              onPress={() => setModalFirma({ open: false, tipo: null })}
+            >
               <Ionicons name="close" size={22} color={FIORI.textMuted} />
             </TouchableOpacity>
           </View>
@@ -1286,7 +1788,9 @@ export default function FormularioRiesgosScreen() {
                 setFirmaTecnico(cleanB64);
                 setModalFirma({ open: false, tipo: null });
               }}
-              onEmpty={() => Alert.alert("Sin trazo", "Dibuja tu firma dentro del recuadro.")}
+              onEmpty={() =>
+                Alert.alert("Sin trazo", "Dibuja tu firma dentro del recuadro.")
+              }
               descriptionText="Firme dentro del recuadro"
               clearText="Limpiar"
               confirmText="Guardar"
@@ -1305,12 +1809,22 @@ export default function FormularioRiesgosScreen() {
       </Modal>
 
       {/* Modal PDF */}
-      <Modal visible={showPdfModal} animationType="fade" transparent onRequestClose={closePdfModal}>
+      <Modal
+        visible={showPdfModal}
+        animationType="fade"
+        transparent
+        onRequestClose={closePdfModal}
+      >
         <View style={styles.pdfModalBackdrop}>
           <View style={styles.pdfModalCard}>
             <View style={styles.pdfModalHeader}>
-              <Text style={styles.pdfModalTitle}>PDF — Formulario de riesgos</Text>
-              <TouchableOpacity style={styles.pdfCloseBtn} onPress={closePdfModal}>
+              <Text style={styles.pdfModalTitle}>
+                PDF — Formulario de riesgos
+              </Text>
+              <TouchableOpacity
+                style={styles.pdfCloseBtn}
+                onPress={closePdfModal}
+              >
                 <Ionicons name="close" size={20} color="#fff" />
               </TouchableOpacity>
             </View>
@@ -1324,7 +1838,10 @@ export default function FormularioRiesgosScreen() {
 
               <View style={{ marginTop: 14, gap: 10 }}>
                 <TouchableOpacity
-                  style={[styles.bigActionBtn, { backgroundColor: FIORI.accent }]}
+                  style={[
+                    styles.bigActionBtn,
+                    { backgroundColor: FIORI.accent },
+                  ]}
                   onPress={abrirPdfEnVisor}
                   disabled={downloadingPdf}
                 >
@@ -1339,20 +1856,39 @@ export default function FormularioRiesgosScreen() {
                   onPress={compartirPdf}
                   disabled={downloadingPdf}
                 >
-                  <Ionicons name="share-social-outline" size={18} color="#fff" />
+                  <Ionicons
+                    name="share-social-outline"
+                    size={18}
+                    color="#fff"
+                  />
                   <Text style={[styles.bigActionText, { color: "#fff" }]}>
                     {downloadingPdf ? "Preparando…" : "Compartir"}
                   </Text>
                 </TouchableOpacity>
 
-                <TouchableOpacity style={[styles.bigActionBtn, { backgroundColor: "#F3F4F6" }]} onPress={closePdfModal}>
-                  <Ionicons name="close-circle-outline" size={18} color={FIORI.ink} />
-                  <Text style={[styles.bigActionText, { color: FIORI.ink }]}>Cerrar</Text>
+                <TouchableOpacity
+                  style={[styles.bigActionBtn, { backgroundColor: "#F3F4F6" }]}
+                  onPress={closePdfModal}
+                >
+                  <Ionicons
+                    name="close-circle-outline"
+                    size={18}
+                    color={FIORI.ink}
+                  />
+                  <Text style={[styles.bigActionText, { color: FIORI.ink }]}>
+                    Cerrar
+                  </Text>
                 </TouchableOpacity>
               </View>
 
               {!!pdfLocalUri && (
-                <Text style={{ fontSize: 11, color: FIORI.textMuted, marginTop: 10 }}>
+                <Text
+                  style={{
+                    fontSize: 11,
+                    color: FIORI.textMuted,
+                    marginTop: 10,
+                  }}
+                >
                   Ruta local: {pdfLocalUri}
                 </Text>
               )}
@@ -1360,6 +1896,49 @@ export default function FormularioRiesgosScreen() {
           </View>
         </View>
       </Modal>
+
+      {/* ==========================
+          ✅ Recuadro flotante arriba del teclado
+          ========================== */}
+      {Platform.OS === "android" && !!activeField?.key && (
+        <Animated.View style={[styles.kbBar, { bottom: keyboardBottom }]}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.kbBarTitle}>{activeField?.label}:</Text>
+            <Text style={styles.kbBarValue} numberOfLines={4}>
+              {kbPreviewValue || " "}
+            </Text>
+          </View>
+
+          <TouchableOpacity
+            onPress={() => Keyboard.dismiss()}
+            style={styles.kbBarBtn}
+          >
+            <Text style={styles.kbBarBtnText}>Listo</Text>
+          </TouchableOpacity>
+        </Animated.View>
+      )}
+
+      {Platform.OS === "ios" && (
+        <InputAccessoryView nativeID={ACCESSORY_ID}>
+          <View style={styles.kbBarIOS}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.kbBarTitle}>
+                {activeField?.label || "Escribiendo"}:
+              </Text>
+              <Text style={styles.kbBarValue} numberOfLines={4}>
+                {kbPreviewValue || " "}
+              </Text>
+            </View>
+
+            <TouchableOpacity
+              onPress={() => Keyboard.dismiss()}
+              style={styles.kbBarBtn}
+            >
+              <Text style={styles.kbBarBtnText}>Listo</Text>
+            </TouchableOpacity>
+          </View>
+        </InputAccessoryView>
+      )}
 
       {/* ✅ BLOQUEO TOTAL mientras saving=true (PDF/SAP) */}
       <Modal visible={saving} transparent animationType="fade">
@@ -1394,19 +1973,44 @@ function buildRazonSocial(a) {
 }
 
 function buildDireccion(a) {
-  const street = [a?.Street, a?.HouseNum1].map((x) => String(x || "").trim()).filter(Boolean).join(" ");
-  const supl = [a?.StrSuppl1, a?.StrSuppl2, a?.StrSuppl3].map((x) => String(x || "").trim()).filter(Boolean).join(" ");
-  const loc = [a?.Location, a?.City2, a?.City1].map((x) => String(x || "").trim()).filter(Boolean).join(", ");
-  const reg = [a?.Region, a?.PostCode1].map((x) => String(x || "").trim()).filter(Boolean).join(" ");
-  return [street, supl, loc, reg].map((x) => String(x || "").trim()).filter(Boolean).join(", ");
+  const street = [a?.Street, a?.HouseNum1]
+    .map((x) => String(x || "").trim())
+    .filter(Boolean)
+    .join(" ");
+  const supl = [a?.StrSuppl1, a?.StrSuppl2, a?.StrSuppl3]
+    .map((x) => String(x || "").trim())
+    .filter(Boolean)
+    .join(" ");
+  const loc = [a?.Location, a?.City2, a?.City1]
+    .map((x) => String(x || "").trim())
+    .filter(Boolean)
+    .join(", ");
+  const reg = [a?.Region, a?.PostCode1]
+    .map((x) => String(x || "").trim())
+    .filter(Boolean)
+    .join(" ");
+  return [street, supl, loc, reg]
+    .map((x) => String(x || "").trim())
+    .filter(Boolean)
+    .join(", ");
 }
 
 /* ==== Componentes pequeños ==== */
 function HeaderRow({ label, value, multiline }) {
   return (
-    <View style={{ flexDirection: "row", alignItems: multiline ? "flex-start" : "center" }}>
-      <Text style={{ fontSize: 12, color: FIORI.textMuted, width: 90 }}>{label}:</Text>
-      <Text style={{ flex: 1, fontSize: 13, color: FIORI.text }} numberOfLines={multiline ? 3 : 1}>
+    <View
+      style={{
+        flexDirection: "row",
+        alignItems: multiline ? "flex-start" : "center",
+      }}
+    >
+      <Text style={{ fontSize: 12, color: FIORI.textMuted, width: 90 }}>
+        {label}:
+      </Text>
+      <Text
+        style={{ flex: 1, fontSize: 13, color: FIORI.text }}
+        numberOfLines={multiline ? 3 : 1}
+      >
         {value || "—"}
       </Text>
     </View>
@@ -1423,7 +2027,19 @@ function SectionTitle({ title }) {
 function SectionSubTitle({ text }) {
   return <Text style={styles.sectionSubTitle}>{text}</Text>;
 }
-function LabeledInput({ label, value, onChangeText, multiline = false, height, editable = true }) {
+function LabeledInput({
+  label,
+  value,
+  onChangeText,
+  multiline = false,
+  height,
+  editable = true,
+  onFocus,
+  onBlur,
+  inputAccessoryViewID,
+}) {
+  const safeOnChange =
+    typeof onChangeText === "function" ? onChangeText : () => {};
   return (
     <View style={{ marginBottom: 10 }}>
       <Text style={styles.fieldLabel}>{label}</Text>
@@ -1434,9 +2050,13 @@ function LabeledInput({ label, value, onChangeText, multiline = false, height, e
           multiline && { height: height || 80, textAlignVertical: "top" },
         ]}
         value={String(value ?? "")}
-        onChangeText={onChangeText}
+        onChangeText={safeOnChange}
         editable={editable}
         multiline={multiline}
+        onFocus={onFocus}
+        onBlur={onBlur}
+        inputAccessoryViewID={inputAccessoryViewID}
+        placeholderTextColor="#9CA3AF"
       />
     </View>
   );
@@ -1466,7 +2086,10 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     backgroundColor: FIORI.cardBg,
   },
-  stepCircleActive: { borderColor: FIORI.accent, backgroundColor: FIORI.accentSoft },
+  stepCircleActive: {
+    borderColor: FIORI.accent,
+    backgroundColor: FIORI.accentSoft,
+  },
   stepCircleDone: { borderColor: FIORI.accent, backgroundColor: FIORI.accent },
   stepCircleText: { fontSize: 12, color: FIORI.textMuted, fontWeight: "600" },
   stepCircleTextActive: { color: FIORI.accent },
@@ -1482,7 +2105,11 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     marginBottom: 14,
   },
-  headerRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  headerRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
   pill: {
     flexDirection: "row",
     alignItems: "center",
@@ -1491,17 +2118,39 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     backgroundColor: FIORI.accentSoft,
   },
-  pillText: { marginLeft: 6, fontSize: 12, color: FIORI.accent, fontWeight: "600" },
+  pillText: {
+    marginLeft: 6,
+    fontSize: 12,
+    color: FIORI.accent,
+    fontWeight: "600",
+  },
 
   badge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 999 },
   badgeOk: { backgroundColor: "#E7F7ED" },
   badgeWarn: { backgroundColor: "#FDECEA" },
   badgeText: { fontSize: 11, fontWeight: "700", color: FIORI.text },
 
-  sectionTitleWrap: { flexDirection: "row", alignItems: "center", marginTop: 14, marginBottom: 8 },
-  sectionTitleBar: { width: 4, height: 18, borderRadius: 2, backgroundColor: FIORI.accent, marginRight: 8 },
+  sectionTitleWrap: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: 14,
+    marginBottom: 8,
+  },
+  sectionTitleBar: {
+    width: 4,
+    height: 18,
+    borderRadius: 2,
+    backgroundColor: FIORI.accent,
+    marginRight: 8,
+  },
   sectionTitleText: { fontSize: 16, fontWeight: "700", color: FIORI.ink },
-  sectionSubTitle: { fontSize: 13, fontWeight: "600", color: FIORI.textMuted, marginTop: 10, marginBottom: 6 },
+  sectionSubTitle: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: FIORI.textMuted,
+    marginTop: 10,
+    marginBottom: 6,
+  },
 
   taskCard: {
     backgroundColor: "#FFFFFF",
@@ -1512,7 +2161,13 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   taskTitle: { fontSize: 14, fontWeight: "900", color: FIORI.ink },
-  taskHint: { fontSize: 12, color: FIORI.textMuted, marginTop: 6, marginBottom: 8, lineHeight: 16 },
+  taskHint: {
+    fontSize: 12,
+    color: FIORI.textMuted,
+    marginTop: 6,
+    marginBottom: 8,
+    lineHeight: 16,
+  },
 
   fixedTile: {
     backgroundColor: FIORI.cardBg,
@@ -1555,14 +2210,34 @@ const styles = StyleSheet.create({
     borderColor: FIORI.border,
     borderWidth: 1,
   },
-  cardTitle: { fontWeight: "700", color: FIORI.ink, marginBottom: 6, fontSize: 14 },
+  cardTitle: {
+    fontWeight: "700",
+    color: FIORI.ink,
+    marginBottom: 6,
+    fontSize: 14,
+  },
 
-  checkboxRow: { flexDirection: "row", alignItems: "center", paddingVertical: 6 },
+  checkboxRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 6,
+  },
   checkboxLabel: { marginLeft: 10, color: FIORI.text, fontSize: 13, flex: 1 },
 
-  miniLabel: { fontSize: 12, color: FIORI.textMuted, marginTop: 8, marginBottom: 4, fontWeight: "600" },
+  miniLabel: {
+    fontSize: 12,
+    color: FIORI.textMuted,
+    marginTop: 8,
+    marginBottom: 4,
+    fontWeight: "600",
+  },
 
-  eppGrid: { flexDirection: "row", flexWrap: "wrap", justifyContent: "space-between", marginBottom: 10 },
+  eppGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "space-between",
+    marginBottom: 10,
+  },
   eppItem: {
     width: "48%",
     backgroundColor: FIORI.cardSoft,
@@ -1592,7 +2267,12 @@ const styles = StyleSheet.create({
   eppBoxText: { fontWeight: "800", color: FIORI.ink },
   eppBoxTextOn: { color: "#fff" },
 
-  topActionsRow: { flexDirection: "row", justifyContent: "space-between", gap: 10, marginBottom: 10 },
+  topActionsRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    gap: 10,
+    marginBottom: 10,
+  },
 
   smallBtn: { paddingHorizontal: 10, paddingVertical: 8, borderRadius: 10 },
   smallBtnText: { fontSize: 12, fontWeight: "700" },
@@ -1621,8 +2301,17 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     gap: 10,
   },
-  navBtn: { flex: 1, paddingVertical: 12, borderRadius: 12, alignItems: "center" },
-  navBtnSecondary: { backgroundColor: FIORI.cardSoft, borderWidth: 1, borderColor: FIORI.border },
+  navBtn: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 12,
+    alignItems: "center",
+  },
+  navBtnSecondary: {
+    backgroundColor: FIORI.cardSoft,
+    borderWidth: 1,
+    borderColor: FIORI.border,
+  },
   navBtnPrimary: { backgroundColor: FIORI.accent },
   navBtnPrimaryStrong: { backgroundColor: FIORI.accent },
   navBtnTextSecondary: { color: FIORI.ink, fontWeight: "800" },
@@ -1679,6 +2368,49 @@ const styles = StyleSheet.create({
     borderRadius: 12,
   },
   bigActionText: { fontWeight: "800", fontSize: 13 },
+
+  // ✅ Barra arriba del teclado (Android)
+  kbBar: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    backgroundColor: "#FFFFFF",
+    borderTopWidth: 1,
+    borderColor: FIORI.border,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    zIndex: 9999,
+    elevation: 20,
+  },
+  // ✅ Barra arriba del teclado (iOS - accessory)
+  kbBarIOS: {
+    backgroundColor: "#FFFFFF",
+    borderTopWidth: 1,
+    borderColor: FIORI.border,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    zIndex: 9999,
+  },
+  kbBarTitle: {
+    fontSize: 12,
+    color: FIORI.textMuted,
+    fontWeight: "700",
+    marginBottom: 2,
+  },
+  kbBarValue: { fontSize: 14, color: FIORI.text, fontWeight: "700" },
+  kbBarBtn: {
+    backgroundColor: FIORI.accent,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 10,
+  },
+  kbBarBtnText: { color: "#fff", fontWeight: "900" },
 
   // ✅ blocker overlay
   blockerBackdrop: {
