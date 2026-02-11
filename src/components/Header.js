@@ -40,7 +40,7 @@ export default function Header({ title }) {
       {/* ===== LOGO CENTRADO ===== */}
       <View style={styles.logoWrapper}>
         <Image
-          source={require("../../assets/logo_simple.png")}
+          source={require("../../assets/icon.png")}
           style={styles.logo}
           resizeMode="contain"
         />

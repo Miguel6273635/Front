@@ -11,7 +11,7 @@ import { Ionicons } from "@expo/vector-icons";
  * - Banner Orden finalizada real (0300/0500) -> referencia
  * - Banner Pendiente de firma (0400) -> continuar
  * - Panel solicitante (partners)
- * - Panel datos orden (equipo, dirección, inicio, fin)
+ * - Panel datos orden (equipo, correo, dirección, inicio, fin)
  * - Botón ver materiales asignados
  * - Texto "Operaciones asignadas"
  */
@@ -51,9 +51,21 @@ export default function EncabezadoDetalleOrden({
   // callbacks
   onAbrirPdfNoMant,
   onVerMaterialesOrden,
+  orderStartedAtMs, // (opcional, por si lo quieres mostrar aquí)
+  orderFinishedAtMs, // (opcional, por si lo quieres mostrar aquí)
 }) {
   const statusCode = String(orden?.estatus_code || orden?.userstatus || "").trim();
   const isPendingFirma0400 = statusCode === "0400";
+
+  // ✅ correo ya guardado por el padre en orden.cliente_email
+  const correoCliente =
+    String(
+      orden?.cliente_email ||
+        orden?.email_cliente ||
+        orden?.mail_cliente ||
+        orden?.Mail1 ||
+        ""
+    ).trim() || null;
 
   return (
     <>
@@ -82,14 +94,20 @@ export default function EncabezadoDetalleOrden({
           <View style={{ flex: 1 }}>
             <Text style={styles.noMantTitle}>Orden marcada como "No mantenimiento"</Text>
             <Text style={styles.noMantText}>
-              Consulta la carta de no mantenimiento en PDF. Las operaciones se muestran solo para
-              referencia y no se pueden iniciar.
+              Las operaciones se muestran solo para referencia y no se pueden iniciar.
             </Text>
-          </View>
 
-          <TouchableOpacity style={styles.btnNoMantBanner} onPress={onAbrirPdfNoMant}>
-            <Text style={styles.btnNoMantBannerText}>Ver PDF</Text>
-          </TouchableOpacity>
+            {/* Si tuvieras botón para PDF no mantenimiento en header */}
+            {typeof onAbrirPdfNoMant === "function" && (
+              <TouchableOpacity
+                style={[styles.btnNoMantBanner, { marginTop: 10 }]}
+                onPress={onAbrirPdfNoMant}
+                activeOpacity={0.9}
+              >
+                <Text style={styles.btnNoMantBannerText}>Ver carta PDF</Text>
+              </TouchableOpacity>
+            )}
+          </View>
         </View>
       )}
 
@@ -123,7 +141,7 @@ export default function EncabezadoDetalleOrden({
           <View style={{ flex: 1 }}>
             <Text style={styles.noMantTitle}>Operaciones bloqueadas</Text>
             <Text style={styles.noMantText}>
-              Primero debes hacer Check-in para habilitar iniciar/pausar/finalizar operaciones.
+              Primero debes hacer Check-in y el formulario TBMK/Y para habilitar el inicio de la orden.
             </Text>
           </View>
         </View>
@@ -168,24 +186,54 @@ export default function EncabezadoDetalleOrden({
           styles={styles}
           formatValueForRow={formatValueForRow}
         />
+
+        {/* ✅ NUEVO: Correo del cliente */}
+        <Row
+          label="Correo"
+          value={correoCliente}
+          styles={styles}
+          formatValueForRow={formatValueForRow}
+        />
+
         <Row
           label="Dirección"
           value={direccionValor}
           styles={styles}
           formatValueForRow={formatValueForRow}
         />
+
         <Row
           label="Inicio"
           value={fmtDMY(orden?.start_date)}
           styles={styles}
           formatValueForRow={formatValueForRow}
         />
+
         <Row
           label="Fin"
           value={fmtDMY(orden?.finish_date)}
           styles={styles}
           formatValueForRow={formatValueForRow}
         />
+
+        {/* (Opcional) Si quieres mostrar inicio/fin LOCAL del cronómetro:
+        {orderStartedAtMs ? (
+          <Row
+            label="Inicio (local)"
+            value={new Date(orderStartedAtMs).toLocaleString()}
+            styles={styles}
+            formatValueForRow={formatValueForRow}
+          />
+        ) : null}
+        {orderFinishedAtMs ? (
+          <Row
+            label="Fin (local)"
+            value={new Date(orderFinishedAtMs).toLocaleString()}
+            styles={styles}
+            formatValueForRow={formatValueForRow}
+          />
+        ) : null}
+        */}
 
         {allMaterialsLen > 0 && (
           <TouchableOpacity

@@ -87,8 +87,8 @@ function agruparPorUsr00YUsr01(ops = []) {
   const porCategoria = {};
 
   for (const op of ops || []) {
-    const cat = normalizeUsr00(op);
-    const item = normalizeUsr01(op);
+    const cat = normalizeUsr00(op); //Usr00 (Global)
+    const item = normalizeUsr01(op); //Usr01 (ITEM)
 
     if (!porCategoria[cat]) porCategoria[cat] = {};
     if (!porCategoria[cat][item]) porCategoria[cat][item] = [];

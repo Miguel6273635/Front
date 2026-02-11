@@ -650,6 +650,27 @@ export default function DetalleOrden() {
       const localState = await loadOpState(orderIdReal);
       const opsMerged = mergeOpsWithLocalState(orderIdReal, opsWithId, localState);
 
+            // Correo (ToPartners -> tomar el RE)
+      let clienteEmail = "";
+      try {
+        const resPartners = await api.get(
+          `/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet('${orderIdParam}')/ToPartners`,
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
+
+        const results =
+          resPartners?.data?.d?.results ||
+          resPartners?.data?.results ||
+          resPartners?.data?.d?.ToPartners?.results ||
+          [];
+
+        const re = (results || []).find((p) => String(p?.PartnRoleOld || "").trim() === "RE");
+
+        clienteEmail = String(re?.Mail1 || re?.Mail2 || "").trim();
+      } catch (e) {
+        console.warn("[MAIL] no se pudo cargar ToPartners:", e?.response?.data || e?.message || e);
+      }
+
       const data = {
         ...baseOrden,
         direccion:
@@ -662,7 +683,8 @@ export default function DetalleOrden() {
           clienteSap ||
           baseOrden?.cliente ||
           `${baseOrden?.Name1 ?? ""} ${baseOrden?.Name2 ?? ""}`.trim(),
-        operaciones: opsMerged,
+        cliente_email: clienteEmail || baseOrden?.cliente_email || "",
+          operaciones: opsMerged,
       };
 
       setOrden(data);
