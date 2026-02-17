@@ -1,5 +1,5 @@
 // app/tecnico/ordenes/index.js
-import React, { useEffect, useMemo, useState, useCallback } from "react";
+import React, { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import {
   View,
   Text,
@@ -20,14 +20,16 @@ import { router } from "expo-router";
 import * as ImagePicker from "expo-image-picker";
 import * as ImageManipulator from "expo-image-manipulator";
 import NetInfo from "@react-native-community/netinfo";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 import {
-  buildOfflineWindow,
-  filterOrdenesByWindow,
   loadOrdenesTecnicoList,
   saveOrdenesTecnicoList,
   pruneDetallesNoUsados,
+  buildOfflineWindow,
+  filterOrdenesByWindow,
 } from "../../../src/offline/ordenesTecnicoCache";
+
 // ✅ NUEVO: prefetch de detalles para que NO tengas que entrar a cada orden
 import { prefetchOrdenesTecnicoDetalles } from "../../../src/offline/prefetchOrdenesTecnico";
 
@@ -81,6 +83,14 @@ const getUtcYmd = (d) => {
   const yyyy = d.getUTCFullYear();
   const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
   const dd = String(d.getUTCDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+};
+
+const formatLocalYmd = (d) => {
+  if (!d) return null;
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
   return `${yyyy}-${mm}-${dd}`;
 };
 
@@ -176,29 +186,101 @@ function resolveUserstatus(rawUserstatus, catalogMap = {}, itemFromApi = null) {
   for (const p of PRIORITY) {
     if (codes.includes(p)) {
       if (p === "0100")
-        return { code: p, label: "PENDIENTE", type: "pendiente", color: "#D64545", lockActions: false, allowCheckin: false, isNoMantto: false, rawCodes: codes };
+        return {
+          code: p,
+          label: "PENDIENTE",
+          type: "pendiente",
+          color: "#D64545",
+          lockActions: false,
+          allowCheckin: false,
+          isNoMantto: false,
+          rawCodes: codes,
+        };
       if (p === "0200")
-        return { code: p, label: "PROCESO", type: "proceso", color: "#D49C00", lockActions: false, allowCheckin: false, isNoMantto: false, rawCodes: codes };
+        return {
+          code: p,
+          label: "PROCESO",
+          type: "proceso",
+          color: "#D49C00",
+          lockActions: false,
+          allowCheckin: false,
+          isNoMantto: false,
+          rawCodes: codes,
+        };
       if (p === "0300")
-        return { code: p, label: "FINALIZADA", type: "final", color: "#27AE60", lockActions: true, allowCheckin: false, isNoMantto: false, rawCodes: codes };
+        return {
+          code: p,
+          label: "FINALIZADA",
+          type: "final",
+          color: "#27AE60",
+          lockActions: true,
+          allowCheckin: false,
+          isNoMantto: false,
+          rawCodes: codes,
+        };
       if (p === "0400")
-        return { code: p, label: "PENDIENTE DE FIRMA", type: "firma", color: "#2D9CDB", lockActions: false, allowCheckin: false, isNoMantto: false, rawCodes: codes };
+        return {
+          code: p,
+          label: "PENDIENTE DE FIRMA",
+          type: "firma",
+          color: "#2D9CDB",
+          lockActions: false,
+          allowCheckin: false,
+          isNoMantto: false,
+          rawCodes: codes,
+        };
       if (p === "0500")
-        return { code: p, label: "FINALIZADA C/PENDIENTES", type: "final_pend", color: "#2D9CDB", lockActions: true, allowCheckin: false, isNoMantto: false, rawCodes: codes };
+        return {
+          code: p,
+          label: "FINALIZADA C/PENDIENTES",
+          type: "final_pend",
+          color: "#2D9CDB",
+          lockActions: true,
+          allowCheckin: false,
+          isNoMantto: false,
+          rawCodes: codes,
+        };
     }
   }
 
   if (codes.includes("0012")) {
-    return { code: "0012", label: "Sin empezar", type: "start", color: "#6A7381", lockActions: false, allowCheckin: true, isNoMantto: false, rawCodes: codes };
+    return {
+      code: "0012",
+      label: "Sin empezar",
+      type: "start",
+      color: "#6A7381",
+      lockActions: false,
+      allowCheckin: true,
+      isNoMantto: false,
+      rawCodes: codes,
+    };
   }
 
   if (allAreNoMantto(codes)) {
     const main = codes[0];
     const cause = catalogMap?.[main] || `No mantenimiento (${main})`;
-    return { code: main, label: cause, type: "no_mantto", color: "#9E9E9E", lockActions: true, allowCheckin: false, isNoMantto: true, rawCodes: codes };
+    return {
+      code: main,
+      label: cause,
+      type: "no_mantto",
+      color: "#9E9E9E",
+      lockActions: true,
+      allowCheckin: false,
+      isNoMantto: true,
+      rawCodes: codes,
+    };
   }
 
-  return { code: codes[0], label: `Estatus ${codes.join(", ")}`, type: "unknown", color: "#6A7381", lockActions: false, allowCheckin: false, isNoMantto: false, rawCodes: codes };
+  return {
+    code: codes[0],
+    label: `Estatus ${codes.join(", ")}`,
+    type: "unknown",
+    color: "#6A7381",
+    lockActions: false,
+    allowCheckin: false,
+    isNoMantto: false,
+    rawCodes: codes,
+  };
 }
 
 /* =========================
@@ -223,8 +305,51 @@ const matchesQuery = (item, q) => {
   return fields.includes(needle);
 };
 
+/* =========================
+   ✅ CHECKIN OFFLINE QUEUE
+   ========================= */
+function makeQueueKey(userEmail) {
+  const safe = String(userEmail || "anon").toLowerCase().trim() || "anon";
+  return `checkin_queue_v1_${safe}`;
+}
+
+async function loadCheckinQueue(userEmail) {
+  try {
+    const key = makeQueueKey(userEmail);
+    const raw = await AsyncStorage.getItem(key);
+    const arr = raw ? JSON.parse(raw) : [];
+    return Array.isArray(arr) ? arr : [];
+  } catch {
+    return [];
+  }
+}
+
+async function saveCheckinQueue(userEmail, arr) {
+  const key = makeQueueKey(userEmail);
+  await AsyncStorage.setItem(key, JSON.stringify(Array.isArray(arr) ? arr : []));
+}
+
+async function enqueueCheckin(userEmail, item) {
+  const q = await loadCheckinQueue(userEmail);
+  // evita duplicados por OrderId
+  const exists = q.some((x) => String(x?.orderId) === String(item?.orderId));
+  if (exists) return q;
+  const next = [{ ...item }, ...q].slice(0, 50); // límite defensivo
+  await saveCheckinQueue(userEmail, next);
+  return next;
+}
+
+async function removeFromQueue(userEmail, orderId) {
+  const q = await loadCheckinQueue(userEmail);
+  const next = q.filter((x) => String(x?.orderId) !== String(orderId));
+  await saveCheckinQueue(userEmail, next);
+  return next;
+}
+
 export default function ListaOrdenesTecnico() {
   const { user, ensureValidToken } = useAuth();
+
+  const userEmail = user?.correo || user?.email || user?.username || null;
 
   const [allOrdenes, setAllOrdenes] = useState([]);
   const [ordenes, setOrdenes] = useState([]);
@@ -260,6 +385,19 @@ export default function ListaOrdenesTecnico() {
   // ✅ catálogo status
   const [statusCatalogMap, setStatusCatalogMap] = useState({});
 
+  // ✅ estado red + cola
+  const [isOnline, setIsOnline] = useState(true);
+  const [checkinQueue, setCheckinQueue] = useState([]); // [{orderId, photoBase64, createdAt}]
+  const syncingRef = useRef(false);
+
+  const pendingSet = useMemo(() => {
+    const s = new Set();
+    (checkinQueue || []).forEach((x) => {
+      if (x?.orderId) s.add(String(x.orderId));
+    });
+    return s;
+  }, [checkinQueue]);
+
   const { start, end } = useMemo(() => {
     if (dateMode === "day") {
       const s = atStartOfDay(dayRef);
@@ -278,11 +416,33 @@ export default function ListaOrdenesTecnico() {
     if (dateMode === "year") {
       return { start: startOfYear(yearOnly), end: endOfYear(yearOnly) };
     }
+    // ✅ "all" = últimos 90 días
     const e = new Date();
     const s = new Date();
     s.setDate(s.getDate() - 90);
     return { start: atStartOfDay(s), end: atEndOfDay(e) };
   }, [dateMode, dayRef, weekStart, weekEnd, monthYear, yearOnly]);
+
+  // ✅ define el rango REAL que le vas a pedir a SAP según el filtro (solo para UI ONLINE)
+  const getSapRequestRange = useCallback(() => {
+    if (dateMode === "all" || dateMode === "month" || dateMode === "year" || dateMode === "weekRange") {
+      const s = atStartOfDay(start);
+      const e = atEndOfDay(end);
+      return { startDate: s, endDate: e, startStr: formatLocalYmd(s), endStr: formatLocalYmd(e) };
+    }
+
+    if (dateMode === "day") {
+      const s = atStartOfDay(dayRef);
+      const e = atEndOfDay(dayRef);
+      return { startDate: s, endDate: e, startStr: formatLocalYmd(s), endStr: formatLocalYmd(e) };
+    }
+
+    const e = atEndOfDay(new Date());
+    const s = new Date();
+    s.setDate(s.getDate() - 90);
+    const ss = atStartOfDay(s);
+    return { startDate: ss, endDate: e, startStr: formatLocalYmd(ss), endStr: formatLocalYmd(e) };
+  }, [dateMode, start, end, dayRef]);
 
   const fetchStatusCatalog = async () => {
     try {
@@ -303,15 +463,37 @@ export default function ListaOrdenesTecnico() {
     }
   };
 
+  // ✅ carga cola al iniciar / al cambiar usuario
+  const refreshQueue = useCallback(async () => {
+    const q = await loadCheckinQueue(userEmail);
+    setCheckinQueue(q);
+  }, [userEmail]);
+
+  useEffect(() => {
+    refreshQueue();
+  }, [refreshQueue]);
+
+  // ✅ escuchar red (para auto-sync)
+  useEffect(() => {
+    const unsub = NetInfo.addEventListener((state) => {
+      const onlineNow = !!(state?.isConnected && state?.isInternetReachable !== false);
+      setIsOnline(onlineNow);
+    });
+    return () => unsub();
+  }, []);
+
+  /**
+   * ✅ REGLA CLAVE:
+   * - ONLINE: muestra TODO lo que regrese SAP (según filtros)
+   * - OFFLINE CACHE: guarda SOLO ventana hoy±8 días
+   */
   const fetchOrdenes = useCallback(
     async ({ isRefresh = false } = {}) => {
-      const userEmail = user?.correo || user?.email || user?.username || null;
-
       try {
         if (isRefresh) setRefreshing(true);
         else setLoading(true);
 
-        // 0) Si hay cache, úsalo rápido (especialmente primera carga)
+        // 0) Carga rápida desde cache SOLO si NO es refresh
         if (!isRefresh) {
           const cached = await loadOrdenesTecnicoList(userEmail);
           if (cached?.data?.length) {
@@ -322,22 +504,33 @@ export default function ListaOrdenesTecnico() {
 
         // 1) ¿hay internet?
         const net = await NetInfo.fetch();
-        const isOnline = !!(net?.isConnected && net?.isInternetReachable !== false);
+        const online = !!(net?.isConnected && net?.isInternetReachable !== false);
+        setIsOnline(online);
 
-        // 2) Si NO hay internet -> no intentes SAP; deja cache si existe
-        if (!isOnline) {
+        // 2) OFFLINE: usa cache
+        if (!online) {
           const cached = await loadOrdenesTecnicoList(userEmail);
           if (!cached?.data?.length) {
             Alert.alert("Sin conexión", "No hay internet y no hay datos guardados aún.");
+          } else {
+            setAllOrdenes(cached.data);
           }
           return;
         }
 
-        // 3) Sí hay internet: pide SIEMPRE ventana ±8 días
-        const win = buildOfflineWindow(new Date());
+        // 3) ONLINE: pide rango REAL según filtros (UI)
+        const req = getSapRequestRange();
+
+        console.log("[ORDENES] Request SAP range:", {
+          dateMode,
+          start: req.startStr,
+          end: req.endStr,
+          user: userEmail,
+        });
+
         const params = new URLSearchParams({
-          start: win.startStr,
-          end: win.endStr,
+          start: req.startStr,
+          end: req.endStr,
           mode: "range",
         });
         if (userEmail) params.set("user", userEmail);
@@ -348,37 +541,44 @@ export default function ListaOrdenesTecnico() {
         const res = await api.get(`/api/ordenes/sap/list?${params.toString()}`);
         const data = Array.isArray(res.data) ? res.data : [];
 
-        // 4) recorta a ventana (UTC-safe)
-        const dataWin = filterOrdenesByWindow(data, win.start, win.end);
+        // ✅ 4) UI: muestra TODO lo de SAP (según filtros)
+        setAllOrdenes(data);
 
-        setAllOrdenes(dataWin);
+        // ✅ 5) OFFLINE CACHE: guarda SOLO ventana hoy±8 (SIEMPRE)
+        const offlineWin = buildOfflineWindow(new Date());
+        const offlineOnly = filterOrdenesByWindow(data, offlineWin.start, offlineWin.end);
 
-        // 5) guarda cache lista
-        await saveOrdenesTecnicoList(userEmail, dataWin, win);
+        await saveOrdenesTecnicoList(userEmail, offlineOnly, offlineWin);
 
-        // ✅ 6) PREFETCH DETALLES (la clave para que NO tengas que entrar a cada orden)
-        //    - NO bloquea UI (lo lanzamos "en background")
-        //    - Guarda detalle de cada orden en AsyncStorage
-        const orderIds = dataWin.map((x) => x?.Orderid).filter(Boolean);
+        // ✅ 6) Limpieza: conserva detalles solo de órdenes en ventana
+        const keepIds = offlineOnly.map((x) => x?.Orderid).filter(Boolean);
+        await pruneDetallesNoUsados(keepIds);
 
-        // (opcional) limita para no saturar si son demasiadas
-        const MAX_PREFETCH = 80;
-        const idsToPrefetch = orderIds.slice(0, MAX_PREFETCH);
+        // ✅ 7) PREFETCH: SOLO ventana y poquitos
+        const MAX_PREFETCH = 12;
+
+        const today = new Date();
+        const distToToday = (order) => {
+          const d = parseSapDate(order?.start_date);
+          if (!d) return 999999999;
+          return Math.abs(d.getTime() - today.getTime());
+        };
+
+        const offlineSorted = [...offlineOnly].sort((a, b) => distToToday(a) - distToToday(b));
+        const idsToPrefetch = offlineSorted
+          .map((x) => x?.Orderid)
+          .filter(Boolean)
+          .slice(0, MAX_PREFETCH);
 
         prefetchOrdenesTecnicoDetalles({
           orderIds: idsToPrefetch,
-          token: user?.token, // ⚠️ si no guardas token en user, deja null y el servicio usa api con interceptor
+          token: null,
           concurrency: 3,
         }).catch((e) => console.log("prefetchOrdenesTecnicoDetalles ERROR:", e?.message || e));
-
-        // 7) limpieza de detalles (recomendado)
-        await pruneDetallesNoUsados(orderIds);
       } catch (error) {
         console.error("Error al cargar órdenes (SAP):", error?.response?.data || error);
 
-        const userEmail2 = user?.correo || user?.email || user?.username || null;
-        const cached = await loadOrdenesTecnicoList(userEmail2);
-
+        const cached = await loadOrdenesTecnicoList(userEmail);
         if (cached?.data?.length) {
           setAllOrdenes(cached.data);
         } else {
@@ -390,36 +590,35 @@ export default function ListaOrdenesTecnico() {
         setRefreshing(false);
       }
     },
-    [ensureValidToken, user]
+    [ensureValidToken, userEmail, dateMode, getSapRequestRange]
   );
 
-  // ✅ 1) catálogo una vez
+  // ✅ catálogo una vez
   useEffect(() => {
     fetchStatusCatalog();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ✅ 2) órdenes
+  // ✅ órdenes (cada vez que cambie filtro)
   useEffect(() => {
     fetchOrdenes();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fetchOrdenes]);
 
-  // ✅ 3) filtrar en memoria
+  // ✅ filtrar en memoria
   useEffect(() => {
     const filtered = (allOrdenes || []).filter((item) => {
       const okQuery = matchesQuery(item, query);
       if (!okQuery) return false;
 
-      if (dateMode === "all") return true;
-
       const sd = parseSapDate(item?.start_date);
       if (!sd) return false;
+
       return isWithin(sd, start, end);
     });
 
     setOrdenes(filtered);
-  }, [allOrdenes, query, dateMode, start, end]);
+  }, [allOrdenes, query, start, end]);
 
   const irADetalles = (orderId) => {
     const id = String(orderId);
@@ -480,6 +679,12 @@ export default function ListaOrdenesTecnico() {
         return;
       }
 
+      // defensivo: si queda enorme, avisa
+      if (manipulated.base64.length > 3_500_000) {
+        Alert.alert("Foto muy pesada", "Intenta de nuevo (mejor iluminación) o acércate más al objeto.");
+        return;
+      }
+
       setCheckinPhotoUri(manipulated.uri);
       setCheckinPhotoBase64(manipulated.base64);
 
@@ -528,6 +733,66 @@ export default function ListaOrdenesTecnico() {
     });
   };
 
+  // ✅ Sync cola a SAP (foto + estatus)
+  const syncCheckinQueue = useCallback(async () => {
+    if (!userEmail) return;
+    if (syncingRef.current) return;
+
+    // solo si online
+    const net = await NetInfo.fetch();
+    const online = !!(net?.isConnected && net?.isInternetReachable !== false);
+    setIsOnline(online);
+    if (!online) return;
+
+    syncingRef.current = true;
+    try {
+      const q = await loadCheckinQueue(userEmail);
+      if (!q.length) return;
+
+      const ok = await ensureValidToken();
+      if (!ok) return;
+
+      // FIFO (más viejo primero)
+      const ordered = [...q].sort((a, b) => (a?.createdAt || 0) - (b?.createdAt || 0));
+
+      for (const item of ordered) {
+        const orderId = String(item?.orderId || "").trim();
+        const b64 = String(item?.photoBase64 || "").trim();
+
+        if (!orderId || !b64) {
+          await removeFromQueue(userEmail, orderId);
+          continue;
+        }
+
+        try {
+          console.log("[CHECKIN][SYNC] Enviando:", { orderId, b64len: b64.length });
+          await postCheckinEvidence(orderId, b64);
+          await postChangeStatusTo0100(orderId);
+          await removeFromQueue(userEmail, orderId);
+        } catch (e) {
+          console.log("[CHECKIN][SYNC] Error SAP:", orderId, e?.response?.data || e?.message || e);
+          // corta para reintentar después (no quemes la cola)
+          break;
+        }
+      }
+
+      const q2 = await loadCheckinQueue(userEmail);
+      setCheckinQueue(q2);
+
+      // refresca UI
+      fetchOrdenes({ isRefresh: true });
+    } finally {
+      syncingRef.current = false;
+    }
+  }, [ensureValidToken, fetchOrdenes, userEmail]);
+
+  // ✅ Auto-sync cuando regresa internet y hay cola
+  useEffect(() => {
+    if (isOnline && checkinQueue.length > 0) {
+      syncCheckinQueue().catch(() => {});
+    }
+  }, [isOnline, checkinQueue.length, syncCheckinQueue]);
+
   const enviarCheckinCompletoASap = async () => {
     if (!checkinOrderId) {
       Alert.alert("Error", "No hay orden seleccionada.");
@@ -543,6 +808,32 @@ export default function ListaOrdenesTecnico() {
     try {
       setIsSending(true);
 
+      // 1) detectar online
+      const net = await NetInfo.fetch();
+      const online = !!(net?.isConnected && net?.isInternetReachable !== false);
+      setIsOnline(online);
+
+      // 2) si OFFLINE => encolar y cerrar
+      if (!online) {
+        const nextQueue = await enqueueCheckin(userEmail, {
+          orderId,
+          photoBase64: String(checkinPhotoBase64).trim(),
+          createdAt: Date.now(),
+        });
+        setCheckinQueue(nextQueue);
+
+        Alert.alert(
+          "Check-in offline",
+          "Sin internet. Se guardó el check-in en cola y se enviará automáticamente cuando regrese la conexión ✅"
+        );
+
+        setShowCheckinModal(false);
+        setCheckinPhotoBase64(null);
+        setCheckinPhotoUri(null);
+        return;
+      }
+
+      // 3) ONLINE normal
       const ok = await ensureValidToken();
       if (!ok) return;
 
@@ -558,6 +849,30 @@ export default function ListaOrdenesTecnico() {
       fetchOrdenes({ isRefresh: true });
     } catch (e) {
       console.log("enviarCheckinCompletoASap ERROR:", e?.response?.data || e?.message || e);
+
+      // fallback: si falló por red, encola
+      const net2 = await NetInfo.fetch();
+      const online2 = !!(net2?.isConnected && net2?.isInternetReachable !== false);
+
+      if (!online2) {
+        const nextQueue = await enqueueCheckin(userEmail, {
+          orderId,
+          photoBase64: String(checkinPhotoBase64).trim(),
+          createdAt: Date.now(),
+        });
+        setCheckinQueue(nextQueue);
+
+        Alert.alert(
+          "Check-in guardado",
+          "Se cayó la conexión. Se guardó en cola y se enviará cuando regrese internet ✅"
+        );
+
+        setShowCheckinModal(false);
+        setCheckinPhotoBase64(null);
+        setCheckinPhotoUri(null);
+        return;
+      }
+
       Alert.alert("Error SAP", "No se pudo completar el check-in (foto/estatus). Revisa logs.");
     } finally {
       setIsSending(false);
@@ -578,7 +893,22 @@ export default function ListaOrdenesTecnico() {
     const startLabel = formatDateDMY(item.start_date);
     const finishLabel = formatDateDMY(item.finish_date);
 
-    const st = resolveUserstatus(item?.userstatus ?? "", statusCatalogMap, item);
+    // estatus normal
+    const stBase = resolveUserstatus(item?.userstatus ?? "", statusCatalogMap, item);
+
+    // ✅ si está en cola offline, lo tratamos como “pendiente” ya iniciado (para bloquear check-in)
+    const isPendingOffline = pendingSet.has(String(item?.Orderid));
+    const st = isPendingOffline
+      ? {
+          ...stBase,
+          code: "0100",
+          label: "CHECK-IN PENDIENTE (OFFLINE)",
+          type: "pendiente",
+          color: "#7C3AED", // morado
+          lockActions: false,
+          allowCheckin: false,
+        }
+      : stBase;
 
     const showCheckinBtn = st.type === "start" && st.allowCheckin;
     const showTbmBtn = st.type === "pendiente" || st.type === "proceso";
@@ -613,7 +943,16 @@ export default function ListaOrdenesTecnico() {
           </View>
         </View>
 
-        <View pointerEvents="box-none" style={{ flexDirection: "row", gap: 10, justifyContent: "flex-end", marginTop: 12, flexWrap: "wrap" }}>
+        <View
+          pointerEvents="box-none"
+          style={{
+            flexDirection: "row",
+            gap: 10,
+            justifyContent: "flex-end",
+            marginTop: 12,
+            flexWrap: "wrap",
+          }}
+        >
           {lockAll ? (
             <Text style={{ color: FIORI.textMuted, fontSize: 12, fontStyle: "italic" }}>
               {st.type === "no_mantto"
@@ -657,7 +996,9 @@ export default function ListaOrdenesTecnico() {
               )}
             </>
           ) : (
-            <Text style={{ color: FIORI.textMuted, fontSize: 12, fontStyle: "italic" }}>Acciones disponibles según flujo.</Text>
+            <Text style={{ color: FIORI.textMuted, fontSize: 12, fontStyle: "italic" }}>
+              Acciones disponibles según flujo.
+            </Text>
           )}
         </View>
       </Pressable>
@@ -683,7 +1024,11 @@ export default function ListaOrdenesTecnico() {
     return (
       <ScrollView style={{ maxHeight: 320 }}>
         {years.map((y) => (
-          <TouchableOpacity key={y} style={[styles.yearItem, selectedYear === y && styles.yearItemActive]} onPress={() => onSelect(y)}>
+          <TouchableOpacity
+            key={y}
+            style={[styles.yearItem, selectedYear === y && styles.yearItemActive]}
+            onPress={() => onSelect(y)}
+          >
             <Text style={[styles.yearItemText, selectedYear === y && styles.yearItemTextActive]}>{y}</Text>
           </TouchableOpacity>
         ))}
@@ -759,9 +1104,26 @@ export default function ListaOrdenesTecnico() {
           <TouchableOpacity style={styles.refreshBtn} onPress={() => fetchOrdenes({ isRefresh: true })} activeOpacity={0.85}>
             <Text style={styles.refreshBtnText}>Recargar</Text>
           </TouchableOpacity>
+
+          {/* ✅ NUEVO: Sync pendientes */}
+          <TouchableOpacity
+            style={[styles.syncBtn, checkinQueue.length === 0 && { opacity: 0.55 }]}
+            onPress={async () => {
+              await refreshQueue();
+              await syncCheckinQueue();
+            }}
+            activeOpacity={0.85}
+            disabled={checkinQueue.length === 0}
+          >
+            <Text style={styles.syncBtnText}>
+              {isOnline ? "Sincronizar pendientes" : "Pendientes (sin red)"} {checkinQueue.length ? `(${checkinQueue.length})` : ""}
+            </Text>
+          </TouchableOpacity>
         </View>
 
-        <Text style={styles.activeRangeText}>{activeRangeText}</Text>
+        <Text style={styles.activeRangeText}>
+          {activeRangeText}  ·  {isOnline ? "Online" : "Offline"}
+        </Text>
 
         {showDayPicker && (
           <DateTimePicker
@@ -769,12 +1131,12 @@ export default function ListaOrdenesTecnico() {
             mode="date"
             display={Platform.OS === "ios" ? "inline" : "default"}
             onChange={(e, date) => {
-              if (Platform.OS === "android" && e.type !== "set") {
+              if (Platform.OS === "android") {
                 setShowDayPicker(false);
-                return;
+                if (e.type !== "set") return;
               }
               if (date) setDayRef(date);
-              setShowDayPicker(Platform.OS === "ios");
+              if (Platform.OS === "ios") setShowDayPicker(true);
             }}
           />
         )}
@@ -785,15 +1147,15 @@ export default function ListaOrdenesTecnico() {
             mode="date"
             display={Platform.OS === "ios" ? "inline" : "default"}
             onChange={(e, date) => {
-              if (Platform.OS === "android" && e.type !== "set") {
+              if (Platform.OS === "android") {
                 setShowWeekStartPicker(false);
-                return;
+                if (e.type !== "set") return;
               }
               if (date) {
                 setWeekStart(date);
                 if (Platform.OS !== "ios") setShowWeekEndPicker(true);
               }
-              setShowWeekStartPicker(Platform.OS === "ios");
+              if (Platform.OS === "ios") setShowWeekStartPicker(true);
             }}
           />
         )}
@@ -805,23 +1167,29 @@ export default function ListaOrdenesTecnico() {
             minimumDate={weekStart ?? undefined}
             display={Platform.OS === "ios" ? "inline" : "default"}
             onChange={(e, date) => {
-              if (Platform.OS === "android" && e.type !== "set") {
+              if (Platform.OS === "android") {
                 setShowWeekEndPicker(false);
-                return;
+                if (e.type !== "set") return;
               }
               if (date) setWeekEnd(date);
-              setShowWeekEndPicker(Platform.OS === "ios");
+              if (Platform.OS === "ios") setShowWeekEndPicker(true);
             }}
           />
         )}
 
         {dateMode === "weekRange" && (
           <View style={styles.rangeButtonsRow}>
-            <TouchableOpacity style={[styles.smallBtn, { backgroundColor: FIORI.cardSubtle }]} onPress={() => setShowWeekStartPicker(true)}>
+            <TouchableOpacity
+              style={[styles.smallBtn, { backgroundColor: FIORI.cardSubtle }]}
+              onPress={() => setShowWeekStartPicker(true)}
+            >
               <Text style={styles.smallBtnText}>Inicio: {weekStart ? weekStart.toLocaleDateString() : "—"}</Text>
             </TouchableOpacity>
 
-            <TouchableOpacity style={[styles.smallBtn, { backgroundColor: FIORI.cardSubtle }]} onPress={() => setShowWeekEndPicker(true)}>
+            <TouchableOpacity
+              style={[styles.smallBtn, { backgroundColor: FIORI.cardSubtle }]}
+              onPress={() => setShowWeekEndPicker(true)}
+            >
               <Text style={styles.smallBtnText}>Fin: {weekEnd ? weekEnd.toLocaleDateString() : "—"}</Text>
             </TouchableOpacity>
           </View>
@@ -895,13 +1263,21 @@ export default function ListaOrdenesTecnico() {
             <Text style={styles.modalHeaderTitle}>Check-in #{checkinOrderId ?? ""}</Text>
 
             <Text style={{ color: FIORI.textMuted, marginBottom: 10 }}>
-              Toma una foto y al enviar se sube evidencia + se cambia estatus a 0100 (PENDIENTE).
+              Toma una foto y al enviar:
+              {"\n"}• Online: sube evidencia + cambia estatus a 0100
+              {"\n"}• Offline: guarda en cola y se sincroniza al regresar internet
             </Text>
 
             {checkinPhotoUri ? (
               <View style={{ marginBottom: 12 }}>
-                <Image source={{ uri: checkinPhotoUri }} style={{ width: "100%", height: 180, borderRadius: 10, backgroundColor: "#EEE" }} resizeMode="cover" />
-                <Text style={{ marginTop: 6, color: FIORI.textMuted, fontSize: 12 }}>Base64 listo ✅</Text>
+                <Image
+                  source={{ uri: checkinPhotoUri }}
+                  style={{ width: "100%", height: 180, borderRadius: 10, backgroundColor: "#EEE" }}
+                  resizeMode="cover"
+                />
+                <Text style={{ marginTop: 6, color: FIORI.textMuted, fontSize: 12 }}>
+                  Base64 listo ✅ ({checkinPhotoBase64?.length || 0})
+                </Text>
               </View>
             ) : (
               <View style={{ padding: 12, borderWidth: 1, borderColor: FIORI.border, borderRadius: 10, marginBottom: 12 }}>
@@ -910,16 +1286,30 @@ export default function ListaOrdenesTecnico() {
             )}
 
             <View style={{ flexDirection: "row", justifyContent: "flex-end", gap: 10, flexWrap: "wrap" }}>
-              <TouchableOpacity style={[styles.smallBtn, { backgroundColor: FIORI.neutralBtn }]} onPress={() => setShowCheckinModal(false)} disabled={isSending}>
+              <TouchableOpacity
+                style={[styles.smallBtn, { backgroundColor: FIORI.neutralBtn }]}
+                onPress={() => setShowCheckinModal(false)}
+                disabled={isSending}
+              >
                 <Text style={styles.smallBtnText}>Cancelar</Text>
               </TouchableOpacity>
 
-              <TouchableOpacity style={[styles.smallBtn, { backgroundColor: FIORI.cardSubtle }]} onPress={takeCheckinPhoto} disabled={isSending}>
+              <TouchableOpacity
+                style={[styles.smallBtn, { backgroundColor: FIORI.cardSubtle }]}
+                onPress={takeCheckinPhoto}
+                disabled={isSending}
+              >
                 <Text style={styles.smallBtnText}>Tomar foto</Text>
               </TouchableOpacity>
 
-              <TouchableOpacity style={[styles.smallBtn, { backgroundColor: FIORI.accent }]} onPress={enviarCheckinCompletoASap} disabled={isSending}>
-                <Text style={[styles.smallBtnText, { color: "#fff" }]}>{isSending ? "Enviando..." : "Enviar a SAP"}</Text>
+              <TouchableOpacity
+                style={[styles.smallBtn, { backgroundColor: FIORI.accent }]}
+                onPress={enviarCheckinCompletoASap}
+                disabled={isSending}
+              >
+                <Text style={[styles.smallBtnText, { color: "#fff" }]}>
+                  {isSending ? "Procesando..." : isOnline ? "Enviar a SAP" : "Guardar offline"}
+                </Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -985,6 +1375,15 @@ const styles = StyleSheet.create({
   clearBtnText: { color: FIORI.ink, fontWeight: "600" },
   refreshBtn: { backgroundColor: FIORI.accent, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10 },
   refreshBtnText: { color: "#fff", fontWeight: "700" },
+
+  // ✅ NUEVO: sync pendientes
+  syncBtn: {
+    backgroundColor: "#111827",
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 10,
+  },
+  syncBtnText: { color: "#fff", fontWeight: "800" },
 
   chipsRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 10 },
   chip: {

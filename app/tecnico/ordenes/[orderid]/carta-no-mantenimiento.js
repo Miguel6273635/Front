@@ -221,7 +221,7 @@ export default function CartaNoMantenimientoForm() {
       <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 120 }}>
         <Text style={styles.section}>Datos de la orden</Text>
         <View style={styles.cardCompact}>
-          <Row label="MX" value={datos.Orderid} />
+          <Row label="No. de orden" value={datos.Orderid} />
           <Row label="Equipo No" value={datos.Equipment} />
           <Row label="Fecha programada" value={fechaProgramadaDDMMYYYY} />
           <Row label="Razón social" value={datos.razon_social} />

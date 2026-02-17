@@ -40,6 +40,14 @@ import {
 import { subirPdfOrden } from "../../../../src/services/riesgosSap";
 import { buildTbmkyHtml } from "../../../../src/services/templates/tbmkyPdfTemplate";
 
+// ✅ OFFLINE helpers (YA LOS TIENES EN TU PROYECTO)
+import { isOnline } from "../../../../src/offline/net";
+import { upsertSapQueueItem } from "../../../../src/offline/sapQueue";
+import {
+  setLocalStatusPatch,
+  patchCacheOrdenesTecnicoList,
+} from "../../../../src/offline/ordenesTecnicoLocalPatch";
+
 // ===== Paleta Fiori / Horizon =====
 const FIORI = {
   pageBg: "#F5F7FB",
@@ -56,6 +64,16 @@ const FIORI = {
   warning: "#F59E0B",
   success: "#16A34A",
 };
+
+// ✅ IMPORTANTE:
+// Pon aquí el MISMO endpoint que usa tu subirPdfOrden() internamente.
+// Si no lo sabes, abre: src/services/riesgosSap.js y copia el endpoint del api.post(...)
+// Ejemplo: "/api/riesgos/tbmky/pdf"  (ajústalo al real)
+const TBMKY_PDF_ENDPOINT = "/api/riesgos/tbmky/pdf";
+
+// ✅ Si además cambias estatus por backend, pon tu endpoint real aquí.
+// Si no lo usas, puedes dejarlo así (solo afecta el envío de estatus, NO el PDF).
+const TBMKY_STATUS_ENDPOINT = "/api/ordenes/status";
 
 // ===== Listas locales (síntomas y EPP) =====
 const sintomasIniciales = [
@@ -116,6 +134,18 @@ export default function FormularioRiesgosScreen() {
   const orderid = String(params.orderid ?? params.id ?? "");
 
   const { user, ensureValidToken } = useAuth();
+
+  // ✅ helper userKey para parches locales (estatus)
+  const userKey = useMemo(() => {
+    return (
+      user?.email ||
+      user?.User ||
+      user?.username ||
+      user?.sub ||
+      user?.id ||
+      "unknown"
+    );
+  }, [user]);
 
   // ✅ scroll a top en cada cambio de paso
   const scrollRef = useRef(null);
@@ -218,7 +248,7 @@ export default function FormularioRiesgosScreen() {
   const toDataUrl = (b64) => `data:image/png;base64,${b64}`;
   const sanitize = (s) => (s || "").replace(/\s/g, "");
   const EQUIPO_TIPO_URL_BASE =
-    "https://my-node-api-pro-01.cfapps.us10-001.hana.ondemand.com";
+    "https://my-node-api-qas-01.cfapps.us10-001.hana.ondemand.com";
 
   function mapEqartToTipo(eqartRaw) {
     const v = String(eqartRaw || "").toUpperCase().trim();
@@ -238,7 +268,7 @@ export default function FormularioRiesgosScreen() {
     if (!eq) return null;
 
     const url = `${EQUIPO_TIPO_URL_BASE}/api/odata/ZCS_GET_EQUIPMENT_SRV/EquipmentHeaderSet('${encodeURIComponent(
-      eq,
+      eq
     )}')?$format=json`;
 
     // 👇 usa fetch para evitar problemas de baseURL con tu axios `api`
@@ -263,7 +293,7 @@ export default function FormularioRiesgosScreen() {
   // Áreas locales
   const areaOptions = useMemo(
     () => AREAS_TRABAJO.map((a) => ({ label: a.label, value: a.id })),
-    [],
+    []
   );
 
   // ==========================================================
@@ -522,7 +552,7 @@ export default function FormularioRiesgosScreen() {
         // ✅ Traer Razón social / Dirección desde ToAddresses (2do nodo)
         try {
           const addrRes = await api.get(
-            `/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet('${orderid}')/ToAddresses?$format=json`,
+            `/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet('${orderid}')/ToAddresses?$format=json`
           );
 
           const results = addrRes?.data?.d?.results || [];
@@ -580,7 +610,6 @@ export default function FormularioRiesgosScreen() {
       fecha,
       rutinaria,
 
-      // ✅ FIX: antes tenías equipoSeleccionado: "elevadores" (te pisaba el real)
       equipoSeleccionado,
       equipoLabel,
 
@@ -599,7 +628,6 @@ export default function FormularioRiesgosScreen() {
       medidasTop,
       acciones,
 
-      // ✅ NUEVO
       detectaNuevoRiesgo,
       nuevosRiesgos,
 
@@ -631,7 +659,7 @@ export default function FormularioRiesgosScreen() {
       nuevosRiesgos,
       firmaTecnico,
       pdfLocalUri,
-    ],
+    ]
   );
 
   useEffect(() => {
@@ -668,7 +696,7 @@ export default function FormularioRiesgosScreen() {
     setSintomas((prev) =>
       prev.includes(sintoma)
         ? prev.filter((s) => s !== sintoma)
-        : [...prev, sintoma],
+        : [...prev, sintoma]
     );
   };
 
@@ -683,7 +711,7 @@ export default function FormularioRiesgosScreen() {
   const toggleRiesgo = (id) => {
     if (lockedAfterPdf) return;
     setRiesgosSeleccionadosIds((prev) =>
-      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
     );
   };
 
@@ -692,7 +720,7 @@ export default function FormularioRiesgosScreen() {
       riesgosBD
         .filter((r) => riesgosSeleccionadosIds.includes(r.id))
         .map((r) => ({ label: r.riesgo, value: r.id })),
-    [riesgosBD, riesgosSeleccionadosIds],
+    [riesgosBD, riesgosSeleccionadosIds]
   );
 
   const opcionesTop2 = useMemo(() => {
@@ -712,7 +740,7 @@ export default function FormularioRiesgosScreen() {
   useEffect(() => {
     // si desmarcan riesgo, quita top si ya no existe
     setTopSeleccionIds((prev) =>
-      prev.map((v) => (v && !riesgosSeleccionadosIds.includes(v) ? null : v)),
+      prev.map((v) => (v && !riesgosSeleccionadosIds.includes(v) ? null : v))
     );
   }, [riesgosSeleccionadosIds]);
 
@@ -725,41 +753,28 @@ export default function FormularioRiesgosScreen() {
     }
 
     const nombres = topSeleccionIds.map(
-      (id) => riesgosBD.find((x) => x.id === id)?.riesgo || "",
+      (id) => riesgosBD.find((x) => x.id === id)?.riesgo || ""
     );
 
     // reset de campos si cambió el riesgo top
     setCausasTop((prev) =>
-      prev.map((c, i) => (riesgosTopText[i] !== nombres[i] ? "" : c)),
+      prev.map((c, i) => (riesgosTopText[i] !== nombres[i] ? "" : c))
     );
     setMedidasTop((prev) =>
       prev.map((fila, i) =>
-        riesgosTopText[i] !== nombres[i] ? ["", "", ""] : fila,
-      ),
+        riesgosTopText[i] !== nombres[i] ? ["", "", ""] : fila
+      )
     );
     setAcciones((prev) =>
-      prev.map((a, i) => (riesgosTopText[i] !== nombres[i] ? "" : a)),
+      prev.map((a, i) => (riesgosTopText[i] !== nombres[i] ? "" : a))
     );
 
     setRiesgosTopText(nombres);
 
     Alert.alert(
       "TOP 3 aplicado",
-      "Listo ✅\n\nAhora abajo se autollenarán los bloques de TOP 1/2/3 para que captures causas, medidas y acciones.",
+      "Listo ✅\n\nAhora abajo se autollenarán los bloques de TOP 1/2/3 para que captures causas, medidas y acciones."
     );
-  };
-
-  const autollenarTopDesdeSeleccionados = () => {
-    if (lockedAfterPdf) return;
-    if (riesgosSeleccionadosIds.length < 3) {
-      Alert.alert("Selecciona riesgos", "Marca al menos 3 riesgos en 'Riesgos presentes'.");
-      return;
-    }
-    setTopSeleccionIds([
-      riesgosSeleccionadosIds[0],
-      riesgosSeleccionadosIds[1],
-      riesgosSeleccionadosIds[2],
-    ]);
   };
 
   // -------------------------
@@ -861,13 +876,13 @@ export default function FormularioRiesgosScreen() {
 
   const topAplicadoOk = useMemo(
     () => !!riesgosTopText?.[0] && !!riesgosTopText?.[1] && !!riesgosTopText?.[2],
-    [riesgosTopText],
+    [riesgosTopText]
   );
 
   const nuevosRiesgosOk = useMemo(() => {
     if (!detectaNuevoRiesgo) return true;
     return (nuevosRiesgos || []).some(
-      (r) => String(r?.riesgo || "").trim() && String(r?.medida || "").trim(),
+      (r) => String(r?.riesgo || "").trim() && String(r?.medida || "").trim()
     );
   }, [detectaNuevoRiesgo, nuevosRiesgos]);
 
@@ -905,7 +920,7 @@ export default function FormularioRiesgosScreen() {
   }, [paso]);
 
   // -------------------------
-  // ✅ FINAL: Guardar + PDF + SAP
+  // ✅ FINAL: Guardar + PDF + SAP (ONLINE u OFFLINE)
   // -------------------------
   const onGuardarYGenerarPdf = async () => {
     if (saving) return;
@@ -923,20 +938,20 @@ export default function FormularioRiesgosScreen() {
     if (!topAplicadoOk)
       return Alert.alert(
         "TOP 3 incompleto",
-        "Selecciona y aplica TOP 1, TOP 2 y TOP 3.",
+        "Selecciona y aplica TOP 1, TOP 2 y TOP 3."
       );
 
     if (!acciones.every((a) => String(a || "").trim())) {
       return Alert.alert(
         "Acciones incompletas",
-        "Escribe las 3 acciones (una por TOP).",
+        "Escribe las 3 acciones (una por TOP)."
       );
     }
 
     if (!nuevosRiesgosOk) {
       return Alert.alert(
         "Nuevo riesgo incompleto",
-        "Marcaste que detectaste un nuevo riesgo. Escribe al menos 1 riesgo y su medida de control.",
+        "Marcaste que detectaste un nuevo riesgo. Escribe al menos 1 riesgo y su medida de control."
       );
     }
 
@@ -955,11 +970,10 @@ export default function FormularioRiesgosScreen() {
         actividadDia,
         rutinaria,
 
-        equipoId: equipoSeleccionado, // "elevadores" | "escaleras"
+        equipoId: equipoSeleccionado,
         equipoSeleccionado,
         equipoLabel,
 
-        // ✅ SIN NÓMINA
         trabajadores: (trabajadores || []).map((t) => ({
           nombre: String(t?.nombre ?? ""),
           cargo: String(t?.cargo ?? ""),
@@ -977,17 +991,14 @@ export default function FormularioRiesgosScreen() {
         medidasTop,
         acciones,
 
-        // ✅ NUEVO (PDF template lo usará)
         detectaNuevoRiesgo,
         nuevosRiesgos: (nuevosRiesgos || []).map((x) => ({
           riesgo: String(x?.riesgo ?? ""),
           medida: String(x?.medida ?? ""),
         })),
 
-        // ✅ SOLO técnico
         firmaTecnico,
 
-        // Extra por si template los usa:
         equipment: orden?.Equipment || orden?.equipment || "",
         razon_social: razonSocial || orden?.razon_social || orden?.partner_name || "",
         direccion: direccion || orden?.direccion || orden?.partner_address || "",
@@ -1003,7 +1014,57 @@ export default function FormularioRiesgosScreen() {
         throw new Error("Base64 del PDF vacío o demasiado corto.");
       }
 
-      // 2) Enviar PDF a SAP
+      // 2) OFFLINE/ONLINE switch
+      const online = await isOnline();
+
+      if (!online) {
+        // ✅ OFFLINE: encola el envío del PDF (dedupe: 1 por orden)
+        await upsertSapQueueItem({
+          type: "PDF",
+          orderId: payload.orderid,
+          endpoint: TBMKY_PDF_ENDPOINT,
+          method: "POST",
+          payload: {
+            orderId: payload.orderid,
+            pdfBase64: String(base64Pdf).trim(),
+            fileName,
+          },
+          key: `tbmky_pdf:${payload.orderid}`,
+        });
+
+        // ✅ OFFLINE: (opcional) parchea estatus local para que se vea “enviado/pendiente”
+        // Ajusta el código según tu lógica: "0200" / "0400" / etc.
+        try {
+          const newStatus = "0200";
+          await setLocalStatusPatch(userKey, payload.orderid, newStatus);
+          await patchCacheOrdenesTecnicoList(userKey, payload.orderid, newStatus);
+
+          // ✅ también encola el status (último gana) SI lo manejas por backend
+          await upsertSapQueueItem({
+            type: "STATUS",
+            orderId: payload.orderid,
+            endpoint: TBMKY_STATUS_ENDPOINT,
+            method: "POST",
+            payload: { orderId: payload.orderid, estatus: newStatus },
+            key: `status:${payload.orderid}`,
+          });
+        } catch {}
+
+        // ✅ NO borres el draft si quieres permitir re-edición offline.
+        // Aquí sí lo borramos para evitar duplicados; si prefieres conservarlo, comenta esto:
+        try {
+          await AsyncStorage.removeItem(DRAFT_KEY);
+        } catch {}
+
+        Alert.alert(
+          "Guardado offline ✅",
+          "Se generó el PDF y quedó en cola para enviarse cuando vuelva el internet.",
+          [{ text: "Opciones de PDF", onPress: openPdfModal }]
+        );
+        return;
+      }
+
+      // 3) ONLINE: Enviar PDF a SAP (tu flujo actual)
       let respSubmit;
       try {
         const ok = await ensureValidToken?.();
@@ -1019,7 +1080,7 @@ export default function FormularioRiesgosScreen() {
         Alert.alert(
           "Guardado local",
           `Se generó el PDF, pero no se pudo enviar a SAP para la orden #${payload.orderid}.`,
-          [{ text: "OK" }],
+          [{ text: "Opciones de PDF", onPress: openPdfModal }]
         );
         return;
       }
@@ -1028,7 +1089,7 @@ export default function FormularioRiesgosScreen() {
         Alert.alert(
           "Guardado local",
           `Se generó el PDF, pero SAP no confirmó el envío para la orden #${payload.orderid}.`,
-          [{ text: "OK" }],
+          [{ text: "Opciones de PDF", onPress: openPdfModal }]
         );
         return;
       }

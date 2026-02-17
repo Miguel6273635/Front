@@ -9,6 +9,7 @@ import {
   ActivityIndicator,
   StyleSheet,
   Platform,
+  TextInput,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { WebView } from "react-native-webview";
@@ -38,6 +39,19 @@ export default function ModalesDetalleOrden({
   savingSignature,
   confirmarFinalizarConFirma,
 
+  // ✅ correo cliente
+  clienteEmail,
+  setClienteEmail,
+  isValidEmail,
+
+  // ✅ NUEVO: nombre/cargo/aviso
+  clienteNombre,
+  setClienteNombre,
+  clienteCargo,
+  setClienteCargo,
+  avisoCliente,
+  setAvisoCliente,
+
   showNoMantPdfModal,
   cerrarModalNoMantPdf,
   loadingNoMantPdf,
@@ -61,6 +75,9 @@ export default function ModalesDetalleOrden({
     if (savingSignature) return;
     setShowSignModal?.(false);
   };
+
+  const emailInvalid =
+    !!clienteEmail && typeof isValidEmail === "function" && !isValidEmail(clienteEmail);
 
   return (
     <>
@@ -202,7 +219,7 @@ export default function ModalesDetalleOrden({
         </View>
       </Modal>
 
-      {/* ===== ✅ Modal firma cliente (centrado + con "Listo") ===== */}
+      {/* ===== ✅ Modal firma cliente + correo + nombre/cargo/aviso ===== */}
       <Modal
         visible={!!showSignModal}
         animationType="fade"
@@ -229,6 +246,55 @@ export default function ModalesDetalleOrden({
 
             {/* Body */}
             <View style={signStyles.body}>
+              {/* ✅ correo */}
+              <Text style={signStyles.label}>Correo del cliente (obligatorio)</Text>
+              <TextInput
+                value={String(clienteEmail || "")}
+                onChangeText={setClienteEmail}
+                placeholder="correo@ejemplo.com"
+                placeholderTextColor="#63718B"
+                autoCapitalize="none"
+                autoCorrect={false}
+                keyboardType="email-address"
+                style={signStyles.emailInput}
+              />
+              {emailInvalid ? <Text style={signStyles.emailError}>Escribe un correo válido.</Text> : null}
+
+              {/* ✅ NUEVO: nombre */}
+              <Text style={[signStyles.label, { marginTop: 6 }]}>Nombre del cliente (obligatorio)</Text>
+              <TextInput
+                value={String(clienteNombre || "")}
+                onChangeText={setClienteNombre}
+                placeholder="Nombre y apellidos"
+                placeholderTextColor="#63718B"
+                autoCapitalize="words"
+                autoCorrect={false}
+                style={signStyles.textInput}
+              />
+
+              {/* ✅ NUEVO: cargo */}
+              <Text style={[signStyles.label, { marginTop: 6 }]}>Cargo (obligatorio)</Text>
+              <TextInput
+                value={String(clienteCargo || "")}
+                onChangeText={setClienteCargo}
+                placeholder="Ej: Administrador, Seguridad, Mantenimiento..."
+                placeholderTextColor="#63718B"
+                autoCapitalize="words"
+                autoCorrect={false}
+                style={signStyles.textInput}
+              />
+
+              {/* ✅ NUEVO: aviso opcional */}
+              <Text style={[signStyles.label, { marginTop: 6 }]}>Aviso al cliente (opcional)</Text>
+              <TextInput
+                value={String(avisoCliente || "")}
+                onChangeText={setAvisoCliente}
+                placeholder="Mensaje opcional que se insertará en el PDF"
+                placeholderTextColor="#63718B"
+                multiline
+                style={[signStyles.textInput, { minHeight: 70, textAlignVertical: "top" }]}
+              />
+
               <Text style={signStyles.helper}>
                 Pida al cliente que firme dentro del recuadro y presione “Listo”.
               </Text>
@@ -251,8 +317,6 @@ export default function ModalesDetalleOrden({
                       padding: 0;
                       background: #fff;
                     }
-
-                    /* Contenedor */
                     .m-signature-pad {
                       box-shadow: none;
                       border: none;
@@ -261,16 +325,12 @@ export default function ModalesDetalleOrden({
                       display: flex;
                       flex-direction: column;
                     }
-
-                    /* Área de firma: dejamos espacio al footer */
                     .m-signature-pad--body {
                       flex: 1;
                       border: 0;
                       height: auto !important;
                       min-height: 0 !important;
                     }
-
-                    /* Footer visible (botones) */
                     .m-signature-pad--footer {
                       height: 64px !important;
                       display: flex !important;
@@ -280,11 +340,7 @@ export default function ModalesDetalleOrden({
                       border-top: 1px solid #E8EEF7;
                       box-sizing: border-box;
                     }
-
-                    .m-signature-pad--footer .description {
-                      display: none !important;
-                    }
-
+                    .m-signature-pad--footer .description { display: none !important; }
                     .m-signature-pad--footer .button {
                       font-size: 13px !important;
                       padding: 10px 14px !important;
@@ -292,17 +348,14 @@ export default function ModalesDetalleOrden({
                       border: 0 !important;
                       box-shadow: none !important;
                     }
-
                     .m-signature-pad--footer .button.clear {
                       background: #EEEEEE !important;
                       color: #333 !important;
                     }
-
                     .m-signature-pad--footer .button.save {
                       background: #0A6ED1 !important;
                       color: #fff !important;
                     }
-
                     canvas {
                       width: 100% !important;
                       height: 100% !important;
@@ -316,7 +369,7 @@ export default function ModalesDetalleOrden({
               </Text>
             </View>
 
-            {/* Footer app (Cancelar / Finalizar orden) */}
+            {/* Footer app */}
             <View style={signStyles.footer}>
               <TouchableOpacity
                 style={[signStyles.secondaryBtn, savingSignature && { opacity: 0.7 }]}
@@ -417,7 +470,7 @@ const signStyles = StyleSheet.create({
   card: {
     width: "100%",
     maxWidth: 560,
-    height: "82%",
+    height: "92%",
     backgroundColor: "#fff",
     borderRadius: 16,
     overflow: "hidden",
@@ -454,9 +507,32 @@ const signStyles = StyleSheet.create({
   body: {
     flex: 1,
     padding: 12,
-    gap: 10,
+    gap: 8,
   },
-  helper: { color: "#0B1F3B", fontSize: 13, fontWeight: "700" },
+  label: { color: "#0B1F3B", fontSize: 13, fontWeight: "900" },
+  emailInput: {
+    backgroundColor: "#F5F7FA",
+    borderWidth: 1,
+    borderColor: "#DDE6F2",
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: Platform.OS === "ios" ? 10 : 8,
+    fontSize: 14,
+    color: "#0B1F3B",
+  },
+  textInput: {
+    backgroundColor: "#F5F7FA",
+    borderWidth: 1,
+    borderColor: "#DDE6F2",
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: Platform.OS === "ios" ? 10 : 8,
+    fontSize: 14,
+    color: "#0B1F3B",
+  },
+  emailError: { color: "#E74C3C", fontWeight: "900", fontSize: 12, marginTop: -2 },
+
+  helper: { color: "#0B1F3B", fontSize: 13, fontWeight: "700", marginTop: 4 },
   signatureBox: {
     flex: 1,
     borderWidth: 1,

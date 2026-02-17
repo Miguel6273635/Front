@@ -8,14 +8,9 @@ function safeStr(v) {
   return String(v ?? "").trim();
 }
 
-function normalizeUsr00(op) {
-  const v = safeStr(op?.Usr00 ?? op?.usr00);
-  return v || "SIN IDENTIFICADOR";
-}
-
-function normalizeUsr01(op) {
-  const v = safeStr(op?.Usr01 ?? op?.usr01);
-  return v || "SIN ITEM";
+function normalizeUsr02(op) {
+  const v = safeStr(op?.Usr02 ?? op?.usr02);
+  return v || "SIN UBICACIÓN";
 }
 
 function normalizeActivity(op) {
@@ -39,30 +34,10 @@ function normalizeEstatus(op) {
 }
 
 /**
- * ✅ Orden inteligente para item:
- * - si es número, ordena numérico
- * - si no, ordena alfabético
- */
-function sortItemKey(a, b) {
-  const an = Number(a);
-  const bn = Number(b);
-  const aIsNum = Number.isFinite(an) && String(an) === a;
-  const bIsNum = Number.isFinite(bn) && String(bn) === b;
-
-  if (aIsNum && bIsNum) return an - bn;
-  if (aIsNum && !bIsNum) return -1;
-  if (!aIsNum && bIsNum) return 1;
-  return a.localeCompare(b);
-}
-
-/**
  * ✅ ID estable "fallback" si no viene id del backend
  * - Si viene op.id real, se respeta
  * - Si NO viene, genera MISMO FORMATO que tu index:
  *   `${orderId}-${activity}-${subactivity?}`
- *
- * Esto evita que en OFFLINE los checks guarden ids que luego NO hacen match
- * al finalizar (prorrateo).
  */
 function opStableId(orderId, op, idx) {
   const existing = safeStr(op?.id);
@@ -74,50 +49,36 @@ function opStableId(orderId, op, idx) {
   const oid = safeStr(orderId);
   const key = `${oid}-${activity}${sub ? `-${sub}` : ""}`.trim();
 
-  // Fallback extremo (si viniera activity vacío)
   return key && key !== "-" ? key : `fallback__${idx}`;
 }
 
-/** ==========================================================
- * ✅ Agrupar:
- *  1) Usr00 (identificador global)
- *  2) Usr01 (ITEM)
- * ========================================================== */
-function agruparPorUsr00YUsr01(ops = []) {
-  const porCategoria = {};
+/**
+ * ✅ Agrupar SOLO por Usr02
+ * - Devuelve:
+ *   { grupos: [usr02...], porGrupo: { usr02: [ops...] } }
+ */
+function agruparPorUsr02(ops = []) {
+  const porGrupo = {};
 
   for (const op of ops || []) {
-    const cat = normalizeUsr00(op); //Usr00 (Global)
-    const item = normalizeUsr01(op); //Usr01 (ITEM)
-
-    if (!porCategoria[cat]) porCategoria[cat] = {};
-    if (!porCategoria[cat][item]) porCategoria[cat][item] = [];
-    porCategoria[cat][item].push(op);
+    const grp = normalizeUsr02(op);
+    if (!porGrupo[grp]) porGrupo[grp] = [];
+    porGrupo[grp].push(op);
   }
 
-  const categorias = Object.keys(porCategoria).sort((a, b) => a.localeCompare(b));
+  const grupos = Object.keys(porGrupo).sort((a, b) => a.localeCompare(b));
 
-  for (const cat of categorias) {
-    const itemsObj = porCategoria[cat];
-    const itemKeys = Object.keys(itemsObj).sort(sortItemKey);
-
-    const ordered = {};
-    for (const itemKey of itemKeys) {
-      const arr = itemsObj[itemKey] || [];
-
-      arr.sort((x, y) => {
-        const ax = normalizeActivity(x);
-        const ay = normalizeActivity(y);
-        if (ax !== ay) return ax.localeCompare(ay);
-        return normalizeSubActivity(x).localeCompare(normalizeSubActivity(y));
-      });
-
-      ordered[itemKey] = arr;
-    }
-    porCategoria[cat] = ordered;
+  // Orden interno de operaciones dentro del grupo: Activity, luego SubActivity
+  for (const grp of grupos) {
+    porGrupo[grp].sort((x, y) => {
+      const ax = normalizeActivity(x);
+      const ay = normalizeActivity(y);
+      if (ax !== ay) return ax.localeCompare(ay);
+      return normalizeSubActivity(x).localeCompare(normalizeSubActivity(y));
+    });
   }
 
-  return { categorias, porCategoria };
+  return { grupos, porGrupo };
 }
 
 /* ============================ Lista Agrupada ============================ */
@@ -133,54 +94,44 @@ export function ListaOperacionesAgrupadas({
   checkedMap = {},
   setCheckedMap,
 
-  // ✅ NUEVO: para que el fallback id tenga el formato correcto
+  // ✅ para fallback id consistente
   orderId,
 }) {
-  const grouped = useMemo(() => agruparPorUsr00YUsr01(operaciones), [operaciones]);
+  const grouped = useMemo(() => agruparPorUsr02(operaciones), [operaciones]);
 
-  const [catOpen, setCatOpen] = useState(() => {
-    const first = grouped.categorias?.[0] || null;
-    return first ? { [first]: true } : {};
-  });
+  /**
+   * ✅ CAMBIO: iniciar TODO cerrado
+   * Antes abrías el primer grupo automáticamente.
+   */
+  const [groupOpen, setGroupOpen] = useState({});
 
-  const [itemOpen, setItemOpen] = useState(() => {
-    const firstCat = grouped.categorias?.[0];
-    if (!firstCat) return {};
-    const itemsObj = grouped.porCategoria?.[firstCat] || {};
-    const firstItem = Object.keys(itemsObj)?.[0];
-    if (!firstItem) return {};
-    return { [`${firstCat}__${firstItem}`]: true };
-  });
-
-  // ✅ si sales de finalizeMode => NO limpiamos aquí forzosamente (el padre decide)
+  /**
+   * ✅ CAMBIO: NO reabrir nada cuando cambie la data.
+   * (Si quieres que se mantenga el estado previo cuando llegan nuevas ops,
+   * lo hacemos con "merge" abajo.)
+   */
   useEffect(() => {
-    if (!finalizeMode) {
-      // opcional: el padre normalmente limpia al cancelar
-      // setCheckedMap?.({});
+    const grupos = grouped.grupos || [];
+    if (!grupos.length) {
+      setGroupOpen({});
+      return;
     }
-  }, [finalizeMode, setCheckedMap]);
 
-  // Rehidratar open states
-  useEffect(() => {
-    const firstCat = grouped.categorias?.[0];
-    if (!firstCat) return;
-
-    setCatOpen((prev) => {
-      if (prev && Object.keys(prev).length) return prev;
-      return { [firstCat]: true };
+    // Mantener estados existentes y agregar nuevos grupos cerrados
+    setGroupOpen((prev) => {
+      const next = { ...(prev || {}) };
+      for (const g of grupos) {
+        if (typeof next[g] === "undefined") next[g] = false; // nuevos grupos cerrados
+      }
+      // si desapareció algún grupo, lo quitamos
+      for (const key of Object.keys(next)) {
+        if (!grupos.includes(key)) delete next[key];
+      }
+      return next;
     });
+  }, [grouped.grupos]);
 
-    const itemsObj = grouped.porCategoria?.[firstCat] || {};
-    const firstItem = Object.keys(itemsObj)?.[0];
-    if (!firstItem) return;
-
-    setItemOpen((prev) => {
-      if (prev && Object.keys(prev).length) return prev;
-      return { [`${firstCat}__${firstItem}`]: true };
-    });
-  }, [grouped.categorias, grouped.porCategoria]);
-
-  if (!grouped.categorias?.length) {
+  if (!grouped.grupos?.length) {
     return (
       <View style={{ paddingVertical: 10 }}>
         <Text style={{ color: FIORI.textMuted }}>No hay operaciones para mostrar.</Text>
@@ -188,12 +139,8 @@ export function ListaOperacionesAgrupadas({
     );
   }
 
-  const toggleCat = (cat) => setCatOpen((prev) => ({ ...(prev || {}), [cat]: !prev?.[cat] }));
-
-  const toggleItem = (cat, item) => {
-    const k = `${cat}__${item}`;
-    setItemOpen((prev) => ({ ...(prev || {}), [k]: !prev?.[k] }));
-  };
+  const toggleGroup = (grp) =>
+    setGroupOpen((prev) => ({ ...(prev || {}), [grp]: !prev?.[grp] }));
 
   const isOpChecked = (opId) => !!checkedMap?.[opId];
 
@@ -278,148 +225,100 @@ export function ListaOperacionesAgrupadas({
       ) : null}
 
       <View style={{ gap: 10 }}>
-        {grouped.categorias.map((cat) => {
-          const isCatOpen = !!catOpen?.[cat];
-          const itemsObj = grouped.porCategoria[cat] || {};
-          const itemKeys = Object.keys(itemsObj);
+        {grouped.grupos.map((grp) => {
+          const isOpen = !!groupOpen?.[grp];
+          const opsGroup = grouped.porGrupo?.[grp] || [];
+
+          // IDs consistentes
+          const opIds = opsGroup.map((op, idx) => opStableId(orderId, op, idx));
+
+          const checkedCount = opIds.filter((id) => isOpChecked(id)).length;
+          const allChecked = opIds.length > 0 && checkedCount === opIds.length;
+          const someChecked = checkedCount > 0 && !allChecked;
+
+          const groupCheckIcon = allChecked
+            ? "checkbox"
+            : someChecked
+            ? "remove-circle-outline"
+            : "square-outline";
 
           return (
-            <View key={cat} style={styles?.grupoCard}>
+            <View key={grp} style={styles?.grupoCard}>
+              {/* Header del grupo Usr02 */}
               <TouchableOpacity
                 activeOpacity={0.9}
-                onPress={() => toggleCat(cat)}
+                onPress={() => toggleGroup(grp)}
                 style={styles?.grupoHeader}
               >
                 <View style={{ flex: 1 }}>
-                  <Text style={styles?.grupoTitle}>{cat}</Text>
+                  <Text style={styles?.grupoTitle}>{grp}</Text>
                 </View>
 
                 <Ionicons
-                  name={isCatOpen ? "chevron-up-outline" : "chevron-down-outline"}
+                  name={isOpen ? "chevron-up-outline" : "chevron-down-outline"}
                   size={18}
                   color={FIORI.textMuted}
                 />
               </TouchableOpacity>
 
-              {isCatOpen && (
+              {isOpen && (
                 <View style={{ paddingTop: 10, gap: 10 }}>
-                  {itemKeys.map((itemKey) => {
-                    const opsItem = itemsObj[itemKey] || [];
-                    const k = `${cat}__${itemKey}`;
-                    const isItemOpen = !!itemOpen?.[k];
-
-                    // ✅ IDs SIEMPRE consistentes:
-                    // - si op.id existe => se usa
-                    // - si NO existe => fallback = `${orderId}-${activity}-${sub}`
-                    const opIds = opsItem.map((op, idx) => opStableId(orderId, op, idx));
-
-                    const checkedCount = opIds.filter((id) => isOpChecked(id)).length;
-                    const allChecked = opIds.length > 0 && checkedCount === opIds.length;
-                    const someChecked = checkedCount > 0 && !allChecked;
-
-                    const itemCheckIcon = allChecked
-                      ? "checkbox"
-                      : someChecked
-                      ? "remove-circle-outline"
-                      : "square-outline";
-
-                    return (
-                      <View
-                        key={k}
+                  {/* Botón “marcar todo el grupo” */}
+                  {finalizeMode ? (
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+                      <TouchableOpacity
+                        activeOpacity={0.9}
+                        onPress={() => setManyChecked(opIds, !allChecked)}
                         style={{
+                          flexDirection: "row",
+                          alignItems: "center",
+                          gap: 8,
+                          paddingHorizontal: 10,
+                          paddingVertical: 8,
+                          borderRadius: 10,
                           borderWidth: 1,
                           borderColor: FIORI.borderSoft,
-                          backgroundColor: FIORI.surfaceAlt,
-                          borderRadius: 12,
-                          padding: 10,
+                          backgroundColor: allChecked ? FIORI.brandSoft : FIORI.surface,
                         }}
                       >
-                        <TouchableOpacity
-                          activeOpacity={0.9}
-                          onPress={() => toggleItem(cat, itemKey)}
-                          style={{ flexDirection: "row", alignItems: "center", gap: 10 }}
-                        >
-                          <View style={{ flex: 1 }}>
-                            <Text style={{ fontWeight: "900", color: FIORI.text, fontSize: 13 }}>
-                              ITEM {itemKey}
-                            </Text>
-                          </View>
+                        <Ionicons
+                          name={groupCheckIcon}
+                          size={20}
+                          color={allChecked || someChecked ? FIORI.brand : FIORI.textMuted}
+                        />
+                        <Text style={{ fontWeight: "900", color: FIORI.text, fontSize: 12 }}>
+                          Marcar todo ({checkedCount}/{opIds.length})
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+                  ) : null}
 
-                          <Ionicons
-                            name={isItemOpen ? "chevron-up-outline" : "chevron-down-outline"}
-                            size={18}
-                            color={FIORI.textMuted}
-                          />
-                        </TouchableOpacity>
+                  {/* Operaciones del grupo */}
+                  <View style={{ gap: 8 }}>
+                    {opsGroup.map((op, idx) => {
+                      const realId = opStableId(orderId, op, idx);
+                      const checked = isOpChecked(realId);
 
-                        {finalizeMode ? (
-                          <View
-                            style={{
-                              marginTop: 10,
-                              flexDirection: "row",
-                              alignItems: "center",
-                              justifyContent: "flex-start",
-                              gap: 10,
-                            }}
-                          >
-                            <TouchableOpacity
-                              activeOpacity={0.9}
-                              onPress={() => setManyChecked(opIds, !allChecked)}
-                              style={{
-                                flexDirection: "row",
-                                alignItems: "center",
-                                gap: 8,
-                                paddingHorizontal: 10,
-                                paddingVertical: 8,
-                                borderRadius: 10,
-                                borderWidth: 1,
-                                borderColor: FIORI.borderSoft,
-                                backgroundColor: allChecked ? FIORI.brandSoft : FIORI.surface,
-                              }}
-                            >
-                              <Ionicons
-                                name={itemCheckIcon}
-                                size={20}
-                                color={allChecked || someChecked ? FIORI.brand : FIORI.textMuted}
-                              />
-                              <Text style={{ fontWeight: "900", color: FIORI.text, fontSize: 12 }}>
-                                Marcar todo el ITEM
-                              </Text>
-                            </TouchableOpacity>
-                          </View>
-                        ) : null}
-
-                        {isItemOpen && (
-                          <View style={{ paddingTop: 10, gap: 8 }}>
-                            {opsItem.map((op, idx) => {
-                              const realId = opStableId(orderId, op, idx);
-                              const checked = isOpChecked(realId);
-
-                              return (
-                                <ItemOperacionDetalle
-                                  key={realId}
-                                  op={{
-                                    ...op,
-                                    // ✅ normalizamos campos para UI, pero NO tocamos op.id
-                                    activity: normalizeActivity(op),
-                                    subactivity: normalizeSubActivity(op),
-                                    description: normalizeDescription(op),
-                                    standardTextKey: normalizeStandardTextKey(op),
-                                  }}
-                                  index={idx}
-                                  styles={styles}
-                                  FIORI={FIORI}
-                                  allowChecks={finalizeMode}
-                                  checked={checked}
-                                  onToggleCheck={() => toggleOpChecked(realId)}
-                                />
-                              );
-                            })}
-                          </View>
-                        )}
-                      </View>
-                    );
-                  })}
+                      return (
+                        <ItemOperacionDetalle
+                          key={realId}
+                          op={{
+                            ...op,
+                            activity: normalizeActivity(op),
+                            subactivity: normalizeSubActivity(op),
+                            description: normalizeDescription(op),
+                            standardTextKey: normalizeStandardTextKey(op),
+                          }}
+                          index={idx}
+                          styles={styles}
+                          FIORI={FIORI}
+                          allowChecks={finalizeMode}
+                          checked={checked}
+                          onToggleCheck={() => toggleOpChecked(realId)}
+                        />
+                      );
+                    })}
+                  </View>
                 </View>
               )}
             </View>

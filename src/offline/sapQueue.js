@@ -1,10 +1,24 @@
 // src/offline/sapQueue.js
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import NetInfo from "@react-native-community/netinfo";
-import api from "../services/api";
 
-const QUEUE_KEY = "sapQueue:v2";
-const MAX_TRIES = 8; // evita loops eternos
+/**
+ * ✅ Cola SAP con "dedupeKey" para pisar estatus:
+ * - Estatus (0400 / 0300 / etc) deben usar dedupeKey = `STATUS:<orderId>`
+ * - Confirmaciones NO deben pisarse normalmente (dedupeKey opcional)
+ *
+ * Uso recomendado desde tu index:
+ *   upsertSapQueueItem({
+ *     type: "STATUS",
+ *     orderId,
+ *     endpoint: "/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet",
+ *     payload,
+ *     dedupeKey: `STATUS:${orderId}`,
+ *   })
+ */
+
+const QUEUE_KEY = "sapQueue:v3";
+const MAX_TRIES = 8;
 
 function nowMs() {
   return Date.now();
@@ -17,7 +31,8 @@ function uid() {
 async function loadQueue() {
   try {
     const raw = await AsyncStorage.getItem(QUEUE_KEY);
-    return raw ? JSON.parse(raw) : [];
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
   } catch {
     return [];
   }
@@ -29,44 +44,29 @@ async function saveQueue(items) {
   } catch {}
 }
 
-/**
- * Item schema:
- * {
- *   id,
- *   key?: string, // opcional (dedupe)
- *   type: "STATUS" | "CONFIRMATIONS" | "SIGNATURE" | "PDF" | "GENERIC",
- *   orderId,
- *   endpoint,
- *   method: "POST" | "PATCH" | "PUT",
- *   payload,
- *   createdAt,
- *   updatedAt,
- *   tries,
- *   lastError
- * }
- */
-
 function normalizeMethod(method) {
   const m = String(method || "POST").toUpperCase();
   return ["POST", "PATCH", "PUT"].includes(m) ? m : "POST";
 }
 
-function normalizeEndpoint(endpoint) {
-  if (!endpoint) return "";
-  // soporta absoluto o relativo
-  return String(endpoint).trim();
-}
-
 function normalizeType(type) {
   const t = String(type || "GENERIC").toUpperCase();
+  // puedes agregar más tipos si quieres
   const allowed = ["STATUS", "CONFIRMATIONS", "SIGNATURE", "PDF", "GENERIC"];
   return allowed.includes(t) ? t : "GENERIC";
 }
 
+function safeStr(v) {
+  return String(v ?? "").trim();
+}
+
 /**
- * Inserta o actualiza un item.
- * - Si pasas key, intenta "dedupe": reemplaza el existente con misma key+orderId+type+endpoint+method.
- * - Si NO pasas key, simplemente encola (push).
+ * ✅ Inserta o reemplaza item
+ * Reglas:
+ * - Si viene dedupeKey (o key legacy), se busca item existente con:
+ *    same orderId + same dedupeKey
+ *   y se REEMPLAZA el payload/endpoint/method manteniendo id/createdAt/tries.
+ * - Si no viene dedupeKey, solo hace append.
  */
 export async function upsertSapQueueItem({
   type,
@@ -74,16 +74,29 @@ export async function upsertSapQueueItem({
   endpoint,
   method = "POST",
   payload,
-  key, // opcional
+
+  // ✅ NUEVO
+  dedupeKey,
+
+  // 🔁 legacy (compat)
+  key,
 }) {
+  const orderIdNorm = safeStr(orderId);
+
+  const finalKey = safeStr(dedupeKey) || safeStr(key) || undefined;
+
   const item = {
     id: uid(),
-    key: key ? String(key) : undefined,
+    // guardamos en ambos por compat
+    dedupeKey: finalKey,
+    key: finalKey,
+
     type: normalizeType(type),
-    orderId: String(orderId || "").trim(),
-    endpoint: normalizeEndpoint(endpoint),
+    orderId: orderIdNorm,
+    endpoint: safeStr(endpoint),
     method: normalizeMethod(method),
     payload,
+
     createdAt: nowMs(),
     updatedAt: nowMs(),
     tries: 0,
@@ -92,112 +105,141 @@ export async function upsertSapQueueItem({
 
   const q = await loadQueue();
 
-  if (item.key) {
+  // ✅ Dedupe/replace
+  if (item.dedupeKey) {
     const idx = q.findIndex(
       (x) =>
         x &&
-        x.key === item.key &&
-        String(x.orderId || "").trim() === item.orderId &&
-        String(x.type || "").toUpperCase() === item.type &&
-        String(x.endpoint || "").trim() === item.endpoint &&
-        normalizeMethod(x.method) === item.method
+        safeStr(x.orderId) === item.orderId &&
+        safeStr(x.dedupeKey || x.key) === item.dedupeKey
     );
 
     if (idx >= 0) {
-      // reemplaza manteniendo tries/createdAt
       const prev = q[idx];
+
       q[idx] = {
         ...prev,
         ...item,
-        id: prev.id || item.id,
-        createdAt: prev.createdAt || item.createdAt,
-        tries: prev.tries || 0,
-        lastError: prev.lastError || null,
-        updatedAt: nowMs(),
+        id: prev.id, // mantiene identidad
+        createdAt: prev.createdAt,
+        tries: Number(prev.tries || 0), // mantiene tries
+        // lastError se limpia porque es "nuevo intento lógico"
+        lastError: null,
       };
+
       await saveQueue(q);
       return q[idx];
     }
   }
 
+  // append
   q.push(item);
   await saveQueue(q);
   return item;
 }
 
 /**
- * ✅ Tu función original: enqueueSapItem
- * La dejamos por compatibilidad (por si la usas en otros lados).
+ * ✅ Útil si quieres limpiar estatus viejos manualmente (opcional)
  */
-export async function enqueueSapItem({ type, orderId, endpoint, method = "POST", payload, key }) {
-  return upsertSapQueueItem({ type, orderId, endpoint, method, payload, key });
+export async function removeSapQueueItemsByKey({ orderId, dedupeKey }) {
+  const orderIdNorm = safeStr(orderId);
+  const k = safeStr(dedupeKey);
+  if (!orderIdNorm || !k) return { ok: false, removed: 0 };
+
+  const q = await loadQueue();
+  const before = q.length;
+
+  const next = q.filter(
+    (x) => !(safeStr(x.orderId) === orderIdNorm && safeStr(x.dedupeKey || x.key) === k)
+  );
+
+  await saveQueue(next);
+  return { ok: true, removed: before - next.length };
 }
 
+/**
+ * Procesa la cola en orden FIFO.
+ * - Solo intenta items con tries < MAX_TRIES.
+ * - Si falla, incrementa tries y conserva item.
+ * - Si éxito, lo elimina.
+ */
+export async function processSapQueue({ ensureValidToken, apiInstance } = {}) {
+  const net = await NetInfo.fetch();
+  const isOnline = !!(net?.isConnected && net?.isInternetReachable !== false);
+
+  if (!isOnline) return { ok: false, reason: "offline" };
+  if (!apiInstance) return { ok: false, reason: "missing_apiInstance" };
+
+  let q = await loadQueue();
+  if (!q.length) return { ok: true, processed: 0, remaining: 0 };
+
+  // Normaliza por si hay basura
+  q = q.filter((x) => x && safeStr(x.endpoint));
+
+  const keep = [];
+  let processed = 0;
+  let skippedMaxTries = 0;
+
+  try {
+    await ensureValidToken?.();
+  } catch {}
+
+  for (const item of q) {
+    const tries = Number(item?.tries || 0);
+
+    if (tries >= MAX_TRIES) {
+      // lo dejamos tal cual (o podrías moverlo a "dead letter")
+      keep.push(item);
+      skippedMaxTries++;
+      continue;
+    }
+
+    try {
+      const method = normalizeMethod(item.method).toLowerCase();
+      const endpoint = safeStr(item.endpoint);
+
+      if (!endpoint) throw new Error("Queue item sin endpoint");
+
+      if (method === "post") {
+        await apiInstance.post(endpoint, item.payload);
+      } else if (method === "patch") {
+        await apiInstance.patch(endpoint, item.payload);
+      } else if (method === "put") {
+        await apiInstance.put(endpoint, item.payload);
+      } else {
+        throw new Error("Método no soportado");
+      }
+
+      processed++;
+      // ✅ éxito => NO se conserva
+    } catch (e) {
+      keep.push({
+        ...item,
+        tries: tries + 1,
+        updatedAt: nowMs(),
+        lastError: e?.message || "error",
+      });
+    }
+  }
+
+  await saveQueue(keep);
+
+  return {
+    ok: true,
+    processed,
+    remaining: keep.length,
+    skippedMaxTries,
+  };
+}
+
+/**
+ * Helpers opcionales
+ */
 export async function getSapQueue() {
   return await loadQueue();
 }
 
 export async function clearSapQueue() {
   await saveQueue([]);
-}
-
-/**
- * Procesa cola (solo si hay internet).
- * Pasa token para Authorization header.
- */
-export async function processSapQueue(token) {
-  const net = await NetInfo.fetch();
-  const isOnline = !!(net?.isConnected && net?.isInternetReachable !== false);
-  if (!isOnline) return { ok: false, reason: "offline" };
-
-  let q = await loadQueue();
-  if (!q.length) return { ok: true, processed: 0, remaining: 0 };
-
-  const headers = token ? { Authorization: `Bearer ${token}` } : undefined;
-
-  const keep = [];
-  let processed = 0;
-  let dropped = 0;
-
-  for (const item of q) {
-    // si ya falló mucho, lo descartamos para no ciclar infinito
-    const tries = Number(item?.tries || 0);
-    if (tries >= MAX_TRIES) {
-      dropped += 1;
-      continue;
-    }
-
-    try {
-      const method = normalizeMethod(item.method).toLowerCase();
-      const endpoint = normalizeEndpoint(item.endpoint);
-
-      if (!endpoint) throw new Error("Queue item sin endpoint");
-
-      if (method === "post") {
-        await api.post(endpoint, item.payload, { headers });
-      } else if (method === "patch") {
-        await api.patch(endpoint, item.payload, { headers });
-      } else if (method === "put") {
-        await api.put(endpoint, item.payload, { headers });
-      } else {
-        throw new Error(`Método no soportado: ${item.method}`);
-      }
-
-      processed += 1;
-    } catch (e) {
-      const msg = e?.response?.data
-        ? JSON.stringify(e.response.data)
-        : e?.message || String(e);
-
-      keep.push({
-        ...item,
-        tries: tries + 1,
-        updatedAt: nowMs(),
-        lastError: msg,
-      });
-    }
-  }
-
-  await saveQueue(keep);
-  return { ok: true, processed, remaining: keep.length, dropped };
+  return { ok: true };
 }

@@ -15,11 +15,13 @@ const atStartOfDay = (d) => {
   x.setHours(0, 0, 0, 0);
   return x;
 };
+
 const addDays = (d, n) => {
   const x = new Date(d);
   x.setDate(x.getDate() + n);
   return x;
 };
+
 const ymd = (d) => {
   const x = new Date(d);
   const y = x.getFullYear();
@@ -30,16 +32,19 @@ const ymd = (d) => {
 
 function parseSapDate(value) {
   if (!value) return null;
+
+  // /Date(1771891200000)/
   if (typeof value === "string" && value.startsWith("/Date(")) {
     const ms = parseInt(value.replace("/Date(", "").replace(")/", ""), 10);
     if (!Number.isNaN(ms)) return new Date(ms);
     return null;
   }
+
   const d = new Date(value);
   return Number.isFinite(d.getTime()) ? d : null;
 }
 
-// Usa UTC ymd para comparar sin problemas de zona horaria
+// Comparación UTC-safe
 const getUtcYmd = (d) => {
   if (!d) return null;
   const yyyy = d.getUTCFullYear();
@@ -56,7 +61,25 @@ export function buildOfflineWindow(baseDate = new Date()) {
 }
 
 /**
- * Filtra órdenes por start_date dentro de ventana (UTC-safe)
+ * TRUE si una orden cae dentro de la ventana (usa start_date)
+ */
+export function isOrderInWindow(order, window) {
+  if (!order || !window?.start || !window?.end) return false;
+
+  const d = parseSapDate(order?.start_date);
+  if (!d) return false;
+
+  const ds = getUtcYmd(d);
+  const s = getUtcYmd(window.start);
+  const e = getUtcYmd(window.end);
+
+  if (s && ds < s) return false;
+  if (e && ds > e) return false;
+  return true;
+}
+
+/**
+ * Filtra órdenes por ventana
  */
 export function filterOrdenesByWindow(ordenes = [], start, end) {
   const s = start ? getUtcYmd(start) : null;
@@ -73,7 +96,7 @@ export function filterOrdenesByWindow(ordenes = [], start, end) {
 }
 
 /**
- * Guarda lista completa + ventana usada (para que tu app sepa "qué tan fresca" está)
+ * Guarda lista offline (YA FILTRADA)
  */
 export async function saveOrdenesTecnicoList(userEmail, ordenes, window) {
   const payload = {
@@ -115,10 +138,95 @@ export async function getOrdenesTecnicoLastSync(userEmail) {
   }
 }
 
-// --- Detalle ---
+/* =========================
+   ✅ Detalle (con límite)
+   ========================= */
+
+function estimateBytes(str) {
+  return (str?.length || 0) * 2; // aproximado
+}
+
+const MAX_DETAIL_BYTES = 350_000; // ~350KB por detalle (ajustable)
+
+/**
+ * Adelgaza el detalle para que no explote storage
+ * Guardamos lo necesario para UI offline.
+ */
+function sanitizeDetailForCache(detail) {
+  if (!detail || typeof detail !== "object") return null;
+
+  const ops = Array.isArray(detail?.operaciones) ? detail.operaciones : [];
+  const opsSlim = ops.map((op) => ({
+    id: op?.id,
+    Usr02: op?.Usr02 ?? op?.usr02,
+    Activity: op?.Activity ?? op?.activity ?? op?.Vornr,
+    SubActivity: op?.SubActivity ?? op?.subactivity ?? op?.Uvorn,
+    Description: op?.Description ?? op?.description ?? op?.Ltxa1,
+    StandardTextKey: op?.StandardTextKey ?? op?.standardTextKey,
+    estatus: op?.estatus,
+    worked_ms: op?.worked_ms,
+    last_resume_at: op?.last_resume_at,
+    Strttimcon: op?.Strttimcon,
+    Fintimcons: op?.Fintimcons,
+    paused_at: op?.paused_at,
+    pause_motivo: op?.pause_motivo,
+  }));
+
+  return {
+    Orderid: String(detail?.Orderid ?? detail?.OrderId ?? "").trim(),
+    order_type: detail?.order_type,
+    equipment: detail?.equipment,
+    start_date: detail?.start_date,
+    finish_date: detail?.finish_date,
+    direccion: detail?.direccion,
+    cliente: detail?.cliente,
+    cliente_email: detail?.cliente_email,
+    userstatus: detail?.userstatus,
+    estatus_code: detail?.estatus_code,
+    estatus_label: detail?.estatus_label,
+    estatus_tipo: detail?.estatus_tipo,
+    isFinal: detail?.isFinal,
+    checkin_done: detail?.checkin_done,
+    componentes: Array.isArray(detail?.componentes) ? detail.componentes : [], // si es enorme, lo quitamos después
+    operaciones: opsSlim,
+  };
+}
+
+/**
+ * Decide si conviene guardar el detalle en offline:
+ * solo si la orden está dentro de hoy ± 8 días
+ */
+export function shouldCacheDetailByOrder(orderLike, baseDate = new Date()) {
+  const window = buildOfflineWindow(baseDate);
+  return isOrderInWindow(orderLike, window);
+}
+
 export async function saveOrdenTecnicoDetail(orderId, data) {
-  const payload = { updatedAt: Date.now(), data: data || null };
-  await AsyncStorage.setItem(DETAIL_KEY(orderId), JSON.stringify(payload));
+  const slim = sanitizeDetailForCache(data);
+  const payload = { updatedAt: Date.now(), data: slim };
+
+  let raw = JSON.stringify(payload);
+  let bytes = estimateBytes(raw);
+
+  // si aún es grande, quitamos componentes (suele pesar mucho)
+  if (bytes > MAX_DETAIL_BYTES) {
+    payload.data = { ...(payload.data || {}), componentes: [] };
+    raw = JSON.stringify(payload);
+    bytes = estimateBytes(raw);
+  }
+
+  if (bytes > MAX_DETAIL_BYTES) {
+    console.log("[OFFLINE] Detalle demasiado grande, NO se guarda:", orderId, "bytes:", bytes);
+    return false;
+  }
+
+  try {
+    await AsyncStorage.setItem(DETAIL_KEY(orderId), raw);
+    return true;
+  } catch (e) {
+    console.log("[OFFLINE] saveOrdenTecnicoDetail ERROR:", e?.message || e);
+    return false;
+  }
 }
 
 export async function loadOrdenTecnicoDetail(orderId) {
@@ -131,8 +239,8 @@ export async function loadOrdenTecnicoDetail(orderId) {
 }
 
 /**
- * Limpieza: deja solo detalles de órdenes que aún existan en la lista cacheada.
- * Útil para que no crezca infinito.
+ * Limpieza por lista:
+ * deja solo detalles de órdenes que aún existan en la lista cacheada.
  */
 export async function pruneDetallesNoUsados(orderIdsKeep = []) {
   try {
@@ -143,5 +251,22 @@ export async function pruneDetallesNoUsados(orderIdsKeep = []) {
     if (toDelete.length) await AsyncStorage.multiRemove(toDelete);
   } catch {
     // no-op
+  }
+}
+
+/**
+ * Limpieza por ventana:
+ * borra detalles de órdenes que NO caen en la ventana actual.
+ */
+export async function pruneDetallesByWindow(userEmail, window) {
+  try {
+    const cached = await loadOrdenesTecnicoList(userEmail);
+    const list = cached?.data || [];
+    const keepIds = list.map((x) => String(x?.Orderid ?? "").trim()).filter(Boolean);
+
+    await pruneDetallesNoUsados(keepIds);
+    return { ok: true, keep: keepIds.length };
+  } catch (e) {
+    return { ok: false, error: e?.message || String(e) };
   }
 }

@@ -38,7 +38,7 @@ export default function EncabezadoDetalleOrden({
   estatusColor,
   isNoMant,
   checkinDone,
-  isOrderFinished, // 👈 acá le pasamos isOrderFinishedReal desde el padre
+  isOrderFinished, // acá le pasamos isOrderFinishedReal desde el padre
 
   // valores listos
   direccionValor,

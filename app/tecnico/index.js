@@ -1,4 +1,5 @@
-import React from 'react';
+// app/tecnico/index.js
+import React, { useEffect } from "react";
 import {
   View,
   Text,
@@ -7,43 +8,76 @@ import {
   Pressable,
   Platform,
   StatusBar,
-} from 'react-native';
-import { router } from 'expo-router';
-import { Ionicons } from '@expo/vector-icons';
-import Header from '../../src/components/Header';
+} from "react-native";
+import { router } from "expo-router";
+import { Ionicons } from "@expo/vector-icons";
+import Header from "../../src/components/Header";
+
+import { useAuth } from "../../src/context/AuthContext";
+import { useOffline } from "../../src/offline/OffilneProvider";
+import { bootstrapPrefetchOrdenesTecnico } from "../../src/offline/bootstrapSyncTecnico";
 
 // ====== Datos del menú (tiles) ======
 const TILES = [
-  { key: 'ordenes', title: 'Órdenes de servicio', icon: 'document-text-outline', onPress: () => router.push('/tecnico/ordenes') },
-  { key: 'averias', title: 'Aviso de avería', icon: 'warning-outline', onPress: () => router.push('/tecnico/averias') },
-  { key: 'rutas', title: 'Ruta asignada', icon: 'navigate-outline', onPress: () => router.push('/tecnico/rutas') },
-  { key: 'no_mantenimiento', title: 'No mantenimiento', icon: 'ban-outline', onPress: () => router.push('/tecnico/no_mantenimiento') },
-  { key: 'documentos', title: 'Documentos de mantenimiento', icon: 'documents-outline', onPress: () => router.push('/tecnico/documentos') },
-
+  {
+    key: "ordenes",
+    title: "Órdenes de servicio",
+    icon: "document-text-outline",
+    onPress: () => router.push("/tecnico/ordenes"),
+  },
+  {
+    key: "pendiente_firma",
+    title: "Pendiente de firma",
+    icon: "pencil-outline",
+    onPress: () => router.push("/tecnico/pendiente_firma"),
+  },
+  {
+    key: "no_mantenimiento",
+    title: "No mantenimiento",
+    icon: "ban-outline",
+    onPress: () => router.push("/tecnico/no_mantenimiento"),
+  },
+  {
+    key: "averias",
+    title: "Aviso de avería",
+    icon: "warning-outline",
+    onPress: () => router.push("/tecnico/averias"),
+  },
+  {
+    key: "rutas",
+    title: "Ruta asignada",
+    icon: "navigate-outline",
+    onPress: () => router.push("/tecnico/rutas"),
+  },
+  {
+    key: "documentos",
+    title: "Documentos de mantenimiento",
+    icon: "documents-outline",
+    onPress: () => router.push("/tecnico/documentos"),
+  },
 ];
 
-
-// ====== Tile (azulejo) estilo Fiori ======
+// ====== Tile estilo Fiori ======
 function FioriTile({ title, icon, badge, onPress, disabled = false }) {
   return (
     <Pressable
       onPress={disabled ? null : onPress}
       disabled={disabled}
-      android_ripple={disabled ? null : { color: '#d7e3f3' }}
+      android_ripple={disabled ? null : { color: "#d7e3f3" }}
       style={({ pressed }) => [
         styles.tile,
         disabled && styles.tileDisabled,
-        pressed && !disabled && Platform.OS === 'ios' ? { opacity: 0.9 } : null,
+        pressed && !disabled && Platform.OS === "ios" ? { opacity: 0.9 } : null,
       ]}
     >
       <View style={styles.tileHeader}>
         <Ionicons
           name={icon}
           size={28}
-          color={disabled ? '#9AA5B1' : '#0B1F3B'}
+          color={disabled ? "#9AA5B1" : "#0B1F3B"}
         />
 
-        {typeof badge === 'number' && badge > 0 && !disabled && (
+        {typeof badge === "number" && badge > 0 && !disabled && (
           <View style={styles.badge}>
             <Text style={styles.badgeText}>{badge}</Text>
           </View>
@@ -60,14 +94,36 @@ function FioriTile({ title, icon, badge, onPress, disabled = false }) {
   );
 }
 
-
 export default function TecnicoHome() {
+  const { user } = useAuth();
+  const { online, dbReady } = useOffline();
+
+  useEffect(() => {
+    // ✅ detecta email (ajusta aquí si tu user trae otro nombre de campo)
+    const email =
+      user?.email ||
+      user?.Email ||
+      user?.username ||
+      user?.Userstatus ||
+      null;
+
+    if (!online || !dbReady || !email) return;
+
+    // dispara prefetch (no bloquea UI)
+    bootstrapPrefetchOrdenesTecnico(String(email).trim())
+      .then((r) => {
+        console.log("[OFFLINE] prefetch tecnico:", r);
+      })
+      .catch((e) => {
+        console.log("[OFFLINE] prefetch tecnico error:", e?.message || e);
+      });
+  }, [online, dbReady, user]);
+
   return (
     <View style={styles.container}>
       <StatusBar barStyle="dark-content" />
       <Header title="Inicio Técnico" />
 
-      {/* Grid 2 columnas tipo Launchpad */}
       <FlatList
         data={TILES}
         numColumns={2}
@@ -84,35 +140,22 @@ export default function TecnicoHome() {
           />
         )}
       />
-
-     
     </View>
   );
 }
 
-// ====== Estilos inspirados en SAP Fiori (Horizon) ======
 const COLORS = {
-  pageBg: '#F7F7F7',
-  tileBg: '#EFF4F9',
-  tileBorder: '#DDE6F2',
-  textPrimary: '#0B1F3B',
-  badgeBg: '#EB5757',
+  pageBg: "#F7F7F7",
+  tileBg: "#EFF4F9",
+  tileBorder: "#DDE6F2",
+  textPrimary: "#0B1F3B",
+  badgeBg: "#EB5757",
 };
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: COLORS.pageBg,
-  },
-  grid: {
-    padding: 16,
-    paddingBottom: 80, // por si tu Footer ocupa espacio visual
-  },
-  gridRow: {
-    // usa separación manual para compat horizontal
-    justifyContent: 'space-between',
-    marginBottom: 12,
-  },
+  container: { flex: 1, backgroundColor: COLORS.pageBg },
+  grid: { padding: 16, paddingBottom: 80 },
+  gridRow: { justifyContent: "space-between", marginBottom: 12 },
   tile: {
     flex: 1,
     minHeight: 110,
@@ -121,22 +164,27 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.tileBorder,
     padding: 14,
-    marginHorizontal: 6, // balancea separación entre columnas
-    justifyContent: 'space-between',
+    marginHorizontal: 6,
+    justifyContent: "space-between",
     ...Platform.select({
-      ios: { shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 8, shadowOffset: { width: 0, height: 3 } },
+      ios: {
+        shadowColor: "#000",
+        shadowOpacity: 0.05,
+        shadowRadius: 8,
+        shadowOffset: { width: 0, height: 3 },
+      },
       android: { elevation: 2 },
     }),
   },
   tileHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
   },
   tileTitle: {
     marginTop: 8,
     fontSize: 14,
-    fontWeight: '600',
+    fontWeight: "600",
     color: COLORS.textPrimary,
     lineHeight: 18,
   },
@@ -146,20 +194,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 6,
     borderRadius: 10,
     backgroundColor: COLORS.badgeBg,
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    justifyContent: "center",
   },
-  badgeText: {
-    color: '#FFF',
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  tileDisabled: {
-  opacity: 0.45,
-},
-
-tileTitleDisabled: {
-  color: '#7A869A',
-},
-
+  badgeText: { color: "#FFF", fontSize: 12, fontWeight: "700" },
+  tileDisabled: { opacity: 0.45 },
+  tileTitleDisabled: { color: "#7A869A" },
 });

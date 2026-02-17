@@ -1,10 +1,9 @@
 // app/ordenes/[id]/secciones/PieDetalleOrden.js
 import React from "react";
-import { View, Text, TouchableOpacity, Alert } from "react-native";
+import { View, Text, TouchableOpacity, Alert, StyleSheet, Platform } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 
 export default function PieDetalleOrden({
-  styles,
   FIORI,
 
   isNoMant,
@@ -23,15 +22,15 @@ export default function PieDetalleOrden({
   onGuardarPendiente,
   onAgregarFirma,
   hasSelectedOps = false,
+
+  // ✅ NUEVO: para hacerlo sticky desde afuera
+  styleOverride,
 }) {
   if (isNoMant) return null;
 
   const status = String(statusCode || "").trim();
-
   const isSinEmpezar = !status;
   const isPendiente0100 = status === "0100";
-
-  // ✅ Finalizada REAL (no se puede)
   const isFinalizadaReal = status === "0300" || status === "0500";
 
   // Solo técnico
@@ -51,61 +50,8 @@ export default function PieDetalleOrden({
     );
   };
 
-  // ✅ Si finalizeMode está ON, mostramos acciones dobles
-  if (finalizeMode) {
-    return (
-      <View style={{ marginTop: 8, marginBottom: 24, gap: 10 }}>
-        {/* Guardar pendiente (0400) */}
-        <TouchableOpacity
-          style={[
-            styles.btnFinishOrder,
-            (!hasSelectedOps || finishingOrder) && { opacity: 0.65 },
-            { backgroundColor: FIORI.brand },
-          ]}
-          activeOpacity={0.9}
-          onPress={onGuardarPendiente}
-          disabled={!hasSelectedOps || finishingOrder}
-        >
-          <Ionicons name="save-outline" size={18} color="#fff" />
-          <Text style={styles.btnFinishOrderText}>Guardar pendiente de firma (0400)</Text>
-        </TouchableOpacity>
+  const disabledBySelection = !hasSelectedOps || finishingOrder;
 
-        {/* Agregar firma */}
-        <TouchableOpacity
-          style={[
-            styles.btnFinishOrder,
-            (!hasSelectedOps || finishingOrder) && { opacity: 0.65 },
-            { backgroundColor: "#0B8457" },
-          ]}
-          activeOpacity={0.9}
-          onPress={onAgregarFirma}
-          disabled={!hasSelectedOps || finishingOrder}
-        >
-          <Ionicons name="create-outline" size={18} color="#fff" />
-          <Text style={styles.btnFinishOrderText}>Agregar firma del cliente</Text>
-        </TouchableOpacity>
-
-        {/* ✅ Cancelar finalize mode (NO mostrar si ya está en 0400) */}
-        {status !== "0400" && (
-          <TouchableOpacity
-            style={[
-              styles.btnFinishOrder,
-              { backgroundColor: FIORI.err },
-              finishingOrder && { opacity: 0.7 },
-            ]}
-            activeOpacity={0.9}
-            onPress={confirmCancel}
-            disabled={finishingOrder}
-          >
-            <Ionicons name="close-circle-outline" size={18} color="#fff" />
-            <Text style={styles.btnFinishOrderText}>Cancelar finalización</Text>
-          </TouchableOpacity>
-        )}
-      </View>
-    );
-  }
-
-  // finalizeMode OFF -> botón principal para entrar
   const finishLabel = finishingOrder
     ? "Preparando…"
     : status === "0400"
@@ -113,16 +59,109 @@ export default function PieDetalleOrden({
     : "Finalizar orden";
 
   return (
-    <View style={{ marginTop: 4, marginBottom: 24 }}>
-      <TouchableOpacity
-        style={[styles.btnFinishOrder, finishingOrder && { opacity: 0.7 }]}
-        activeOpacity={0.9}
-        onPress={onFinalizarOrden}
-        disabled={finishingOrder}
-      >
-        <Ionicons name="flag-outline" size={18} color="#fff" />
-        <Text style={styles.btnFinishOrderText}>{finishLabel}</Text>
-      </TouchableOpacity>
+    <View style={[local.container, styleOverride]}>
+      {finalizeMode ? (
+        <View style={{ gap: 10 }}>
+          {/* Guardar pendiente (0400) */}
+          <ActionButton
+            icon="save-outline"
+            label="Guardar pendiente de firma (0400)"
+            onPress={onGuardarPendiente}
+            disabled={disabledBySelection}
+            style={[
+              { backgroundColor: FIORI?.brand || "#0A6ED1" },
+              disabledBySelection && local.disabled,
+            ]}
+          />
+
+          {/* Agregar firma */}
+          <ActionButton
+            icon="create-outline"
+            label="Agregar firma del cliente"
+            onPress={onAgregarFirma}
+            disabled={disabledBySelection}
+            style={[{ backgroundColor: "#0B8457" }, disabledBySelection && local.disabled]}
+          />
+
+          {/* Cancelar finalize mode (NO mostrar si ya está en 0400) */}
+          {status !== "0400" ? (
+            <ActionButton
+              icon="close-circle-outline"
+              label="Cancelar finalización"
+              onPress={confirmCancel}
+              disabled={!!finishingOrder}
+              style={[
+                { backgroundColor: FIORI?.err || "#E74C3C" },
+                finishingOrder && local.disabled,
+              ]}
+            />
+          ) : null}
+        </View>
+      ) : (
+        <ActionButton
+          icon="flag-outline"
+          label={finishLabel}
+          onPress={onFinalizarOrden}
+          disabled={!!finishingOrder}
+          style={[{ backgroundColor: "#0B8457" }, finishingOrder && local.disabled]}
+        />
+      )}
     </View>
   );
 }
+
+function ActionButton({ icon, label, onPress, disabled, style }) {
+  return (
+    <TouchableOpacity
+      activeOpacity={0.9}
+      onPress={disabled ? null : onPress}
+      disabled={disabled}
+      style={[local.btn, style]}
+    >
+      <Ionicons name={icon} size={18} color="#fff" style={{ marginRight: 10 }} />
+      <Text style={local.btnText} numberOfLines={2}>
+        {label}
+      </Text>
+    </TouchableOpacity>
+  );
+}
+
+const local = StyleSheet.create({
+  container: {
+    paddingTop: 8, // ✅ ya no usamos marginBottom porque ahora es sticky
+  },
+
+  btn: {
+    borderRadius: 14,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.15)",
+
+    ...Platform.select({
+      ios: {
+        shadowColor: "#000",
+        shadowOpacity: 0.12,
+        shadowRadius: 10,
+        shadowOffset: { width: 0, height: 5 },
+      },
+      android: { elevation: 3 },
+      default: {},
+    }),
+  },
+
+  btnText: {
+    color: "#fff",
+    fontWeight: "900",
+    fontSize: 14,
+    textAlign: "center",
+    flexShrink: 1,
+  },
+
+  disabled: {
+    opacity: 0.6,
+  },
+});

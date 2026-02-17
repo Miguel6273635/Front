@@ -9,6 +9,7 @@ export const AREAS_TRABAJO = [
   { id: 6, label: "Cuarto de control" },
   { id: 7, label: "Vestíbulo" },
   { id: 8, label: "Área pública" },
+  { id: 9, label: "Cubo" },
 ];
 
 // ✅ Riesgos “Round 1” (los que aparecen en tu formato)

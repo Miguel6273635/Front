@@ -11,28 +11,40 @@ import {
   FlatList,
   AppState,
   Modal,
+  TextInput,
 } from "react-native";
 import NetInfo from "@react-native-community/netinfo";
+import { WebView } from "react-native-webview";
 
 import Header from "../../../../src/components/Header";
 import api from "../../../../src/services/api";
 import { useAuth } from "../../../../src/context/AuthContext";
 import { useLocalSearchParams, router } from "expo-router";
+
 import {
   loadOrdenTecnicoDetail,
   saveOrdenTecnicoDetail,
+  shouldCacheDetailByOrder,
 } from "../../../../src/offline/ordenesTecnicoCache";
+
 import { Audio } from "expo-av";
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+
 import * as FileSystem from "expo-file-system/legacy";
 import * as Sharing from "expo-sharing";
+import * as Print from "expo-print";
+
+// ✅ HTML/PDF mantenimiento (plantillas + operaciones)
+import { buildMantenimientoHtml } from "../../../../src/services/templates/buildMantenimientoHtml";
 
 // ✅ Secciones (segmentación)
 import EncabezadoDetalleOrden from "./secciones/EncabezadoDetalleOrden";
 import ModalesDetalleOrden from "./secciones/ModalesDetalleOrden";
 import { ListaOperacionesAgrupadas } from "./secciones/ListaOperacionesDetalle";
 import PieDetalleOrden from "./secciones/PieDetalleOrden";
+import ConsumiblesFinalizacion from "./secciones/ConsumiblesFinalizacion";
+
 
 // ✅ Cola offline SAP
 import { processSapQueue, upsertSapQueueItem } from "../../../../src/offline/sapQueue";
@@ -56,7 +68,6 @@ const FIORI = {
 
 /* ====================== Orden iniciada (contador) ====================== */
 const ORDER_START_KEY = (orderId) => `orderStart:${orderId}`;
-/* ✅ FIN local (para mostrar hora fin cuando ya finaliza) */
 const ORDER_FINISH_KEY = (orderId) => `orderFinish:${orderId}`;
 
 /* ====================== ✅ Pendiente de firma (persistir checks) ====================== */
@@ -84,13 +95,11 @@ async function loadOrderStart(orderId) {
     return null;
   }
 }
-
 async function saveOrderStart(orderId, ms) {
   try {
     await AsyncStorage.setItem(ORDER_START_KEY(orderId), String(ms));
   } catch {}
 }
-
 async function clearOrderStart(orderId) {
   try {
     await AsyncStorage.removeItem(ORDER_START_KEY(orderId));
@@ -106,13 +115,11 @@ async function loadOrderFinish(orderId) {
     return null;
   }
 }
-
 async function saveOrderFinish(orderId, ms) {
   try {
     await AsyncStorage.setItem(ORDER_FINISH_KEY(orderId), String(ms));
   } catch {}
 }
-
 async function clearOrderFinish(orderId) {
   try {
     await AsyncStorage.removeItem(ORDER_FINISH_KEY(orderId));
@@ -127,13 +134,11 @@ async function loadPendingSign(orderId) {
     return null;
   }
 }
-
 async function savePendingSign(orderId, payload) {
   try {
     await AsyncStorage.setItem(PENDING_SIGN_KEY(orderId), JSON.stringify(payload));
   } catch {}
 }
-
 async function clearPendingSign(orderId) {
   try {
     await AsyncStorage.removeItem(PENDING_SIGN_KEY(orderId));
@@ -148,7 +153,6 @@ async function loadOpState(orderId) {
     return {};
   }
 }
-
 async function saveOpState(orderId, state) {
   try {
     await AsyncStorage.setItem(OPSTATE_KEY(orderId), JSON.stringify(state || {}));
@@ -184,13 +188,11 @@ function msToMinutesRounded(ms) {
   const min = Math.round(ms / 60000);
   return Math.max(1, min);
 }
-
 function sapDateFromMs(ms) {
   const d = new Date(ms);
   const midnight = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
   return `/Date(${midnight})/`;
 }
-
 function sapTimePTFromMs(ms) {
   const d = new Date(ms);
   const h = d.getHours();
@@ -198,7 +200,6 @@ function sapTimePTFromMs(ms) {
   const s = d.getSeconds();
   return `PT${h}H${m}M${s}S`;
 }
-
 function prorateMinutes(totalMin, n) {
   const base = Math.floor(totalMin / n);
   const rem = totalMin % n;
@@ -206,7 +207,6 @@ function prorateMinutes(totalMin, n) {
   for (let i = 0; i < rem; i++) arr[i] += 1;
   return arr;
 }
-
 function buildSequentialWindows(startMs, mins) {
   let cursor = startMs;
   return mins.map((m) => {
@@ -248,7 +248,6 @@ function mapDireccionLikeBackend(addr) {
 
   return { cliente, direccion };
 }
-
 function pickSecondAddress(results = []) {
   if (!Array.isArray(results) || results.length === 0) return null;
   return results.length >= 2 ? results[1] : results[0];
@@ -260,7 +259,6 @@ function mergeOpsWithLocalState(orderId, ops, state) {
     const st = state?.[id] || {};
 
     const sapEstatus = (o.estatus || "pendiente").toLowerCase();
-
     const estatusFinal =
       sapEstatus === "finalizada" ? "finalizada" : st.estatus || sapEstatus || "pendiente";
 
@@ -357,10 +355,105 @@ function normalizeOpsFromBackend(ops = []) {
   });
 }
 
+const safeStr = (v) => String(v ?? "").trim();
+function detectTipoMantenimiento(orden) {
+  const raw = [
+    orden?.tipo_equipo,
+    orden?.EquipmentType,
+    orden?.equipment_type,
+    orden?.equipo_tipo,
+    orden?.tipo,
+    orden?.Type,
+    orden?.DescripcionEquipo,
+    orden?.description,
+  ]
+    .map((x) => safeStr(x))
+    .filter(Boolean)
+    .join(" | ")
+    .toLowerCase();
+
+  if (raw.includes("escal")) return "escalera";
+  return "elevador";
+}
+
+/* ======================
+   ✅ ESTATUS: detectar 0200 vs 0400 + armar payload 0300
+====================== */
+function normalizeCode(code) {
+  if (code === null || code === undefined) return "";
+  const s = String(code).trim();
+  if (!s) return "";
+  const n = parseInt(s, 10);
+  if (Number.isNaN(n)) return s;
+  return String(n).padStart(4, "0");
+}
+function extractCodes(raw) {
+  if (!raw) return [];
+  const s = String(raw).trim();
+  if (!s) return [];
+  const matches = s.match(/\d{1,4}/g) || [];
+  const codes = matches
+    .map((x) => normalizeCode(x))
+    .filter((x) => /^\d{4}$/.test(x));
+  return Array.from(new Set(codes));
+}
+function pickCurrentStatusCode(orden) {
+  const codes = extractCodes(orden?.userstatus ?? "");
+  const apiCode = normalizeCode(orden?.estatus_code ?? "");
+  const all = Array.from(new Set([...(codes || []), ...(apiCode ? [apiCode] : [])]));
+  if (all.includes("0400")) return "0400";
+  if (all.includes("0200")) return "0200";
+  return apiCode || (codes[0] || "");
+}
+
+function buildStatus0300Payload({ orderId, email, currentCode }) {
+  const remove = currentCode === "0400" ? "0400" : "0200";
+  return {
+    OrderId: orderId,
+    WorkOrderHeader: {
+      Orderid: orderId,
+      FunctLoc: email, // ✅ correo del cliente
+    },
+    WorkOrderUserStatusSet: [
+      { UserStText: "0300", Langu: "ES", Inactive: "" },
+      { UserStText: remove, Langu: "ES", Inactive: "X" },
+    ],
+    Return: [],
+  };
+}
+
+/* ====================== Logs (no revienta consola con base64) ====================== */
+function logSapPayload(label, payload, { stripBase64 = false } = {}) {
+  try {
+    if (!payload) {
+      console.log(label, payload);
+      return;
+    }
+    if (!stripBase64) {
+      console.log(label);
+      console.log(JSON.stringify(payload, null, 2));
+      return;
+    }
+    const cloned = JSON.parse(JSON.stringify(payload));
+    const att = cloned?.Attachments?.[0];
+    if (att?.Base64) att.Base64 = `<<base64 omitted: ${String(att.Base64).length} chars>>`;
+    console.log(label);
+    console.log(JSON.stringify(cloned, null, 2));
+  } catch {
+    console.log(label, payload);
+  }
+}
+
+/* ====================== Email ====================== */
+function isValidEmail(email) {
+  const s = String(email || "").trim().toLowerCase();
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
+}
+
 /* ====================== Componente ====================== */
 export default function DetalleOrden() {
   const { id } = useLocalSearchParams();
-  const { user, token } = useAuth();
+  const { user } = useAuth(); // api mete Bearer por interceptor
 
   const [orden, setOrden] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -372,14 +465,36 @@ export default function DetalleOrden() {
 
   // ✅ modo finalizar (checkboxes en operaciones)
   const [finalizeMode, setFinalizeMode] = useState(false);
-  // ✅ checks seleccionados (vive en el padre)
   const [checkedMap, setCheckedMap] = useState({});
+
+  // ✅ correo cliente para estatus 0300
+  const [clienteEmail, setClienteEmail] = useState("");
+
+  // ✅ NUEVO: nombre/cargo/aviso cliente (para PDF y registro)
+  const [clienteNombre, setClienteNombre] = useState("");
+  const [clienteCargo, setClienteCargo] = useState("");
+  const [avisoCliente, setAvisoCliente] = useState("");
+
+  // ✅ NUEVO: descripción breve del técnico (para PDF)
+  const [notaTecnico, setNotaTecnico] = useState("");
+
+  // ✅ (Siguiente paso) consumibles/cobertura (por ahora placeholders para que no truene)
+  const [coberturaAgr1, setCoberturaAgr1] = useState(null);
+  const [consumibles, setConsumibles] = useState([]);
 
   // ===== iniciar orden + contador (SOLO LOCAL) =====
   const [startingOrder, setStartingOrder] = useState(false);
   const [orderStartedAtMs, setOrderStartedAtMs] = useState(null);
   const [orderFinishedAtMs, setOrderFinishedAtMs] = useState(null);
   const [nowTick, setNowTick] = useState(Date.now());
+
+  // ===== ✅ PREVIEW MANTENIMIENTO (ANTES DE ENVIAR) =====
+  const [showMantPreview, setShowMantPreview] = useState(false);
+  const [mantHtmlPreview, setMantHtmlPreview] = useState(null);
+  const [mantPdfUri, setMantPdfUri] = useState(null);
+
+  // Guardamos todo lo necesario para “Continuar” después del preview
+  const [pendingFinalize, setPendingFinalize] = useState(null);
 
   useEffect(() => {
     let mounted = true;
@@ -464,7 +579,7 @@ export default function DetalleOrden() {
   const isOrderSinEmpezar = !statusCode;
   const isOrderPendiente0100 = statusCode === "0100";
 
-  // 🔴 OJO: 0400 NO es "finalizada real", es PENDIENTE DE FIRMA
+  // 🔴 0400 NO es "finalizada real", es PENDIENTE DE FIRMA
   const isOrderFinishedReal = !!orden?.isFinal || ["0300", "0500"].includes(statusCode);
 
   const estatusTxt = String(orden?.estatus_label || orden?.estatus || orden?.status || "")
@@ -484,15 +599,20 @@ export default function DetalleOrden() {
     !!orden?.checkin_done || !!orden?.checkin || !!orden?.checked_in || statusCode === "0200";
 
   // ✅ Operaciones bloqueadas si:
-  // - no mantenimiento, sin empezar, 0100, finalizada real, o sin checkin
   const isOpsLocked =
     isNoMant || isOrderSinEmpezar || isOrderPendiente0100 || isOrderFinishedReal || !checkinDone;
 
   const canStartTimer = isOrderEnProceso && !isNoMant && !isOrderFinishedReal && !!checkinDone;
 
   /* ====================== Helpers Offline (UI + cache + opstate + queue) ====================== */
+  const safeSaveDetailIfWindow = async (orderId, detailObj) => {
+    if (!detailObj) return;
+    const ok = shouldCacheDetailByOrder(detailObj, new Date());
+    if (!ok) return;
+    await saveOrdenTecnicoDetail(orderId, detailObj);
+  };
+
   const updateLocalOpsAsFinalizadas = async (orderId, selectedOpIds) => {
-    // 1) OPSTATE (para que pinte FIN / color aunque no venga de SAP)
     const current = await loadOpState(orderId);
     const next = { ...(current || {}) };
 
@@ -506,7 +626,6 @@ export default function DetalleOrden() {
 
     await saveOpState(orderId, next);
 
-    // 2) UI en memoria
     setOrden((prev) => {
       const ops = Array.isArray(prev?.operaciones) ? prev.operaciones : [];
       const ops2 = ops.map((o) => {
@@ -517,7 +636,6 @@ export default function DetalleOrden() {
       return { ...(prev || {}), operaciones: ops2 };
     });
 
-    // 3) Cache de detalle (para que al abrir offline se vea igual)
     try {
       const cached = await loadOrdenTecnicoDetail(orderId);
       const base = cached?.data || orden || {};
@@ -527,16 +645,14 @@ export default function DetalleOrden() {
         if (selectedOpIds.includes(oid)) return { ...o, estatus: "finalizada" };
         return o;
       });
-      await saveOrdenTecnicoDetail(orderId, { ...(base || {}), operaciones: ops2 });
+      await safeSaveDetailIfWindow(orderId, { ...(base || {}), operaciones: ops2 });
     } catch {}
   };
 
   const updateLocalOrderAsFinalizada0300 = async (orderId, finishMs) => {
-    // 1) FIN local para UI
     await saveOrderFinish(orderId, finishMs);
     setOrderFinishedAtMs(finishMs);
 
-    // 2) Para que NO se pueda modificar más en esta pantalla
     setOrden((prev) => ({
       ...(prev || {}),
       estatus_code: "0300",
@@ -545,11 +661,10 @@ export default function DetalleOrden() {
       isFinal: true,
     }));
 
-    // 3) Cache del detalle
     try {
       const cached = await loadOrdenTecnicoDetail(orderId);
       const base = cached?.data || orden || {};
-      await saveOrdenTecnicoDetail(orderId, {
+      await safeSaveDetailIfWindow(orderId, {
         ...(base || {}),
         estatus_code: "0300",
         userstatus: "0300",
@@ -559,20 +674,22 @@ export default function DetalleOrden() {
     } catch {}
   };
 
-  const enqueueSap = async ({ type, orderId, endpoint, payload }) => {
-    // ✅ Evita tu error: si el export no existe, falla con mensaje claro
-    if (typeof upsertSapQueueItem !== "function") {
-      throw new Error(
-        "upsertSapQueueItem no existe en src/offline/sapQueue.js. Asegúrate de exportarla."
-      );
-    }
-    await upsertSapQueueItem({
-      type,
-      orderId,
-      endpoint,
-      payload,
-    });
-  };
+  const enqueueSap = async ({ type, orderId, endpoint, payload, dedupeKey, method }) => {
+  if (typeof upsertSapQueueItem !== "function") {
+    throw new Error(
+      "upsertSapQueueItem no existe en src/offline/sapQueue.js. Asegúrate de exportarla."
+    );
+  }
+
+  await upsertSapQueueItem({
+    type,
+    orderId,
+    endpoint,
+    payload,
+    method: method || "POST",
+    dedupeKey, // ✅ IMPORTANTE
+  });
+};
 
   const obtenerOrden = async () => {
     const orderIdParam = String(id || "").trim();
@@ -580,9 +697,11 @@ export default function DetalleOrden() {
     try {
       setLoading(true);
 
+      // 1) cache si existe
       const cached = await loadOrdenTecnicoDetail(orderIdParam);
       if (cached?.data) {
         setOrden(cached.data);
+
         const cachedOrderId = String(cached?.data?.Orderid || orderIdParam).trim();
 
         const savedStartCached = await loadOrderStart(cachedOrderId);
@@ -594,9 +713,20 @@ export default function DetalleOrden() {
         const savedFinishCached = await loadOrderFinish(cachedOrderId);
         if (savedFinishCached) setOrderFinishedAtMs(savedFinishCached);
 
-        // ✅ rehidratar checks desde cache local si existe
         const pendingCached = await loadPendingSign(cachedOrderId);
         if (pendingCached?.checkedMap) setCheckedMap(pendingCached.checkedMap);
+
+        // intenta precargar email guardado en cache
+        const emailCached = String(cached?.data?.cliente_email || "").trim();
+        if (emailCached) setClienteEmail(emailCached);
+
+        // si en cache ya traes nombre/cargo/aviso (opcional)
+        const cn = String(cached?.data?.cliente_nombre || "").trim();
+        const cc = String(cached?.data?.cliente_cargo || "").trim();
+        const av = String(cached?.data?.aviso_cliente || "").trim();
+        if (cn) setClienteNombre(cn);
+        if (cc) setClienteCargo(cc);
+        if (av) setAvisoCliente(av);
       }
 
       const net = await NetInfo.fetch();
@@ -609,38 +739,39 @@ export default function DetalleOrden() {
         return;
       }
 
-      const resOrden = await api.get(`/api/ordenes/sap/${orderIdParam}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      // 2) Online: trae detalle base
+      const resOrden = await api.get(`/api/ordenes/sap/${orderIdParam}`);
       const baseOrden = resOrden.data || {};
 
-      // Dirección
+      // 3) addresses
       let direccionSap = "";
       let clienteSap = "";
       try {
-        const resAddr = await api.get(`/api/ordenes/sap/${orderIdParam}/addresses`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-
+        const resAddr = await api.get(`/api/ordenes/sap/${orderIdParam}/addresses`);
         const results = resAddr?.data?.results || resAddr?.data?.d?.results || [];
         const chosen = pickSecondAddress(results);
         const mapped = mapDireccionLikeBackend(chosen);
-
         direccionSap = mapped.direccion || "";
         clienteSap = mapped.cliente || "";
       } catch (e) {
         console.warn("[ADDR] no se pudo cargar /addresses:", e?.response?.data || e?.message || e);
       }
 
-      // Operaciones
+      // 4) operaciones
       let ops = [];
       try {
-        const resOps = await api.get(`/api/operaciones/sap/${String(orderIdParam)}`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        ops = normalizeOpsFromBackend(resOps.data);
+        const resOps = await api.get(`/api/operaciones/sap/${String(orderIdParam)}`);
+
+        const rawOps =
+          resOps?.data?.d?.results ||
+          resOps?.data?.results ||
+          resOps?.data?.operaciones ||
+          resOps?.data ||
+          [];
+
+        ops = normalizeOpsFromBackend(rawOps);
       } catch (e) {
-        console.warn("No se pudieron cargar operaciones (nuevo endpoint):", e?.response?.data || e);
+        console.warn("No se pudieron cargar operaciones:", e?.response?.data || e);
         ops = normalizeOpsFromBackend(baseOrden?.operaciones || []);
       }
 
@@ -650,12 +781,11 @@ export default function DetalleOrden() {
       const localState = await loadOpState(orderIdReal);
       const opsMerged = mergeOpsWithLocalState(orderIdReal, opsWithId, localState);
 
-            // Correo (ToPartners -> tomar el RE)
-      let clienteEmail = "";
+      // 5) email partners
+      let emailFromPartners = "";
       try {
         const resPartners = await api.get(
-          `/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet('${orderIdParam}')/ToPartners`,
-          { headers: { Authorization: `Bearer ${token}` } }
+          `/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet('${orderIdParam}')/ToPartners`
         );
 
         const results =
@@ -665,8 +795,7 @@ export default function DetalleOrden() {
           [];
 
         const re = (results || []).find((p) => String(p?.PartnRoleOld || "").trim() === "RE");
-
-        clienteEmail = String(re?.Mail1 || re?.Mail2 || "").trim();
+        emailFromPartners = String(re?.Mail1 || re?.Mail2 || "").trim();
       } catch (e) {
         console.warn("[MAIL] no se pudo cargar ToPartners:", e?.response?.data || e?.message || e);
       }
@@ -683,16 +812,26 @@ export default function DetalleOrden() {
           clienteSap ||
           baseOrden?.cliente ||
           `${baseOrden?.Name1 ?? ""} ${baseOrden?.Name2 ?? ""}`.trim(),
-        cliente_email: clienteEmail || baseOrden?.cliente_email || "",
-          operaciones: opsMerged,
+        cliente_email: emailFromPartners || baseOrden?.cliente_email || "",
+        operaciones: opsMerged,
+
+        // (opcional, si quieres persistir después en cache)
+        cliente_nombre: String(clienteNombre || "").trim(),
+        cliente_cargo: String(clienteCargo || "").trim(),
+        aviso_cliente: String(avisoCliente || "").trim(),
       };
 
       setOrden(data);
-      await saveOrdenTecnicoDetail(orderIdReal, data);
 
-      // ✅ Si cambió el id (param vs real), migra timer/pendingSign/finish
+      // ✅ prefill email si viene de partners
+      if (emailFromPartners && !String(clienteEmail || "").trim()) {
+        setClienteEmail(emailFromPartners);
+      }
+
+      await safeSaveDetailIfWindow(orderIdReal, data);
+
+      // migrar keys si cambia id
       if (orderIdParam && orderIdParam !== orderIdReal) {
-        // start
         const oldStart = await loadOrderStart(orderIdParam);
         const realStart = await loadOrderStart(orderIdReal);
         if (oldStart && !realStart) {
@@ -702,7 +841,6 @@ export default function DetalleOrden() {
           setNowTick(Date.now());
         }
 
-        // finish
         const oldFinish = await loadOrderFinish(orderIdParam);
         const realFinish = await loadOrderFinish(orderIdReal);
         if (oldFinish && !realFinish) {
@@ -711,7 +849,6 @@ export default function DetalleOrden() {
           setOrderFinishedAtMs(oldFinish);
         }
 
-        // pending sign
         const oldPending = await loadPendingSign(orderIdParam);
         const realPending = await loadPendingSign(orderIdReal);
         if (oldPending && !realPending) {
@@ -720,10 +857,10 @@ export default function DetalleOrden() {
         }
       }
 
-      // ✅ Rehidratar checks si está en 0400 o existe guardado local
+      // restaurar checks si 0400
       try {
         const sc = String(data?.estatus_code || data?.userstatus || "").trim();
-        const isPending0400 = sc === "0400";
+        const isPending0400 = sc.includes("0400");
 
         const pending = await loadPendingSign(orderIdReal);
         if (pending?.checkedMap) {
@@ -732,14 +869,16 @@ export default function DetalleOrden() {
         }
       } catch {}
 
-      // Cronómetro (tu lógica + limpieza)
+      // timer auto
       const estatusTxtLocal = String(data?.estatus_label || data?.estatus || data?.status || "")
         .trim()
         .toUpperCase();
       const statusCodeLocal = String(data?.estatus_code || data?.userstatus || "").trim();
 
       const isEnProcesoLocal =
-        estatusTxtLocal === "EN_PROCESO" || estatusTxtLocal === "EN PROCESO" || statusCodeLocal === "0200";
+        estatusTxtLocal === "EN_PROCESO" ||
+        estatusTxtLocal === "EN PROCESO" ||
+        statusCodeLocal === "0200";
 
       const isFinalLocal = ["0300", "0500"].includes(statusCodeLocal) || !!data?.isFinal;
 
@@ -754,7 +893,6 @@ export default function DetalleOrden() {
         await clearOrderStart(orderIdReal);
       }
 
-      // ✅ Si ya está final, intenta traer finish local (para mostrar hora fin)
       if (isFinalLocal) {
         const savedFinish = await loadOrderFinish(orderIdReal);
         if (savedFinish) setOrderFinishedAtMs(savedFinish);
@@ -762,11 +900,12 @@ export default function DetalleOrden() {
     } catch (error) {
       console.error("Error al obtener orden (SAP):", error?.response?.data || error);
 
-      const cached2 = await loadOrdenTecnicoDetail(orderIdParam);
+      const orderIdParam2 = String(id || "").trim();
+      const cached2 = await loadOrdenTecnicoDetail(orderIdParam2);
       if (cached2?.data) {
         setOrden(cached2.data);
 
-        const cachedOrderId = String(cached2?.data?.Orderid || orderIdParam).trim();
+        const cachedOrderId = String(cached2?.data?.Orderid || orderIdParam2).trim();
         const savedStart = await loadOrderStart(cachedOrderId);
         if (savedStart) {
           setOrderStartedAtMs(savedStart);
@@ -778,6 +917,9 @@ export default function DetalleOrden() {
 
         const pending = await loadPendingSign(cachedOrderId);
         if (pending?.checkedMap) setCheckedMap(pending.checkedMap);
+
+        const emailCached = String(cached2?.data?.cliente_email || "").trim();
+        if (emailCached) setClienteEmail(emailCached);
       } else {
         Alert.alert("Error", "No se pudo cargar la orden desde SAP");
       }
@@ -797,8 +939,7 @@ export default function DetalleOrden() {
       const Activity = op.activity || op.Activity;
 
       const res = await api.get(
-        `/api/operaciones/ordenes/${Orderid}/operaciones/${Activity}/componentes`,
-        { headers: { Authorization: `Bearer ${token}` } }
+        `/api/operaciones/ordenes/${Orderid}/operaciones/${Activity}/componentes`
       );
 
       setCompList(Array.isArray(res.data) ? res.data : []);
@@ -845,10 +986,7 @@ export default function DetalleOrden() {
       return;
     }
     const orderid = String(orden.Orderid).trim();
-    router.push({
-      pathname: "/tecnico/ordenes/[id]/aviso-averia",
-      params: { id: orderid },
-    });
+    router.push({ pathname: "/tecnico/ordenes/[id]/aviso-averia", params: { id: orderid } });
   };
 
   const iniciarOrden = async () => {
@@ -891,7 +1029,6 @@ export default function DetalleOrden() {
           try {
             setStartingOrder(true);
 
-            // ✅ si había fin guardado, lo limpiamos porque vuelve a correr
             await clearOrderFinish(orderId);
             setOrderFinishedAtMs(null);
 
@@ -922,9 +1059,7 @@ export default function DetalleOrden() {
     setNoMantError(null);
 
     try {
-      const res = await api.get(`/evidencias/orden/${orden.Orderid}/no-mantenimiento-pdf`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const res = await api.get(`/evidencias/orden/${orden.Orderid}/no-mantenimiento-pdf`);
 
       const { pdf_url } = res.data || {};
       if (!pdf_url) throw new Error("Sin URL de PDF desde backend");
@@ -962,7 +1097,8 @@ export default function DetalleOrden() {
     try {
       setDownloadingNoMantPdf(true);
 
-      const filename = noMantPdfRawUrl.split("/").pop() || `carta-no-mantto_${orden?.Orderid || ""}.pdf`;
+      const filename =
+        noMantPdfRawUrl.split("/").pop() || `carta-no-mantto_${orden?.Orderid || ""}.pdf`;
       const localUri = FileSystem.documentDirectory + filename;
 
       const { uri } = await FileSystem.downloadAsync(noMantPdfRawUrl, localUri);
@@ -1012,10 +1148,9 @@ export default function DetalleOrden() {
     try {
       setSavingPending0400(true);
 
-      // 1) Guardar checks local
       await savePendingSign(orderId, { checkedMap, savedAt: Date.now() });
 
-      // 2) Payload SAP 0400 (quita 0200)
+      // ✅ Estatus 0400 (quita 0200)
       const payload0400 = {
         OrderId: orderId,
         WorkOrderHeader: { Orderid: orderId },
@@ -1030,25 +1165,25 @@ export default function DetalleOrden() {
       const isOnline = !!(net?.isConnected && net?.isInternetReachable !== false);
 
       if (!isOnline) {
-        // ✅ Encolar para cuando haya red
         await enqueueSap({
           type: "STATUS",
           orderId,
           endpoint: "/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet",
           payload: payload0400,
+          dedupeKey: `STATUS:${orderId}`,
         });
 
-        // ✅ UI local (para que se vea 0400 aunque no haya red)
         setOrden((prev) => ({
           ...(prev || {}),
           estatus_code: "0400",
           userstatus: "0400",
           estatus_label: prev?.estatus_label || "PENDIENTE DE FIRMA",
         }));
+
         try {
           const cached = await loadOrdenTecnicoDetail(orderId);
           const base = cached?.data || orden || {};
-          await saveOrdenTecnicoDetail(orderId, {
+          await safeSaveDetailIfWindow(orderId, {
             ...(base || {}),
             estatus_code: "0400",
             userstatus: "0400",
@@ -1061,9 +1196,7 @@ export default function DetalleOrden() {
           "Se guardaron los checks como pendiente de firma. Cuando vuelva el internet se enviará el estatus 0400."
         );
       } else {
-        await api.post(`/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet`, payload0400, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
+        await api.post(`/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet`, payload0400);
 
         setOrden((prev) => ({
           ...(prev || {}),
@@ -1099,11 +1232,31 @@ export default function DetalleOrden() {
     setShowSignModal(true);
   };
 
-  // ✅ Finalizar con firma (0300 + confirmations)
+  // ✅ PASO 1: Preparar finalización + generar preview (NO ENVÍA AÚN)
   const confirmarFinalizarConFirma = async () => {
     if (!orden?.Orderid) return;
 
     const orderId = String(orden.Orderid).trim();
+
+    const email = String(clienteEmail || "").trim();
+    if (!email) {
+      Alert.alert("Falta correo", "Escribe el correo del cliente (obligatorio).");
+      return;
+    }
+    if (!isValidEmail(email)) {
+      Alert.alert("Correo inválido", "Escribe un correo válido (ej: nombre@dominio.com).");
+      return;
+    }
+
+    // ✅ NUEVO: validar nombre/cargo
+    if (!String(clienteNombre || "").trim()) {
+      Alert.alert("Falta nombre", "Escribe el nombre del cliente (obligatorio).");
+      return;
+    }
+    if (!String(clienteCargo || "").trim()) {
+      Alert.alert("Falta cargo", "Escribe el cargo del cliente (obligatorio).");
+      return;
+    }
 
     if (!signatureData) {
       Alert.alert("Falta firma", 'Pida al cliente que firme y toque "Listo" dentro del recuadro.');
@@ -1124,58 +1277,50 @@ export default function DetalleOrden() {
       return;
     }
 
-    const finishMs = Date.now();
-    const totalMs = Math.max(0, finishMs - orderStartedAtMs);
-    const totalMin = msToMinutesRounded(totalMs);
-
-    // 2) Obtener operaciones seleccionadas desde orden.operaciones
-    const opsAll = Array.isArray(orden?.operaciones) ? orden.operaciones : [];
-
-    // ✅ seleccionar y luego DEDUP por Activity+SubActivity
-    const selectedOpsRaw = selectedIds
-      .map((idKey) => opsAll.find((op) => String(op.id) === String(idKey)))
-      .filter(Boolean);
-
-    const uniqByOp = (ops) => {
-      const map = new Map();
-      for (const op of ops) {
-        const act = String(op.activity || op.Activity || "").trim();
-        const sub = String(op.subactivity || op.SubActivity || "").trim();
-        const key = `${act}__${sub}`;
-        if (!map.has(key)) map.set(key, op);
-      }
-      return Array.from(map.values());
-    };
-
-    const selectedOps = uniqByOp(selectedOpsRaw);
-
-    if (!selectedOps.length) {
-      Alert.alert("Error", "No se encontraron las operaciones seleccionadas en la orden.");
-      return;
-    }
-
     try {
       setSavingSignature(true);
-      setFinishingOrder(true);
 
-      // 3) Prorrateo (minutos por operación) y ventanas consecutivas
+      const finishMs = Date.now();
+      const totalMs = Math.max(0, finishMs - orderStartedAtMs);
+      const totalMin = msToMinutesRounded(totalMs);
+
+      const opsAll = Array.isArray(orden?.operaciones) ? orden.operaciones : [];
+
+      const selectedOpsRaw = selectedIds
+        .map((idKey) => opsAll.find((op) => String(op.id) === String(idKey)))
+        .filter(Boolean);
+
+      // dedupe por Activity/SubActivity
+      const uniqByOp = (ops) => {
+        const map = new Map();
+        for (const op of ops) {
+          const act = String(op.activity || op.Activity || "").trim();
+          const sub = String(op.subactivity || op.SubActivity || "").trim();
+          const key = `${act}__${sub}`;
+          if (!map.has(key)) map.set(key, op);
+        }
+        return Array.from(map.values());
+      };
+
+      const selectedOps = uniqByOp(selectedOpsRaw);
+      if (!selectedOps.length) {
+        Alert.alert("Error", "No se encontraron las operaciones seleccionadas en la orden.");
+        return;
+      }
+
       const n = selectedOps.length;
       const minsArr = prorateMinutes(totalMin, n);
       const windows = buildSequentialWindows(orderStartedAtMs, minsArr);
 
-      // 4) Payload estatus 0300 (quita 0200 y 0400)
-      const statusPayload0300 = {
-        OrderId: orderId,
-        WorkOrderHeader: { Orderid: orderId },
-        WorkOrderUserStatusSet: [
-          { UserStText: "0300", Langu: "ES", Inactive: "" },
-          { UserStText: "0200", Langu: "ES", Inactive: "X" },
-          { UserStText: "0400", Langu: "ES", Inactive: "X" },
-        ],
-        Return: [],
-      };
+      // ✅ Base status 0300 (quita 0200 o 0400 según orden)
+      const currentCode = pickCurrentStatusCode(orden);
+      const statusPayload0300 = buildStatus0300Payload({
+        orderId,
+        email,
+        currentCode,
+      });
 
-      // 5) Payload confirmations
+      // ✅ Confirmaciones (operaciones)
       const confirmationPayload = {
         Order: "S1",
         ConfirmationOrderSet: selectedOps.map((op, idx) => {
@@ -1211,32 +1356,149 @@ export default function DetalleOrden() {
         Return: [],
       };
 
+      // ✅ Generar HTML + PDF (para preview + base64)
+      const tipo = detectTipoMantenimiento(orden);
+
+      const html = buildMantenimientoHtml({
+        tipo,
+        orden,
+        operaciones: opsAll,
+        checkedMap,
+        signatureData,
+
+        // ✅ NUEVO: datos extra para el PDF (aunque tu builder aún no los use)
+        clienteEmail: email,
+        clienteNombre: String(clienteNombre || "").trim(),
+        clienteCargo: String(clienteCargo || "").trim(),
+        avisoCliente: String(avisoCliente || "").trim(),
+        notaTecnico: String(notaTecnico || "").trim(),
+
+        // (paso siguiente)
+        coberturaAgr1,
+        consumibles,
+      });
+
+      setMantHtmlPreview(html);
+
+      let pdfBase64 = "";
+      let pdfUri = null;
+
+      try {
+        const { uri } = await Print.printToFileAsync({ html });
+        pdfUri = uri;
+        setMantPdfUri(uri);
+
+        pdfBase64 = await FileSystem.readAsStringAsync(uri, {
+          encoding: FileSystem.EncodingType.Base64,
+        });
+      } catch (e) {
+        console.warn("No se pudo generar PDF (base64):", e?.message || e);
+        setMantPdfUri(null);
+      }
+
+      const fileName =
+        tipo === "escalera" ? "mantenimiento_escaleras.pdf" : "mantenimiento_elevadores.pdf";
+
+      // ✅ Payload UNIFICADO: 0300 + PDF
+      const change0300WithPdfPayload = {
+        ...statusPayload0300,
+        Attachments: [
+          {
+            DocId: orderId,
+            FileName: fileName,
+            MimeType: "pdf",
+            Base64: pdfBase64 || "",
+          },
+        ],
+      };
+
+      setPendingFinalize({
+        orderId,
+        finishMs,
+        selectedIds,
+        change0300WithPdfPayload,
+        confirmationPayload,
+
+        // ✅ guardamos también info extra por si luego la quieres mandar o loguear
+        clienteNombre: String(clienteNombre || "").trim(),
+        clienteCargo: String(clienteCargo || "").trim(),
+        avisoCliente: String(avisoCliente || "").trim(),
+        notaTecnico: String(notaTecnico || "").trim(),
+      });
+
+      setShowSignModal(false);
+      setShowMantPreview(true);
+    } catch (e) {
+      console.error("Error preparando finalización (preview):", e?.response?.data || e);
+      Alert.alert("Error", "No se pudo generar la vista previa del reporte.");
+    } finally {
+      setSavingSignature(false);
+    }
+  };
+
+  // ✅ Abrir PDF real con el visor del sistema
+  const abrirPdfMantenimiento = async () => {
+    if (!mantPdfUri) {
+      Alert.alert("Sin PDF", "No se pudo generar el PDF en este dispositivo (puedes continuar).");
+      return;
+    }
+    try {
+      const canShare = await Sharing.isAvailableAsync();
+      if (!canShare) {
+        Alert.alert(
+          "No disponible",
+          "Este dispositivo no permite abrir/compartir archivos. Puedes continuar igualmente."
+        );
+        return;
+      }
+      await Sharing.shareAsync(mantPdfUri, {
+        mimeType: "application/pdf",
+        dialogTitle: "Abrir / compartir PDF de mantenimiento",
+      });
+    } catch (e) {
+      console.warn("No se pudo abrir/compartir PDF:", e?.message || e);
+      Alert.alert("Error", "No se pudo abrir el PDF.");
+    }
+  };
+
+  // ✅ PASO 2: Continuar -> aquí sí se envía / encola y redirige
+  const continuarFinalizacionDespuesPreview = async () => {
+    if (!pendingFinalize?.orderId) {
+      setShowMantPreview(false);
+      return;
+    }
+
+    const { orderId, finishMs, selectedIds, change0300WithPdfPayload, confirmationPayload } =
+      pendingFinalize;
+
+    try {
+      setFinishingOrder(true);
+
       const net = await NetInfo.fetch();
       const isOnline = !!(net?.isConnected && net?.isInternetReachable !== false);
 
+      // ✅ logs solicitados (sin reventar consola por base64)
+      logSapPayload("=== SAP PAYLOAD (CHANGE 0300 + PDF) ===", change0300WithPdfPayload, {
+        stripBase64: true,
+      });
+      logSapPayload("=== SAP PAYLOAD (CONFIRMATIONS) ===", confirmationPayload);
+
       if (!isOnline) {
-        // ✅ 1) UI inmediata: cambiar orden a 0300 y pintar operaciones finalizadas
+        // UI local
         await updateLocalOpsAsFinalizadas(orderId, selectedIds);
         await updateLocalOrderAsFinalizada0300(orderId, finishMs);
 
-        // ✅ 2) Encolar TODO para cuando vuelva red:
-        // 2.1) Firma (backend propio)
-        await enqueueSap({
-          type: "SIGNATURE",
-          orderId,
-          endpoint: `/evidencias/orden/${orderId}/firma-final`,
-          payload: { imagen_base64: signatureData },
-        });
-
-        // 2.2) Status 0300 (SAP OData)
+        // 1) encolar: 0300 + PDF (UNIFICADO)
         await enqueueSap({
           type: "STATUS",
           orderId,
           endpoint: "/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet",
-          payload: statusPayload0300,
+          payload: change0300WithPdfPayload,
+          dedupeKey: `STATUS:${orderId}`, // ✅ pisa el 0400 si existía
         });
 
-        // 2.3) Confirmations (SAP OData)
+
+        // 2) encolar: Confirmaciones (operaciones)
         await enqueueSap({
           type: "CONFIRMATIONS",
           orderId,
@@ -1244,18 +1506,19 @@ export default function DetalleOrden() {
           payload: confirmationPayload,
         });
 
-        // ✅ 3) Limpieza local (cronómetro / pending / UI)
         await clearOrderStart(orderId);
         setOrderStartedAtMs(null);
 
         await clearPendingSign(orderId);
         setCheckedMap({});
         setFinalizeMode(false);
-        setShowSignModal(false);
+
+        setShowMantPreview(false);
+        setPendingFinalize(null);
 
         Alert.alert(
           "Finalizado (offline)",
-          "Se marcó la orden como 0300 localmente y se pintaron las operaciones. Cuando vuelva internet se enviará firma + estatus 0300 + confirmaciones."
+          "Se mostró el reporte, se marcó 0300 local y se encoló: (0300+PDF) + confirmaciones."
         );
 
         router.replace("/tecnico/ordenes");
@@ -1263,28 +1526,24 @@ export default function DetalleOrden() {
       }
 
       // ===== ONLINE =====
-      // 1) Firma
-      try {
-        await api.post(
-          `/evidencias/orden/${orderId}/firma-final`,
-          { imagen_base64: signatureData },
-          { headers: { Authorization: `Bearer ${token}` } }
+      if (!change0300WithPdfPayload?.Attachments?.[0]?.Base64) {
+        Alert.alert(
+          "No se pudo generar el PDF",
+          "No se pudo generar el PDF en este dispositivo. Intenta de nuevo o revisa permisos/almacenamiento."
         );
-      } catch (e) {
-        console.warn("No se pudo guardar la firma (continuo):", e?.response?.data || e);
+        return;
       }
 
-      // 2) Status 0300
-      await api.post(`/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet`, statusPayload0300, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      // 1) ✅ UN SOLO POST: 0300 + PDF
+      await api.post(`/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet`, change0300WithPdfPayload);
 
-      // 3) Confirmations
-      await api.post(`/api/odata/ZCS_CREATE_CONFIRMATION_SRV/ConfirmationHeaderSet`, confirmationPayload, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      // 2) ✅ Confirmaciones (operaciones)
+      await api.post(
+        `/api/odata/ZCS_CREATE_CONFIRMATION_SRV/ConfirmationHeaderSet`,
+        confirmationPayload
+      );
 
-      // ✅ UI/cache local (igual que offline, pero ya “real”)
+      // UI local final
       await updateLocalOpsAsFinalizadas(orderId, selectedIds);
       await updateLocalOrderAsFinalizada0300(orderId, finishMs);
 
@@ -1294,15 +1553,26 @@ export default function DetalleOrden() {
       await clearPendingSign(orderId);
       setCheckedMap({});
       setFinalizeMode(false);
-      setShowSignModal(false);
 
-      Alert.alert("Orden finalizada", "Se cambió el estatus a 0300 y se enviaron confirmaciones.");
+      setShowMantPreview(false);
+      setPendingFinalize(null);
+
+      Alert.alert("Orden finalizada", "Se envió: (0300 + PDF) y confirmaciones.");
       router.replace("/tecnico/ordenes");
     } catch (error) {
-      console.error("Error al finalizar (0300 + confirmaciones):", error?.response?.data || error);
-      Alert.alert("Error", "No se pudo finalizar la orden o enviar confirmaciones. Intenta de nuevo.");
+      console.error("Error al finalizar (SAP):", error?.response?.data || error);
+
+      const data = error?.response?.data;
+      const msg =
+        data?.error?.message?.value ||
+        data?.message?.value ||
+        data?.detail ||
+        (typeof data?.error === "string" ? data.error : null) ||
+        error?.message ||
+        "No se pudo finalizar.";
+
+      Alert.alert("Error", String(msg));
     } finally {
-      setSavingSignature(false);
       setFinishingOrder(false);
     }
   };
@@ -1327,7 +1597,9 @@ export default function DetalleOrden() {
               disabled={startingOrder}
             >
               <Ionicons name="play-circle-outline" size={18} color="#fff" />
-              <Text style={styles.startOrderBtnText}>{startingOrder ? "Iniciando..." : "Iniciar orden"}</Text>
+              <Text style={styles.startOrderBtnText}>
+                {startingOrder ? "Iniciando..." : "Iniciar orden"}
+              </Text>
             </TouchableOpacity>
           </View>
         ) : isOrderEnProceso && orderStartedAtMs ? (
@@ -1341,7 +1613,9 @@ export default function DetalleOrden() {
 
         <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
           <ActivityIndicator size="large" color={FIORI.brand} />
-          <Text style={{ marginTop: 10, color: FIORI.textMuted, fontWeight: "700" }}>Cargando orden…</Text>
+          <Text style={{ marginTop: 10, color: FIORI.textMuted, fontWeight: "700" }}>
+            Cargando orden…
+          </Text>
         </View>
       </View>
     );
@@ -1387,7 +1661,9 @@ export default function DetalleOrden() {
             disabled={startingOrder}
           >
             <Ionicons name="play-circle-outline" size={18} color="#fff" />
-            <Text style={styles.startOrderBtnText}>{startingOrder ? "Iniciando..." : "Iniciar orden"}</Text>
+            <Text style={styles.startOrderBtnText}>
+              {startingOrder ? "Iniciando..." : "Iniciar orden"}
+            </Text>
           </TouchableOpacity>
         </View>
       ) : isOrderEnProceso && orderStartedAtMs ? (
@@ -1427,22 +1703,63 @@ export default function DetalleOrden() {
         renderItem={() => {
           const ops = Array.isArray(orden?.operaciones) ? orden.operaciones : [];
           return (
-            <ListaOperacionesAgrupadas
-              operaciones={ops}
-              styles={styles}
-              FIORI={FIORI}
-              onOpenComponentsView={openComponentsModal}
-              finalizeMode={finalizeMode}
-              onRequestCancelFinalize={() => setFinalizeMode(false)}
-              checkedMap={checkedMap}
-              setCheckedMap={setCheckedMap}
-              orderId={String(orden?.Orderid || id || "").trim()}   // ✅ NUEVO
-            />
+            <>
+              <ListaOperacionesAgrupadas
+                operaciones={ops}
+                styles={styles}
+                FIORI={FIORI}
+                onOpenComponentsView={openComponentsModal}
+                finalizeMode={finalizeMode}
+                onRequestCancelFinalize={() => setFinalizeMode(false)}
+                checkedMap={checkedMap}
+                setCheckedMap={setCheckedMap}
+                orderId={String(orden?.Orderid || id || "").trim()}
+              />
+
+              {/* ✅ PASO SIGUIENTE:
+                  Aquí después vamos a desplegar:
+                  - Consumibles (según cobertura)
+                  - Nota técnico
+                Por ahora dejamos nota técnico aquí para que ya quede integrado sin romper.
+              */}
+              {finalizeMode ? (
+                <View style={[styles.panel, { marginTop: 12 }]}>
+                  <Text style={styles.panelTitle}>Descripción breve del técnico</Text>
+                  <Text style={{ color: FIORI.textMuted, fontWeight: "700", marginBottom: 8 }}>
+                    Se insertará en el PDF como “Detalle/Descripción de actividades”.
+                  </Text>
+
+                  <TextInput
+                    value={notaTecnico}
+                    onChangeText={setNotaTecnico}
+                    placeholder="Ej: Se ajustó freno, limpieza general, lubricación..."
+                    placeholderTextColor={FIORI.textMuted}
+                    multiline
+                    style={{
+                      minHeight: 90,
+                      borderWidth: 1,
+                      borderColor: FIORI.border,
+                      borderRadius: 10,
+                      paddingHorizontal: 10,
+                      paddingVertical: 10,
+                      fontWeight: "700",
+                      color: FIORI.text,
+                      backgroundColor: FIORI.surfaceAlt,
+                    }}
+                  />
+
+                   <ConsumiblesFinalizacion
+                    plant={String(orden?.Plant || orden?.plant || orden?.centro || "").trim()}
+                    FIORI={FIORI}
+                    onChange={(rows) => setConsumibles(rows)}
+                  />
+                </View>
+              ) : null}
+            </>
           );
         }}
         ListFooterComponent={
           <PieDetalleOrden
-            styles={styles}
             FIORI={FIORI}
             isNoMant={isNoMant}
             userRolId={user?.rol_id}
@@ -1484,6 +1801,18 @@ export default function DetalleOrden() {
         setSignatureData={setSignatureData}
         savingSignature={savingSignature}
         confirmarFinalizarConFirma={confirmarFinalizarConFirma}
+        // ✅ correo cliente
+        clienteEmail={clienteEmail}
+        setClienteEmail={setClienteEmail}
+        isValidEmail={isValidEmail}
+        // ✅ NUEVO: nombre/cargo/aviso
+        clienteNombre={clienteNombre}
+        setClienteNombre={setClienteNombre}
+        clienteCargo={clienteCargo}
+        setClienteCargo={setClienteCargo}
+        avisoCliente={avisoCliente}
+        setAvisoCliente={setAvisoCliente}
+        // PDF no mant
         showNoMantPdfModal={showNoMantPdfModal}
         cerrarModalNoMantPdf={cerrarModalNoMantPdf}
         loadingNoMantPdf={loadingNoMantPdf}
@@ -1493,6 +1822,75 @@ export default function DetalleOrden() {
         descargarNoMantPdf={descargarNoMantPdf}
         downloadingNoMantPdf={downloadingNoMantPdf}
       />
+
+      {/* ✅ Modal “vista previa” antes de redirigir */}
+      <Modal
+        visible={!!showMantPreview}
+        transparent
+        animationType="slide"
+        statusBarTranslucent
+        onRequestClose={() => {
+          if (finishingOrder) return;
+          setShowMantPreview(false);
+        }}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={[styles.modalCard, { maxWidth: 720, height: "90%" }]}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Vista previa · Reporte de mantenimiento</Text>
+              <TouchableOpacity
+                onPress={() => {
+                  if (finishingOrder) return;
+                  setShowMantPreview(false);
+                }}
+                style={[styles.modalCloseBtn, finishingOrder && { opacity: 0.7 }]}
+                disabled={!!finishingOrder}
+              >
+                <Ionicons name="close" size={20} color="#fff" />
+              </TouchableOpacity>
+            </View>
+
+            <View style={{ flex: 1, padding: 10 }}>
+              {!mantHtmlPreview ? (
+                <View style={{ alignItems: "center", marginTop: 20 }}>
+                  <ActivityIndicator size="large" color={FIORI.brand} />
+                  <Text style={{ marginTop: 10, color: FIORI.textMuted }}>
+                    Generando vista previa…
+                  </Text>
+                </View>
+              ) : (
+                <WebView originWhitelist={["*"]} source={{ html: mantHtmlPreview }} style={{ flex: 1 }} />
+              )}
+            </View>
+
+            <View style={styles.modalFooterRow}>
+              <TouchableOpacity
+                style={[styles.smallBtn, { backgroundColor: FIORI.surfaceAlt }]}
+                onPress={abrirPdfMantenimiento}
+                disabled={!!finishingOrder}
+              >
+                <Text style={styles.smallBtnText}>Abrir PDF</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[
+                  styles.smallBtn,
+                  { backgroundColor: "#0B8457" },
+                  finishingOrder && { opacity: 0.7 },
+                ]}
+                onPress={continuarFinalizacionDespuesPreview}
+                disabled={!!finishingOrder}
+              >
+                {finishingOrder ? (
+                  <Text style={[styles.smallBtnText, { color: "#fff" }]}>Finalizando…</Text>
+                ) : (
+                  <Text style={[styles.smallBtnText, { color: "#fff" }]}>Continuar</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       {/* ✅ Overlay bloqueante cuando guardas 0400 */}
       <Modal visible={savingPending0400} transparent animationType="fade" statusBarTranslucent>
@@ -1667,20 +2065,7 @@ const styles = StyleSheet.create({
   },
   timerText: { color: FIORI.text, fontWeight: "900", fontSize: 13, letterSpacing: 0.3 },
 
-  btnFinishOrder: {
-    backgroundColor: "#0B8457",
-    borderRadius: 12,
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 8,
-    ...elev(0.7),
-  },
-  btnFinishOrderText: { color: "#fff", fontWeight: "900", fontSize: 15 },
-
-  /* ====== Modales (los usa ModalesDetalleOrden) ====== */
+  /* ====== Modales ====== */
   modalBackdrop: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.45)",
@@ -1695,7 +2080,12 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     overflow: "hidden",
     ...Platform.select({
-      ios: { shadowColor: "#000", shadowOpacity: 0.12, shadowRadius: 16, shadowOffset: { width: 0, height: 8 } },
+      ios: {
+        shadowColor: "#000",
+        shadowOpacity: 0.12,
+        shadowRadius: 16,
+        shadowOffset: { width: 0, height: 8 },
+      },
       android: { elevation: 6 },
       default: {},
     }),
