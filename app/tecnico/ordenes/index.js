@@ -30,12 +30,20 @@ import {
   filterOrdenesByWindow,
 } from "../../../src/offline/ordenesTecnicoCache";
 
-// ✅ NUEVO: prefetch de detalles para que NO tengas que entrar a cada orden
+// ✅ Prefetch de detalles (para no entrar a cada orden)
 import { prefetchOrdenesTecnicoDetalles } from "../../../src/offline/prefetchOrdenesTecnico";
 
 import { useAuth } from "../../../src/context/AuthContext";
 import Header from "../../../src/components/Header";
 import api from "../../../src/services/api";
+
+// ============================
+// ✅ Guarda EQUIPO activo para geolocalización
+// UbicacionContext leerá esta key:
+//   activeEquipment:<correo> => equipment
+// ============================
+const ACTIVE_EQUIP_KEY = (userEmail) =>
+  `activeEquipment:${String(userEmail || "anon").toLowerCase().trim()}`;
 
 // ===== Fiori Palette =====
 const FIORI = {
@@ -620,7 +628,32 @@ export default function ListaOrdenesTecnico() {
     setOrdenes(filtered);
   }, [allOrdenes, query, start, end]);
 
-  const irADetalles = (orderId) => {
+  // ===========================
+  // ✅ GUARDAR EQUIPO ACTIVO
+  // ===========================
+  const saveActiveEquipmentFromItem = useCallback(
+    async (item) => {
+      try {
+        const correo = userEmail || "";
+        if (!correo) return;
+        const equipment = String(item?.equipment || "").trim();
+        if (!equipment) return;
+        await AsyncStorage.setItem(ACTIVE_EQUIP_KEY(correo), equipment);
+        console.log("[ORDENES] active equipment saved:", equipment);
+      } catch (e) {
+        console.log("[ORDENES] saveActiveEquipment error:", e?.message || e);
+      }
+    },
+    [userEmail]
+  );
+
+  const irADetalles = async (itemOrOrderId) => {
+    // puede venir item o solo orderId
+    let orderId = itemOrOrderId;
+    if (typeof itemOrOrderId === "object" && itemOrOrderId) {
+      await saveActiveEquipmentFromItem(itemOrOrderId);
+      orderId = itemOrOrderId?.Orderid;
+    }
     const id = String(orderId);
     router.push(`/tecnico/ordenes/${id}`);
   };
@@ -638,7 +671,10 @@ export default function ListaOrdenesTecnico() {
     });
   };
 
-  const abrirModalCheckin = (_e, orderId) => {
+  const abrirModalCheckin = (item, orderId) => {
+    // ✅ guarda equipo también aquí (por si hacen check-in sin entrar al detalle)
+    if (item) saveActiveEquipmentFromItem(item);
+
     setCheckinOrderId(orderId);
     setCheckinPhotoBase64(null);
     setCheckinPhotoUri(null);
@@ -679,7 +715,6 @@ export default function ListaOrdenesTecnico() {
         return;
       }
 
-      // defensivo: si queda enorme, avisa
       if (manipulated.base64.length > 3_500_000) {
         Alert.alert("Foto muy pesada", "Intenta de nuevo (mejor iluminación) o acércate más al objeto.");
         return;
@@ -738,7 +773,6 @@ export default function ListaOrdenesTecnico() {
     if (!userEmail) return;
     if (syncingRef.current) return;
 
-    // solo si online
     const net = await NetInfo.fetch();
     const online = !!(net?.isConnected && net?.isInternetReachable !== false);
     setIsOnline(online);
@@ -752,7 +786,6 @@ export default function ListaOrdenesTecnico() {
       const ok = await ensureValidToken();
       if (!ok) return;
 
-      // FIFO (más viejo primero)
       const ordered = [...q].sort((a, b) => (a?.createdAt || 0) - (b?.createdAt || 0));
 
       for (const item of ordered) {
@@ -771,7 +804,6 @@ export default function ListaOrdenesTecnico() {
           await removeFromQueue(userEmail, orderId);
         } catch (e) {
           console.log("[CHECKIN][SYNC] Error SAP:", orderId, e?.response?.data || e?.message || e);
-          // corta para reintentar después (no quemes la cola)
           break;
         }
       }
@@ -779,7 +811,6 @@ export default function ListaOrdenesTecnico() {
       const q2 = await loadCheckinQueue(userEmail);
       setCheckinQueue(q2);
 
-      // refresca UI
       fetchOrdenes({ isRefresh: true });
     } finally {
       syncingRef.current = false;
@@ -808,12 +839,10 @@ export default function ListaOrdenesTecnico() {
     try {
       setIsSending(true);
 
-      // 1) detectar online
       const net = await NetInfo.fetch();
       const online = !!(net?.isConnected && net?.isInternetReachable !== false);
       setIsOnline(online);
 
-      // 2) si OFFLINE => encolar y cerrar
       if (!online) {
         const nextQueue = await enqueueCheckin(userEmail, {
           orderId,
@@ -833,7 +862,6 @@ export default function ListaOrdenesTecnico() {
         return;
       }
 
-      // 3) ONLINE normal
       const ok = await ensureValidToken();
       if (!ok) return;
 
@@ -850,7 +878,6 @@ export default function ListaOrdenesTecnico() {
     } catch (e) {
       console.log("enviarCheckinCompletoASap ERROR:", e?.response?.data || e?.message || e);
 
-      // fallback: si falló por red, encola
       const net2 = await NetInfo.fetch();
       const online2 = !!(net2?.isConnected && net2?.isInternetReachable !== false);
 
@@ -893,10 +920,8 @@ export default function ListaOrdenesTecnico() {
     const startLabel = formatDateDMY(item.start_date);
     const finishLabel = formatDateDMY(item.finish_date);
 
-    // estatus normal
     const stBase = resolveUserstatus(item?.userstatus ?? "", statusCatalogMap, item);
 
-    // ✅ si está en cola offline, lo tratamos como “pendiente” ya iniciado (para bloquear check-in)
     const isPendingOffline = pendingSet.has(String(item?.Orderid));
     const st = isPendingOffline
       ? {
@@ -904,7 +929,7 @@ export default function ListaOrdenesTecnico() {
           code: "0100",
           label: "CHECK-IN PENDIENTE (OFFLINE)",
           type: "pendiente",
-          color: "#7C3AED", // morado
+          color: "#7C3AED",
           lockActions: false,
           allowCheckin: false,
         }
@@ -924,7 +949,7 @@ export default function ListaOrdenesTecnico() {
           st.type === "final" && styles.cardFinished,
           st.type === "final_pend" && styles.cardFinishedPend,
         ]}
-        onPress={() => irADetalles(item.Orderid)}
+        onPress={() => irADetalles(item)} // ✅ pasa item (guarda equipment)
       >
         <View style={styles.cardContent}>
           <View style={[styles.statusDot, { backgroundColor: st.color }]} />
@@ -966,7 +991,7 @@ export default function ListaOrdenesTecnico() {
               style={[styles.boton, { backgroundColor: FIORI.accent }]}
               onPress={(e) => {
                 e?.stopPropagation?.();
-                abrirModalCheckin(null, item.Orderid);
+                abrirModalCheckin(item, item.Orderid); // ✅ pasa item (guarda equipment)
               }}
             >
               <Text style={styles.botonTexto}>Check-in</Text>
@@ -977,6 +1002,8 @@ export default function ListaOrdenesTecnico() {
                 style={[styles.boton, { backgroundColor: FIORI.neutralBtn }]}
                 onPress={(e) => {
                   e?.stopPropagation?.();
+                  // también puedes guardar equipment aquí si quieres:
+                  saveActiveEquipmentFromItem(item);
                   irAFormularioRiesgos(item.Orderid);
                 }}
               >
@@ -988,6 +1015,7 @@ export default function ListaOrdenesTecnico() {
                   style={[styles.boton, styles.botonSecundario]}
                   onPress={(e) => {
                     e?.stopPropagation?.();
+                    saveActiveEquipmentFromItem(item);
                     irACartaNoMantenimiento(item.Orderid);
                   }}
                 >
@@ -1053,7 +1081,10 @@ export default function ListaOrdenesTecnico() {
         </View>
 
         <View style={styles.chipsRow}>
-          <TouchableOpacity style={[styles.chip, dateMode === "all" && styles.chipActive]} onPress={() => setDateMode("all")}>
+          <TouchableOpacity
+            style={[styles.chip, dateMode === "all" && styles.chipActive]}
+            onPress={() => setDateMode("all")}
+          >
             <Text style={[styles.chipText, dateMode === "all" && styles.chipTextActive]}>Todas</Text>
           </TouchableOpacity>
 
@@ -1101,11 +1132,15 @@ export default function ListaOrdenesTecnico() {
             <Text style={styles.clearBtnText}>Limpiar</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity style={styles.refreshBtn} onPress={() => fetchOrdenes({ isRefresh: true })} activeOpacity={0.85}>
+          <TouchableOpacity
+            style={styles.refreshBtn}
+            onPress={() => fetchOrdenes({ isRefresh: true })}
+            activeOpacity={0.85}
+          >
             <Text style={styles.refreshBtnText}>Recargar</Text>
           </TouchableOpacity>
 
-          {/* ✅ NUEVO: Sync pendientes */}
+          {/* ✅ Sync pendientes */}
           <TouchableOpacity
             style={[styles.syncBtn, checkinQueue.length === 0 && { opacity: 0.55 }]}
             onPress={async () => {
@@ -1116,13 +1151,14 @@ export default function ListaOrdenesTecnico() {
             disabled={checkinQueue.length === 0}
           >
             <Text style={styles.syncBtnText}>
-              {isOnline ? "Sincronizar pendientes" : "Pendientes (sin red)"} {checkinQueue.length ? `(${checkinQueue.length})` : ""}
+              {isOnline ? "Sincronizar pendientes" : "Pendientes (sin red)"}{" "}
+              {checkinQueue.length ? `(${checkinQueue.length})` : ""}
             </Text>
           </TouchableOpacity>
         </View>
 
         <Text style={styles.activeRangeText}>
-          {activeRangeText}  ·  {isOnline ? "Online" : "Offline"}
+          {activeRangeText} · {isOnline ? "Online" : "Offline"}
         </Text>
 
         {showDayPicker && (
@@ -1280,7 +1316,15 @@ export default function ListaOrdenesTecnico() {
                 </Text>
               </View>
             ) : (
-              <View style={{ padding: 12, borderWidth: 1, borderColor: FIORI.border, borderRadius: 10, marginBottom: 12 }}>
+              <View
+                style={{
+                  padding: 12,
+                  borderWidth: 1,
+                  borderColor: FIORI.border,
+                  borderRadius: 10,
+                  marginBottom: 12,
+                }}
+              >
                 <Text style={{ color: FIORI.textMuted }}>Aún no hay foto. Presiona “Tomar foto”.</Text>
               </View>
             )}
@@ -1376,13 +1420,7 @@ const styles = StyleSheet.create({
   refreshBtn: { backgroundColor: FIORI.accent, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10 },
   refreshBtnText: { color: "#fff", fontWeight: "700" },
 
-  // ✅ NUEVO: sync pendientes
-  syncBtn: {
-    backgroundColor: "#111827",
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 10,
-  },
+  syncBtn: { backgroundColor: "#111827", paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10 },
   syncBtnText: { color: "#fff", fontWeight: "800" },
 
   chipsRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 10 },

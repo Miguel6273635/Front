@@ -44,6 +44,12 @@ const TILES = [
     icon: 'location-outline',
     onPress: () => router.push('/supervisor/monitoreo/monitoreo'),
   },
+  {
+    key: "equipos",
+    title: "Equipos a cargo",
+    icon: "cog-outline",
+    onPress: () => router.push("/supervisor/equipos"),
+  },
   // si luego quieres más, se agregan aquí sin romper el diseño
 ];
 

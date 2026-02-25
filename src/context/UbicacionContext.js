@@ -2,6 +2,7 @@
 import React, { createContext, useContext, useEffect, useRef, useState } from "react";
 import * as Location from "expo-location";
 import { Alert, AppState, Linking, Platform } from "react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useAuth } from "./AuthContext";
 import api from "../services/api";
 
@@ -16,6 +17,25 @@ const SEND_EVERY_MS = 30000;
 const SAME_EPS = 0.00001;
 
 const makeId = () => `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+
+/**
+ * ✅ Equipo activo (Equipment) guardado por la vista de órdenes
+ * app/tecnico/ordenes/index.js debe guardar:
+ *   key: activeEquipment:<correo>
+ *   value: <equipment>
+ */
+const ACTIVE_EQUIP_KEY = (userEmail) =>
+  `activeEquipment:${String(userEmail || "anon").toLowerCase().trim()}`;
+
+async function loadActiveEquipment(userEmail) {
+  try {
+    const key = ACTIVE_EQUIP_KEY(userEmail);
+    const v = await AsyncStorage.getItem(key);
+    return String(v || "").trim();
+  } catch {
+    return "";
+  }
+}
 
 export const UbicacionProvider = ({ children }) => {
   const { user } = useAuth();
@@ -50,7 +70,9 @@ export const UbicacionProvider = ({ children }) => {
       }
     } catch (e) {
       console.log("[GEO] openLocationServicesSettings error:", e?.message || e);
-      try { await Linking.openSettings(); } catch {}
+      try {
+        await Linking.openSettings();
+      } catch {}
     }
   };
 
@@ -101,12 +123,7 @@ export const UbicacionProvider = ({ children }) => {
           showBlockingAlertOnce(
             "Activa la ubicación",
             "Para continuar y enviar tu ubicación, activa el GPS en Configuración.",
-            [
-              {
-                text: "Abrir configuración",
-                onPress: openLocationServicesSettings,
-              },
-            ]
+            [{ text: "Abrir configuración", onPress: openLocationServicesSettings }]
           );
         }
         return false;
@@ -116,7 +133,7 @@ export const UbicacionProvider = ({ children }) => {
       console.log("[GEO] getForegroundPermissionsAsync:", { status, canAskAgain });
 
       if (status !== "granted") {
-        // Si podemos pedirlo, mostramos el diálogo nativo (la vista “Mientras la app está en uso / …”)
+        // Si podemos pedirlo, mostramos el diálogo nativo
         if (canAskAgain) {
           if (promptUser) {
             const req = await Location.requestForegroundPermissionsAsync();
@@ -140,12 +157,7 @@ export const UbicacionProvider = ({ children }) => {
           showBlockingAlertOnce(
             "Permiso de ubicación requerido",
             "Activa el permiso de ubicación (ideal: “Mientras la app está en uso”).",
-            [
-              {
-                text: "Abrir permisos",
-                onPress: openAppSettings,
-              },
-            ]
+            [{ text: "Abrir permisos", onPress: openAppSettings }]
           );
         }
         return false;
@@ -162,13 +174,13 @@ export const UbicacionProvider = ({ children }) => {
     }
   };
 
-  // ✅ al montar provider: pide permisos (esto dispara el diálogo nativo)
+  // ✅ al montar provider: pide permisos
   useEffect(() => {
     checkPermisosYServicios({ promptUser: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ✅ cuando vuelve a foreground, re-check (por si activaron GPS/permiso afuera)
+  // ✅ cuando vuelve a foreground, re-check
   useEffect(() => {
     const sub = AppState.addEventListener("change", async (nextState) => {
       const prev = appStateRef.current;
@@ -184,7 +196,7 @@ export const UbicacionProvider = ({ children }) => {
   }, []);
 
   // =========================
-  // 2) Enviar o guardar ubicación
+  // 2) Enviar o guardar ubicación (✅ incluye EQUIPO activo)
   // =========================
   const postUbicacion = async (lat, lon) => {
     const now = Date.now();
@@ -194,13 +206,16 @@ export const UbicacionProvider = ({ children }) => {
     const correo = user?.correo || user?.email || user?.preferred_username || "";
     if (!correo) return;
 
+    // ✅ leer equipo activo (guardado desde la lista de órdenes)
+    const equipoActivo = await loadActiveEquipment(correo);
+
     const payload = {
       Id: "1",
       Usuario: String(correo),
       Latitud: String(lat),
       Longitud: String(lon),
       Timestamp: msToSapDate(Date.now()),
-      Orden: "",
+      Orden: equipoActivo || "", // ✅ AQUÍ VA EL EQUIPO
     };
 
     const request = {
@@ -220,11 +235,11 @@ export const UbicacionProvider = ({ children }) => {
       if (!online) {
         await outboxAdd({ id: makeId(), type: "POST_UBICACION", request, dedupeKey });
         lastSentAtRef.current = Date.now();
-        console.log("[GEO] Offline: guardado en outbox", { dedupeKey });
+        console.log("[GEO] Offline: guardado en outbox", { dedupeKey, Orden: payload.Orden });
         return;
       }
 
-      console.log("[GEO] Online: enviando ubicación...");
+      console.log("[GEO] Online: enviando ubicación...", { Orden: payload.Orden });
       const res = await api.post(request.url, request.body);
       lastSentAtRef.current = Date.now();
       console.log("[GEO] OK:", res?.status);
@@ -235,7 +250,7 @@ export const UbicacionProvider = ({ children }) => {
       try {
         await outboxAdd({ id: makeId(), type: "POST_UBICACION", request, dedupeKey });
         lastSentAtRef.current = Date.now();
-        console.log("[GEO] Fallback: guardado en outbox tras error");
+        console.log("[GEO] Fallback: guardado en outbox tras error", { Orden: payload.Orden });
       } catch {}
     } finally {
       sendingRef.current = false;
@@ -311,7 +326,7 @@ export const UbicacionProvider = ({ children }) => {
             lastCoordsRef.current = { lat, lon };
 
             console.log("[GEO] coords:", lat, lon, same ? "(same-ish)" : "");
-            postUbicacion(lat, lon);
+            await postUbicacion(lat, lon);
           }
         );
       } catch (e) {

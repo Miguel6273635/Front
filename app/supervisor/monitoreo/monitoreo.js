@@ -10,7 +10,7 @@ import {
   TextInput,
   Platform,
 } from "react-native";
-import MapView, { Marker, PROVIDER_GOOGLE } from "react-native-maps";
+import MapView, { Marker, PROVIDER_GOOGLE, Callout } from "react-native-maps";
 import { Ionicons } from "@expo/vector-icons";
 
 import api from "../../../src/services/api";
@@ -39,6 +39,18 @@ const sapDateToDate = (val) => {
   }
   const d = new Date(val);
   return Number.isNaN(d.getTime()) ? null : d;
+};
+
+const safeStr = (v) => String(v ?? "").trim();
+
+// ✅ Para mostrar fecha bonita sin romper si viene null
+const formatTs = (d) => {
+  if (!d) return "—";
+  try {
+    return d.toLocaleString();
+  } catch {
+    return "—";
+  }
 };
 
 export default function Monitoreo() {
@@ -85,18 +97,28 @@ export default function Monitoreo() {
           const lon = parseFloat(r?.Longitud);
           const tsDate = sapDateToDate(r?.Timestamp);
 
-          const nombre = String(r?.Nombre || r?.Usuario || "Técnico");
-          const correo = String(r?.Correo || r?.Usuario || "");
+          // En tu servicio de ejemplo:
+          // Usuario = tecnico2@...
+          // Orden = MX00...
+          const correo = safeStr(r?.Correo || r?.Usuario || "");
+          const nombre = safeStr(r?.Nombre || correo || "Técnico");
+
+          // ✅ ORDEN ACTIVA (lo que ya viene)
+          const orden = safeStr(r?.Orden || "");
+
+          // ✅ “Equipo” (si en el futuro lo agregas al servicio)
+          const equipo = safeStr(r?.Equipo || r?.Equipment || "");
 
           return {
-            usuario_id: String(r?.Id || `${correo}-${idx}`),
+            usuario_id: safeStr(r?.Id || `${correo}-${idx}`),
             nombre,
             correo,
             latitud: lat,
             longitud: lon,
             timestamp: tsDate,
             timestampRaw: r?.Timestamp,
-            orden: r?.Orden || "",
+            orden,
+            equipo,
           };
         })
         .filter((t) => Number.isFinite(t.latitud) && Number.isFinite(t.longitud));
@@ -146,7 +168,9 @@ export default function Monitoreo() {
     return tecnicos.filter((t) => {
       const nom = (t.nombre || "").toLowerCase();
       const cor = (t.correo || "").toLowerCase();
-      return nom.includes(q) || cor.includes(q);
+      const ord = (t.orden || "").toLowerCase();
+      const eq = (t.equipo || "").toLowerCase();
+      return nom.includes(q) || cor.includes(q) || ord.includes(q) || eq.includes(q);
     });
   }, [tecnicos, busqueda]);
 
@@ -192,19 +216,65 @@ export default function Monitoreo() {
             left: 10,
           }}
         >
-          {tecnicos.map((t) => (
-            <Marker
-              key={t.usuario_id}
-              coordinate={{ latitude: t.latitud, longitude: t.longitud }}
-              title={t.nombre}
-              description={
-                t.timestamp
-                  ? `${t.correo}\nÚltima vez: ${t.timestamp.toLocaleString()}`
-                  : t.correo
-              }
-              pinColor={SAP_RED}
-            />
-          ))}
+          {tecnicos.map((t) => {
+            // ✅ título y descripción incluyendo ORDEN / EQUIPO
+            const ordenTxt = t.orden ? `Orden: ${t.orden}` : "Sin orden activa";
+            const equipoTxt = t.equipo ? `Equipo: ${t.equipo}` : null;
+
+            const descParts = [
+              t.correo || "",
+              ordenTxt,
+              equipoTxt,
+              t.timestamp ? `Último: ${formatTs(t.timestamp)}` : null,
+            ].filter(Boolean);
+
+            return (
+              <Marker
+                key={t.usuario_id}
+                coordinate={{ latitude: t.latitud, longitude: t.longitud }}
+                title={t.nombre}
+                description={descParts.join("\n")}
+                pinColor={SAP_RED}
+              >
+                {/* ✅ Callout bonito (opcional pero se ve mejor que el description default) */}
+                <Callout tooltip>
+                  <View style={styles.callout}>
+                    <Text style={styles.calloutTitle} numberOfLines={1}>
+                      {t.nombre}
+                    </Text>
+                    {!!t.correo && (
+                      <Text style={styles.calloutSub} numberOfLines={1}>
+                        {t.correo}
+                      </Text>
+                    )}
+
+                    <View style={styles.calloutRow}>
+                      <Ionicons name="document-text-outline" size={14} color={SAP_BLUE} />
+                      <Text style={styles.calloutText} numberOfLines={1}>
+                        {t.orden ? `Orden: ${t.orden}` : "Sin orden activa"}
+                      </Text>
+                    </View>
+
+                    {!!t.equipo && (
+                      <View style={styles.calloutRow}>
+                        <Ionicons name="cog-outline" size={14} color={SAP_BLUE} />
+                        <Text style={styles.calloutText} numberOfLines={1}>
+                          Equipo: {t.equipo}
+                        </Text>
+                      </View>
+                    )}
+
+                    <View style={styles.calloutRow}>
+                      <Ionicons name="time-outline" size={14} color="#6F7380" />
+                      <Text style={[styles.calloutText, { color: "#6F7380" }]} numberOfLines={1}>
+                        {t.timestamp ? `Último: ${formatTs(t.timestamp)}` : "Último: —"}
+                      </Text>
+                    </View>
+                  </View>
+                </Callout>
+              </Marker>
+            );
+          })}
         </MapView>
 
         {/* BARRA SUPERIOR */}
@@ -212,7 +282,7 @@ export default function Monitoreo() {
           <View style={styles.searchBox}>
             <Ionicons name="search-outline" size={16} color="#8390A6" />
             <TextInput
-              placeholder="Buscar técnico…"
+              placeholder="Buscar técnico / correo / orden / equipo…"
               placeholderTextColor="#98A4B6"
               value={busqueda}
               onChangeText={setBusqueda}
@@ -288,7 +358,11 @@ export default function Monitoreo() {
             contentContainerStyle={{ paddingHorizontal: 14, paddingBottom: 16 }}
             ItemSeparatorComponent={() => <View style={styles.separator} />}
             renderItem={({ item }) => (
-              <TouchableOpacity onPress={() => enfocarTecnico(item)} style={styles.resultItem} activeOpacity={0.7}>
+              <TouchableOpacity
+                onPress={() => enfocarTecnico(item)}
+                style={styles.resultItem}
+                activeOpacity={0.7}
+              >
                 <View style={styles.avatar}>
                   <Ionicons name="person-outline" size={18} color={SAP_BLUE} />
                 </View>
@@ -304,9 +378,15 @@ export default function Monitoreo() {
                     </Text>
                   )}
 
+                  {/* ✅ ORDEN / EQUIPO visible en la lista */}
+                  <Text style={styles.subOrder} numberOfLines={1}>
+                    {item.orden ? `Equipo: ${item.orden}` : "Equipo: No hay equipo para mostrar"}
+                    {item.equipo ? `  ·  Equipo: ${item.equipo}` : ""}
+                  </Text>
+
                   {item.timestamp ? (
                     <Text style={styles.sub2} numberOfLines={1}>
-                      Último: {item.timestamp.toLocaleString()}
+                      Último: {formatTs(item.timestamp)}
                     </Text>
                   ) : null}
                 </View>
@@ -385,7 +465,13 @@ const styles = StyleSheet.create({
   },
   statusText: { color: "#2F3349", fontSize: 11.5 },
 
-  sheet: { backgroundColor: CARD, borderTopLeftRadius: 16, borderTopRightRadius: 16, borderTopWidth: 1, borderColor: "#E1E4F0" },
+  sheet: {
+    backgroundColor: CARD,
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
+    borderTopWidth: 1,
+    borderColor: "#E1E4F0",
+  },
   sheetCollapsed: { height: 145 },
   sheetExpanded: { height: 240 },
 
@@ -394,9 +480,20 @@ const styles = StyleSheet.create({
 
   resultItem: { flexDirection: "row", alignItems: "center", gap: 10, paddingVertical: 10 },
   separator: { height: 1, backgroundColor: "#EEF1F5" },
-  avatar: { width: 36, height: 36, borderRadius: 12, backgroundColor: "#EAF2FB", alignItems: "center", justifyContent: "center" },
+  avatar: {
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    backgroundColor: "#EAF2FB",
+    alignItems: "center",
+    justifyContent: "center",
+  },
   name: { fontSize: 14.5, fontWeight: "700", color: "#2F3349" },
   sub: { color: "#687187", marginTop: 2, fontSize: 11.5 },
+
+  // ✅ NUEVO: orden/equipo en lista
+  subOrder: { color: "#445063", marginTop: 3, fontSize: 11.5, fontWeight: "700" },
+
   sub2: { color: "#8B95A7", marginTop: 2, fontSize: 11 },
   coordBox: { alignItems: "flex-end", gap: 3 },
   coords: { color: "#4B5563", fontSize: 11 },
@@ -418,4 +515,23 @@ const styles = StyleSheet.create({
   retryText: { color: "#fff", fontWeight: "700" },
   emptyFilter: { textAlign: "center", color: "#666", paddingVertical: 10 },
   error: { color: "#a10000", marginBottom: 6, fontSize: 12, textAlign: "center" },
+
+  // ✅ Callout (bonito)
+  callout: {
+    width: 240,
+    backgroundColor: "#fff",
+    borderRadius: 12,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: "#E6EAF4",
+    shadowColor: "#000",
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 4,
+  },
+  calloutTitle: { fontSize: 14, fontWeight: "800", color: "#111827" },
+  calloutSub: { fontSize: 11.5, color: "#667085", marginTop: 2 },
+  calloutRow: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 6 },
+  calloutText: { fontSize: 12, color: "#1F2937", flex: 1 },
 });
