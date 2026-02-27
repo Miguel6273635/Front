@@ -33,20 +33,14 @@ import * as Sharing from "expo-sharing";
 import * as IntentLauncher from "expo-intent-launcher";
 import { Linking } from "react-native";
 
-import {
-  AREAS_TRABAJO,
-  RIESGOS_POSIBLES,
-} from "../../../../src/constants/catalogosRiesgos";
+import { AREAS_TRABAJO, RIESGOS_POSIBLES } from "../../../../src/constants/catalogosRiesgos";
 import { subirPdfOrden } from "../../../../src/services/riesgosSap";
 import { buildTbmkyHtml } from "../../../../src/services/templates/tbmkyPdfTemplate";
 
 // ✅ OFFLINE helpers (YA LOS TIENES EN TU PROYECTO)
 import { isOnline } from "../../../../src/offline/net";
 import { upsertSapQueueItem } from "../../../../src/offline/sapQueue";
-import {
-  setLocalStatusPatch,
-  patchCacheOrdenesTecnicoList,
-} from "../../../../src/offline/ordenesTecnicoLocalPatch";
+import { setLocalStatusPatch, patchCacheOrdenesTecnicoList } from "../../../../src/offline/ordenesTecnicoLocalPatch";
 
 // ===== Paleta Fiori / Horizon =====
 const FIORI = {
@@ -128,6 +122,47 @@ const EPP_ICONS_MDI = {
 };
 const getMdiIconName = (key) => EPP_ICONS_MDI[key] || "help-circle-outline";
 
+/* ✅ Helpers ToAddresses */
+function buildRazonSocial(a) {
+  const parts = [a?.Name1, a?.Name2, a?.Name3, a?.Name4]
+    .map((x) => String(x || "").trim())
+    .filter(Boolean);
+  return parts.join(" ").trim();
+}
+
+function buildDireccion(a) {
+  const street = [a?.Street, a?.HouseNum1]
+    .map((x) => String(x || "").trim())
+    .filter(Boolean)
+    .join(" ");
+  const supl = [a?.StrSuppl1, a?.StrSuppl2, a?.StrSuppl3]
+    .map((x) => String(x || "").trim())
+    .filter(Boolean)
+    .join(" ");
+  const loc = [a?.Location, a?.City2, a?.City1]
+    .map((x) => String(x || "").trim())
+    .filter(Boolean)
+    .join(", ");
+  const reg = [a?.Region, a?.PostCode1]
+    .map((x) => String(x || "").trim())
+    .filter(Boolean)
+    .join(" ");
+  return [street, supl, loc, reg]
+    .map((x) => String(x || "").trim())
+    .filter(Boolean)
+    .join(", ");
+}
+
+/* ✅ Helpers ToPartners (Nóminas) */
+function pickPartnerOldByRole(results, roleOld) {
+  const node = (results || []).find((x) => String(x?.PartnRoleOld || "").trim() === roleOld);
+  const val = String(node?.PartnerOld || "").trim();
+  return val;
+}
+function normalizeNomina(raw) {
+  return String(raw || "").trim();
+}
+
 export default function FormularioRiesgosScreen() {
   // ✅ por tu estructura, a veces viene como { id } y a veces como { orderid }
   const params = useLocalSearchParams();
@@ -137,14 +172,7 @@ export default function FormularioRiesgosScreen() {
 
   // ✅ helper userKey para parches locales (estatus)
   const userKey = useMemo(() => {
-    return (
-      user?.email ||
-      user?.User ||
-      user?.username ||
-      user?.sub ||
-      user?.id ||
-      "unknown"
-    );
+    return user?.email || user?.User || user?.username || user?.sub || user?.id || "unknown";
   }, [user]);
 
   // ✅ scroll a top en cada cambio de paso
@@ -185,11 +213,15 @@ export default function FormularioRiesgosScreen() {
   const [equipoLabel, setEquipoLabel] = useState("ELEVADORES"); // texto visible
   const [loadingEquipoTipo, setLoadingEquipoTipo] = useState(false);
 
-  // ✅ Trabajadores SIN nómina
+  // ✅ Trabajadores
   const [trabajadores, setTrabajadores] = useState([
     { nombre: "", cargo: "" },
     { nombre: "", cargo: "" },
   ]);
+
+  // ✅ NUEVO: Nómina técnico principal y auxiliar (auto desde ToPartners)
+  const [nominaTecnico, setNominaTecnico] = useState("");
+  const [nominaAuxiliar, setNominaAuxiliar] = useState("");
 
   const [centroTrabajo, setCentroTrabajo] = useState("TLP1");
   const [selectedArea, setSelectedArea] = useState(null);
@@ -247,19 +279,14 @@ export default function FormularioRiesgosScreen() {
   const toBase64 = (data) => (data || "").replace(/^data:image\/\w+;base64,/, "");
   const toDataUrl = (b64) => `data:image/png;base64,${b64}`;
   const sanitize = (s) => (s || "").replace(/\s/g, "");
-  const EQUIPO_TIPO_URL_BASE =
-    "https://my-node-api-qas-01.cfapps.us10-001.hana.ondemand.com";
+  const EQUIPO_TIPO_URL_BASE = "https://my-node-api-qas-01.cfapps.us10-001.hana.ondemand.com";
 
   function mapEqartToTipo(eqartRaw) {
     const v = String(eqartRaw || "").toUpperCase().trim();
 
-    // En tu ejemplo viene: "ELEVADOR"
     if (v.includes("ELEV")) return { tipo: "elevadores", label: "ELEVADORES" };
-
-    // Por si SAP manda "ESCALERA" / "ESCALERA MECANICA" / "ESCALERA MECÁNICA"
     if (v.includes("ESCAL")) return { tipo: "escaleras", label: "ESCALERAS" };
 
-    // fallback (si viene raro o vacío)
     return { tipo: "elevadores", label: "ELEVADORES" };
   }
 
@@ -271,7 +298,6 @@ export default function FormularioRiesgosScreen() {
       eq
     )}')?$format=json`;
 
-    // 👇 usa fetch para evitar problemas de baseURL con tu axios `api`
     const r = await fetch(url);
     if (!r.ok) throw new Error(`EquipmentHeaderSet HTTP ${r.status}`);
 
@@ -291,10 +317,7 @@ export default function FormularioRiesgosScreen() {
   `;
 
   // Áreas locales
-  const areaOptions = useMemo(
-    () => AREAS_TRABAJO.map((a) => ({ label: a.label, value: a.id })),
-    []
-  );
+  const areaOptions = useMemo(() => AREAS_TRABAJO.map((a) => ({ label: a.label, value: a.id })), []);
 
   // ==========================================================
   // ✅ MEJORA: “ver lo que escribes” + barra arriba del teclado
@@ -363,7 +386,6 @@ export default function FormularioRiesgosScreen() {
         return safe(acciones?.[i]);
       }
 
-      // ✅ NUEVO
       case "nuevo_riesgo": {
         const i = activeField?.i ?? 0;
         return safe(nuevosRiesgos?.[i]?.riesgo);
@@ -376,17 +398,7 @@ export default function FormularioRiesgosScreen() {
       default:
         return "";
     }
-  }, [
-    activeField,
-    trabajadores,
-    jefeInmediato,
-    actividadDia,
-    herramientas,
-    causasTop,
-    medidasTop,
-    acciones,
-    nuevosRiesgos,
-  ]);
+  }, [activeField, trabajadores, jefeInmediato, actividadDia, herramientas, causasTop, medidasTop, acciones, nuevosRiesgos]);
 
   // mostrar el final si es largo, para que veas lo último que tecleas
   const kbPreviewValue = useMemo(() => {
@@ -416,8 +428,7 @@ export default function FormularioRiesgosScreen() {
 
         if (typeof d.fecha === "string") setFecha(d.fecha);
         if (typeof d.rutinaria === "boolean") setRutinaria(d.rutinaria);
-        if (typeof d.equipoSeleccionado === "string")
-          setEquipoSeleccionado(d.equipoSeleccionado);
+        if (typeof d.equipoSeleccionado === "string") setEquipoSeleccionado(d.equipoSeleccionado);
         if (typeof d.equipoLabel === "string") setEquipoLabel(d.equipoLabel);
 
         if (Array.isArray(d.trabajadores)) {
@@ -428,28 +439,27 @@ export default function FormularioRiesgosScreen() {
           if (t.length >= 2) setTrabajadores([t[0], t[1]]);
         }
 
-        if (typeof d.centroTrabajo === "string")
-          setCentroTrabajo(d.centroTrabajo || "TLP1");
+        // ✅ NUEVO: nóminas en borrador
+        if (typeof d.nominaTecnico === "string") setNominaTecnico(d.nominaTecnico);
+        if (typeof d.nominaAuxiliar === "string") setNominaAuxiliar(d.nominaAuxiliar);
+
+        if (typeof d.centroTrabajo === "string") setCentroTrabajo(d.centroTrabajo || "TLP1");
         if (d.selectedArea) setSelectedArea(d.selectedArea);
         if (typeof d.jefeInmediato === "string") setJefeInmediato(d.jefeInmediato);
         if (typeof d.actividadDia === "string") setActividadDia(d.actividadDia);
 
         if (Array.isArray(d.sintomas)) setSintomas(d.sintomas);
-        if (d.eppSeleccionado && typeof d.eppSeleccionado === "object")
-          setEppSeleccionado(d.eppSeleccionado);
+        if (d.eppSeleccionado && typeof d.eppSeleccionado === "object") setEppSeleccionado(d.eppSeleccionado);
         if (typeof d.herramientas === "string") setHerramientas(d.herramientas);
 
-        if (Array.isArray(d.riesgosSeleccionadosIds))
-          setRiesgosSeleccionadosIds(d.riesgosSeleccionadosIds);
+        if (Array.isArray(d.riesgosSeleccionadosIds)) setRiesgosSeleccionadosIds(d.riesgosSeleccionadosIds);
         if (Array.isArray(d.topSeleccionIds)) setTopSeleccionIds(d.topSeleccionIds);
         if (Array.isArray(d.riesgosTopText)) setRiesgosTopText(d.riesgosTopText);
         if (Array.isArray(d.causasTop)) setCausasTop(d.causasTop);
         if (Array.isArray(d.medidasTop)) setMedidasTop(d.medidasTop);
         if (Array.isArray(d.acciones)) setAcciones(d.acciones);
 
-        // ✅ NUEVO
-        if (typeof d.detectaNuevoRiesgo === "boolean")
-          setDetectaNuevoRiesgo(d.detectaNuevoRiesgo);
+        if (typeof d.detectaNuevoRiesgo === "boolean") setDetectaNuevoRiesgo(d.detectaNuevoRiesgo);
 
         if (Array.isArray(d.nuevosRiesgos)) {
           const arr = d.nuevosRiesgos.map((x) => ({
@@ -460,7 +470,6 @@ export default function FormularioRiesgosScreen() {
         }
 
         if (typeof d.firmaTecnico === "string") setFirmaTecnico(d.firmaTecnico || null);
-
         if (typeof d.pdfLocalUri === "string") setPdfLocalUri(d.pdfLocalUri || null);
       } catch (e) {
         console.log("[TBMKY] hydrateDraft error:", e);
@@ -477,7 +486,7 @@ export default function FormularioRiesgosScreen() {
   }, [DRAFT_KEY, orderid]);
 
   // ==========================
-  // ✅ 2) Cargar SAP + ToAddresses
+  // ✅ 2) Cargar SAP + ToAddresses + ToPartners
   // ==========================
   useEffect(() => {
     let alive = true;
@@ -527,8 +536,7 @@ export default function FormularioRiesgosScreen() {
           setLoadingEquipoTipo(false);
         }
 
-        const startIso =
-          ord?.StartDate || ord?.start_date || ord?.Startdate || ord?.startDate;
+        const startIso = ord?.StartDate || ord?.start_date || ord?.Startdate || ord?.startDate;
         const startDate = startIso ? new Date(startIso) : new Date();
         if (!fecha) theDateFormatter(setFecha, startDate);
 
@@ -586,6 +594,26 @@ export default function FormularioRiesgosScreen() {
         } catch (e) {
           console.log("[TBMKY] ToAddresses error:", e?.response?.data || e);
         }
+
+        // ✅ NUEVO: Traer Nóminas desde ToPartners (Z1 = técnico principal, Z2 = auxiliar)
+        try {
+          const partRes = await api.get(
+            `/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet('${orderid}')/ToPartners?$format=json`
+          );
+
+          const results = partRes?.data?.d?.results || [];
+
+          const z1 = normalizeNomina(pickPartnerOldByRole(results, "Z1"));
+          const z2 = normalizeNomina(pickPartnerOldByRole(results, "Z2"));
+
+          // ✅ No pisar si ya había algo (draft) — si quieres forzar siempre, quita el prev check
+          setNominaTecnico((prev) => (String(prev || "").trim() ? prev : z1));
+          setNominaAuxiliar((prev) => (String(prev || "").trim() ? prev : z2));
+
+          console.log("[TBMKY] ToPartners nómina:", { z1, z2, len: results.length });
+        } catch (e) {
+          console.log("[TBMKY] ToPartners error:", e?.response?.data || e?.message || e);
+        }
       } catch (err) {
         console.error("Error cargando SAP:", err?.response?.data || err);
         Alert.alert("Error", "No se pudieron cargar los datos de SAP.");
@@ -614,6 +642,11 @@ export default function FormularioRiesgosScreen() {
       equipoLabel,
 
       trabajadores,
+
+      // ✅ NUEVO
+      nominaTecnico,
+      nominaAuxiliar,
+
       centroTrabajo,
       selectedArea,
       jefeInmediato,
@@ -642,6 +675,8 @@ export default function FormularioRiesgosScreen() {
       equipoSeleccionado,
       equipoLabel,
       trabajadores,
+      nominaTecnico,
+      nominaAuxiliar,
       centroTrabajo,
       selectedArea,
       jefeInmediato,
@@ -693,11 +728,7 @@ export default function FormularioRiesgosScreen() {
   // Toggles
   const toggleSintoma = (sintoma) => {
     if (lockedAfterPdf) return;
-    setSintomas((prev) =>
-      prev.includes(sintoma)
-        ? prev.filter((s) => s !== sintoma)
-        : [...prev, sintoma]
-    );
+    setSintomas((prev) => (prev.includes(sintoma) ? prev.filter((s) => s !== sintoma) : [...prev, sintoma]));
   };
 
   const toggleEppCampo = (item, campo) => {
@@ -710,9 +741,7 @@ export default function FormularioRiesgosScreen() {
 
   const toggleRiesgo = (id) => {
     if (lockedAfterPdf) return;
-    setRiesgosSeleccionadosIds((prev) =>
-      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
-    );
+    setRiesgosSeleccionadosIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
   };
 
   const opcionesTop1 = useMemo(
@@ -739,9 +768,7 @@ export default function FormularioRiesgosScreen() {
 
   useEffect(() => {
     // si desmarcan riesgo, quita top si ya no existe
-    setTopSeleccionIds((prev) =>
-      prev.map((v) => (v && !riesgosSeleccionadosIds.includes(v) ? null : v))
-    );
+    setTopSeleccionIds((prev) => prev.map((v) => (v && !riesgosSeleccionadosIds.includes(v) ? null : v)));
   }, [riesgosSeleccionadosIds]);
 
   const aplicarTop = () => {
@@ -752,22 +779,12 @@ export default function FormularioRiesgosScreen() {
       return;
     }
 
-    const nombres = topSeleccionIds.map(
-      (id) => riesgosBD.find((x) => x.id === id)?.riesgo || ""
-    );
+    const nombres = topSeleccionIds.map((id) => riesgosBD.find((x) => x.id === id)?.riesgo || "");
 
     // reset de campos si cambió el riesgo top
-    setCausasTop((prev) =>
-      prev.map((c, i) => (riesgosTopText[i] !== nombres[i] ? "" : c))
-    );
-    setMedidasTop((prev) =>
-      prev.map((fila, i) =>
-        riesgosTopText[i] !== nombres[i] ? ["", "", ""] : fila
-      )
-    );
-    setAcciones((prev) =>
-      prev.map((a, i) => (riesgosTopText[i] !== nombres[i] ? "" : a))
-    );
+    setCausasTop((prev) => prev.map((c, i) => (riesgosTopText[i] !== nombres[i] ? "" : c)));
+    setMedidasTop((prev) => prev.map((fila, i) => (riesgosTopText[i] !== nombres[i] ? ["", "", ""] : fila)));
+    setAcciones((prev) => prev.map((a, i) => (riesgosTopText[i] !== nombres[i] ? "" : a)));
 
     setRiesgosTopText(nombres);
 
@@ -781,9 +798,7 @@ export default function FormularioRiesgosScreen() {
   // ✅ PDF LOCAL
   // -------------------------
   const leerPdfBase64 = async (localUri) => {
-    const b64 = await FileSystem.readAsStringAsync(localUri, {
-      encoding: "base64",
-    });
+    const b64 = await FileSystem.readAsStringAsync(localUri, { encoding: "base64" });
     return b64;
   };
 
@@ -838,8 +853,7 @@ export default function FormularioRiesgosScreen() {
       }
 
       const canShare = await Sharing.isAvailableAsync();
-      if (canShare)
-        await Sharing.shareAsync(pdfLocalUri, { mimeType: "application/pdf" });
+      if (canShare) await Sharing.shareAsync(pdfLocalUri, { mimeType: "application/pdf" });
       else await Linking.openURL(pdfLocalUri);
     } catch (e) {
       console.error(e);
@@ -874,16 +888,13 @@ export default function FormularioRiesgosScreen() {
 
   const paso2Ok = useMemo(() => true, []);
 
-  const topAplicadoOk = useMemo(
-    () => !!riesgosTopText?.[0] && !!riesgosTopText?.[1] && !!riesgosTopText?.[2],
-    [riesgosTopText]
-  );
+  const topAplicadoOk = useMemo(() => !!riesgosTopText?.[0] && !!riesgosTopText?.[1] && !!riesgosTopText?.[2], [
+    riesgosTopText,
+  ]);
 
   const nuevosRiesgosOk = useMemo(() => {
     if (!detectaNuevoRiesgo) return true;
-    return (nuevosRiesgos || []).some(
-      (r) => String(r?.riesgo || "").trim() && String(r?.medida || "").trim()
-    );
+    return (nuevosRiesgos || []).some((r) => String(r?.riesgo || "").trim() && String(r?.medida || "").trim());
   }, [detectaNuevoRiesgo, nuevosRiesgos]);
 
   const paso3Ok = useMemo(() => {
@@ -925,27 +936,16 @@ export default function FormularioRiesgosScreen() {
   const onGuardarYGenerarPdf = async () => {
     if (saving) return;
 
-    if (!canSubmit)
-      return Alert.alert("Falta firma", "Captura la firma del técnico.");
+    if (!canSubmit) return Alert.alert("Falta firma", "Captura la firma del técnico.");
 
-    if (!selectedArea)
-      return Alert.alert("Falta información", "Selecciona el área de trabajo.");
-    if (!jefeInmediato.trim())
-      return Alert.alert("Falta información", "Jefe inmediato vacío.");
-    if (!actividadDia.trim())
-      return Alert.alert("Falta información", "Actividad del día vacía.");
+    if (!selectedArea) return Alert.alert("Falta información", "Selecciona el área de trabajo.");
+    if (!jefeInmediato.trim()) return Alert.alert("Falta información", "Jefe inmediato vacío.");
+    if (!actividadDia.trim()) return Alert.alert("Falta información", "Actividad del día vacía.");
 
-    if (!topAplicadoOk)
-      return Alert.alert(
-        "TOP 3 incompleto",
-        "Selecciona y aplica TOP 1, TOP 2 y TOP 3."
-      );
+    if (!topAplicadoOk) return Alert.alert("TOP 3 incompleto", "Selecciona y aplica TOP 1, TOP 2 y TOP 3.");
 
     if (!acciones.every((a) => String(a || "").trim())) {
-      return Alert.alert(
-        "Acciones incompletas",
-        "Escribe las 3 acciones (una por TOP)."
-      );
+      return Alert.alert("Acciones incompletas", "Escribe las 3 acciones (una por TOP).");
     }
 
     if (!nuevosRiesgosOk) {
@@ -958,8 +958,7 @@ export default function FormularioRiesgosScreen() {
     try {
       setSaving(true);
 
-      const selectedAreaLabel =
-        areaOptions.find((a) => a.value === selectedArea)?.label || "";
+      const selectedAreaLabel = areaOptions.find((a) => a.value === selectedArea)?.label || "";
 
       const payload = {
         orderid: orden?.Orderid || orden?.orderid || orderid,
@@ -978,6 +977,10 @@ export default function FormularioRiesgosScreen() {
           nombre: String(t?.nombre ?? ""),
           cargo: String(t?.cargo ?? ""),
         })),
+
+        // ✅ NUEVO: Nóminas (por si quieres que salgan en PDF)
+        nominaTecnico: nominaTecnico || "",
+        nominaAuxiliar: nominaAuxiliar || "",
 
         sintomas,
         eppSeleccionado,
@@ -1006,8 +1009,7 @@ export default function FormularioRiesgosScreen() {
       };
 
       // 1) Generar PDF
-      const { uri: localUri, base64: base64Pdf, fileName } =
-        await generarPdfLocalYBase64(payload);
+      const { uri: localUri, base64: base64Pdf, fileName } = await generarPdfLocalYBase64(payload);
       setPdfLocalUri(localUri);
 
       if (!base64Pdf || String(base64Pdf).trim().length < 200) {
@@ -1033,7 +1035,6 @@ export default function FormularioRiesgosScreen() {
         });
 
         // ✅ OFFLINE: (opcional) parchea estatus local para que se vea “enviado/pendiente”
-        // Ajusta el código según tu lógica: "0200" / "0400" / etc.
         try {
           const newStatus = "0200";
           await setLocalStatusPatch(userKey, payload.orderid, newStatus);
@@ -1050,17 +1051,14 @@ export default function FormularioRiesgosScreen() {
           });
         } catch {}
 
-        // ✅ NO borres el draft si quieres permitir re-edición offline.
-        // Aquí sí lo borramos para evitar duplicados; si prefieres conservarlo, comenta esto:
+        // ✅ borra borrador para evitar duplicados (si quieres conservarlo, comenta)
         try {
           await AsyncStorage.removeItem(DRAFT_KEY);
         } catch {}
 
-        Alert.alert(
-          "Guardado offline ✅",
-          "Se generó el PDF y quedó en cola para enviarse cuando vuelva el internet.",
-          [{ text: "Opciones de PDF", onPress: openPdfModal }]
-        );
+        Alert.alert("Guardado offline ✅", "Se generó el PDF y quedó en cola para enviarse cuando vuelva el internet.", [
+          { text: "Opciones de PDF", onPress: openPdfModal },
+        ]);
         return;
       }
 
@@ -1077,20 +1075,16 @@ export default function FormularioRiesgosScreen() {
         });
       } catch (sendErr) {
         console.log("[TBMKY] enviar submit error:", sendErr?.response?.data || sendErr);
-        Alert.alert(
-          "Guardado local",
-          `Se generó el PDF, pero no se pudo enviar a SAP para la orden #${payload.orderid}.`,
-          [{ text: "Opciones de PDF", onPress: openPdfModal }]
-        );
+        Alert.alert("Guardado local", `Se generó el PDF, pero no se pudo enviar a SAP para la orden #${payload.orderid}.`, [
+          { text: "Opciones de PDF", onPress: openPdfModal },
+        ]);
         return;
       }
 
       if (!respSubmit?.ok) {
-        Alert.alert(
-          "Guardado local",
-          `Se generó el PDF, pero SAP no confirmó el envío para la orden #${payload.orderid}.`,
-          [{ text: "Opciones de PDF", onPress: openPdfModal }]
-        );
+        Alert.alert("Guardado local", `Se generó el PDF, pero SAP no confirmó el envío para la orden #${payload.orderid}.`, [
+          { text: "Opciones de PDF", onPress: openPdfModal },
+        ]);
         return;
       }
 
@@ -1099,9 +1093,7 @@ export default function FormularioRiesgosScreen() {
         await AsyncStorage.removeItem(DRAFT_KEY);
       } catch {}
 
-      Alert.alert("Listo", `TBM/KY enviado a SAP ✅\nOrden #${payload.orderid}.`, [
-        { text: "Opciones de PDF", onPress: openPdfModal },
-      ]);
+      Alert.alert("Listo", `TBM/KY enviado a SAP ✅\nOrden #${payload.orderid}.`, [{ text: "Opciones de PDF", onPress: openPdfModal }]);
     } catch (e) {
       console.error("TBMKY error:", e?.response?.data || e);
       Alert.alert("Error", "No se pudo completar el proceso (PDF/SAP/estatus).");
@@ -1130,50 +1122,21 @@ export default function FormularioRiesgosScreen() {
           const done = paso > n;
           return (
             <View key={n} style={styles.stepItem}>
-              <View
-                style={[
-                  styles.stepCircle,
-                  active && styles.stepCircleActive,
-                  done && styles.stepCircleDone,
-                ]}
-              >
+              <View style={[styles.stepCircle, active && styles.stepCircleActive, done && styles.stepCircleDone]}>
                 {done ? (
                   <Ionicons name="checkmark" size={14} color="#fff" />
                 ) : (
-                  <Text
-                    style={[
-                      styles.stepCircleText,
-                      (active || done) && styles.stepCircleTextActive,
-                    ]}
-                  >
-                    {n}
-                  </Text>
+                  <Text style={[styles.stepCircleText, (active || done) && styles.stepCircleTextActive]}>{n}</Text>
                 )}
               </View>
-              <Text
-                style={[
-                  styles.stepLabel,
-                  active && styles.stepLabelActive,
-                  done && styles.stepLabelDone,
-                ]}
-              >
-                Paso {n}
-              </Text>
+              <Text style={[styles.stepLabel, active && styles.stepLabelActive, done && styles.stepLabelDone]}>Paso {n}</Text>
             </View>
           );
         })}
       </View>
 
-      <KeyboardAvoidingView
-        style={{ flex: 1 }}
-        behavior={Platform.OS === "ios" ? "padding" : "height"}
-        keyboardVerticalOffset={Platform.OS === "ios" ? 90 : 0}
-      >
-        <ScrollView
-          ref={scrollRef}
-          contentContainerStyle={styles.scroll}
-          keyboardShouldPersistTaps="handled"
-        >
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : "height"} keyboardVerticalOffset={Platform.OS === "ios" ? 90 : 0}>
+        <ScrollView ref={scrollRef} contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
           {/* ✅ Encabezado SOLO en Paso 1 */}
           {paso === 1 && (
             <View style={styles.headerCard}>
@@ -1190,49 +1153,27 @@ export default function FormularioRiesgosScreen() {
 
               <View style={{ marginTop: 8, gap: 4 }}>
                 <HeaderRow label="Fecha" value={fecha} />
-                <HeaderRow
-                  label="Equipo"
-                  value={loadingEquipoTipo ? "Consultando…" : equipoLabel || "—"}
-                />
-
+                <HeaderRow label="Equipo" value={loadingEquipoTipo ? "Consultando…" : equipoLabel || "—"} />
                 <HeaderRow label="Equipo SAP" value={orden?.Equipment || orden?.equipment || "—"} />
-                <HeaderRow
-                  label="Razón social"
-                  value={razonSocial || orden?.razon_social || orden?.partner_name || "—"}
-                  multiline
-                />
-                <HeaderRow
-                  label="Dirección"
-                  value={direccion || orden?.direccion || orden?.partner_address || "—"}
-                  multiline
-                />
+                <HeaderRow label="Razón social" value={razonSocial || orden?.razon_social || orden?.partner_name || "—"} multiline />
+                <HeaderRow label="Dirección" value={direccion || orden?.direccion || orden?.partner_address || "—"} multiline />
                 <HeaderRow label="Tipo orden" value={orden?.order_type || orden?.OrderType || "—"} />
               </View>
 
               <View style={{ flexDirection: "row", gap: 10, marginTop: 10, flexWrap: "wrap" }}>
                 {!!pdfLocalUri && (
-                  <TouchableOpacity
-                    style={[styles.smallBtn, { backgroundColor: FIORI.accent }]}
-                    onPress={openPdfModal}
-                    disabled={lockedAfterPdf}
-                  >
+                  <TouchableOpacity style={[styles.smallBtn, { backgroundColor: FIORI.accent }]} onPress={openPdfModal} disabled={lockedAfterPdf}>
                     <Text style={[styles.smallBtnText, { color: "#fff" }]}>Opciones de PDF</Text>
                   </TouchableOpacity>
                 )}
 
-                <TouchableOpacity
-                  style={[styles.smallBtn, { backgroundColor: "#111827" }]}
-                  onPress={clearDraft}
-                  disabled={lockedAfterPdf}
-                >
+                <TouchableOpacity style={[styles.smallBtn, { backgroundColor: "#111827" }]} onPress={clearDraft} disabled={lockedAfterPdf}>
                   <Text style={[styles.smallBtnText, { color: "#fff" }]}>Borrar borrador</Text>
                 </TouchableOpacity>
               </View>
 
               {!!lockedAfterPdf && (
-                <Text style={{ marginTop: 8, fontSize: 12, color: FIORI.textMuted }}>
-                  Este formulario ya se envió. Regresando a órdenes…
-                </Text>
+                <Text style={{ marginTop: 8, fontSize: 12, color: FIORI.textMuted }}>Este formulario ya se envió. Regresando a órdenes…</Text>
               )}
             </View>
           )}
@@ -1244,25 +1185,19 @@ export default function FormularioRiesgosScreen() {
 
               <SectionSubTitle text="Tipo de equipo (fijo)" />
               <View style={[styles.fixedTile, { borderColor: FIORI.accent }]}>
-                <MaterialCommunityIcons
-                  name={equipoSeleccionado === "escaleras" ? "escalator" : "elevator-passenger"}
-                  size={22}
-                  color={FIORI.accent}
-                />
-
-                <Text style={{ fontWeight: "900", color: FIORI.ink }}>
-                  {loadingEquipoTipo ? "Consultando…" : equipoLabel || "EQUIPO"}
-                </Text>
-
-                <Text style={{ color: FIORI.textMuted, fontSize: 12 }}>
-                  {loadingEquipoTipo ? "Leyendo tipo en SAP…" : "No editable"}
-                </Text>
+                <MaterialCommunityIcons name={equipoSeleccionado === "escaleras" ? "escalator" : "elevator-passenger"} size={22} color={FIORI.accent} />
+                <Text style={{ fontWeight: "900", color: FIORI.ink }}>{loadingEquipoTipo ? "Consultando…" : equipoLabel || "EQUIPO"}</Text>
+                <Text style={{ color: FIORI.textMuted, fontSize: 12 }}>{loadingEquipoTipo ? "Leyendo tipo en SAP…" : "No editable"}</Text>
               </View>
 
               <SectionSubTitle text="Técnico asignado (no editable)" />
               <View style={styles.card}>
                 <LabeledInput label="Nombre" value={trabajadores[0].nombre} editable={false} />
                 <LabeledInput label="Cargo" value={trabajadores[0].cargo || "Técnico"} editable={false} />
+
+                {/* ✅ NUEVO */}
+                <LabeledInput label="Nómina" value={nominaTecnico || "—"} editable={false} />
+
                 <LabeledInput label="Fecha" value={fecha} editable={false} />
               </View>
 
@@ -1296,6 +1231,9 @@ export default function FormularioRiesgosScreen() {
                   onBlur={() => setActiveField(null)}
                   inputAccessoryViewID={Platform.OS === "ios" ? ACCESSORY_ID : undefined}
                 />
+
+                {/* ✅ NUEVO */}
+                <LabeledInput label="Nómina" value={nominaAuxiliar || "—"} editable={false} />
               </View>
 
               <SectionSubTitle text="Datos del área (requerido)" />
@@ -1354,17 +1292,8 @@ export default function FormularioRiesgosScreen() {
               <SectionSubTitle text="Chequeo individual de salud" />
               <View style={styles.card}>
                 {sintomasIniciales.map((s) => (
-                  <TouchableOpacity
-                    key={s}
-                    style={styles.checkboxRow}
-                    onPress={() => toggleSintoma(s)}
-                    disabled={lockedAfterPdf}
-                  >
-                    <Ionicons
-                      name={sintomas.includes(s) ? "checkbox" : "square-outline"}
-                      size={20}
-                      color={FIORI.accent}
-                    />
+                  <TouchableOpacity key={s} style={styles.checkboxRow} onPress={() => toggleSintoma(s)} disabled={lockedAfterPdf}>
+                    <Ionicons name={sintomas.includes(s) ? "checkbox" : "square-outline"} size={20} color={FIORI.accent} />
                     <Text style={styles.checkboxLabel}>{s}</Text>
                   </TouchableOpacity>
                 ))}
@@ -1377,50 +1306,27 @@ export default function FormularioRiesgosScreen() {
                   return (
                     <View key={epp} style={styles.eppItem}>
                       <View style={styles.eppHeader}>
-                        <MaterialCommunityIcons
-                          name={iconName}
-                          size={18}
-                          color={FIORI.ink}
-                          style={{ marginRight: 4 }}
-                        />
+                        <MaterialCommunityIcons name={iconName} size={18} color={FIORI.ink} style={{ marginRight: 4 }} />
                         <Text style={styles.eppLabel}>{epp}</Text>
                       </View>
 
                       <View style={styles.eppButtons}>
                         <TouchableOpacity
-                          style={[
-                            styles.eppBox,
-                            eppSeleccionado[epp]?.M && styles.eppBoxOnM,
-                          ]}
+                          style={[styles.eppBox, eppSeleccionado[epp]?.M && styles.eppBoxOnM]}
                           onPress={() => toggleEppCampo(epp, "M")}
                           disabled={lockedAfterPdf}
                         >
-                          <MaterialCommunityIcons
-                            name={eppSeleccionado[epp]?.M ? "check-circle" : "circle-outline"}
-                            size={16}
-                            color={eppSeleccionado[epp]?.M ? "#fff" : FIORI.accent}
-                          />
-                          <Text style={[styles.eppBoxText, eppSeleccionado[epp]?.M && styles.eppBoxTextOn]}>
-                            M
-                          </Text>
+                          <MaterialCommunityIcons name={eppSeleccionado[epp]?.M ? "check-circle" : "circle-outline"} size={16} color={eppSeleccionado[epp]?.M ? "#fff" : FIORI.accent} />
+                          <Text style={[styles.eppBoxText, eppSeleccionado[epp]?.M && styles.eppBoxTextOn]}>M</Text>
                         </TouchableOpacity>
 
                         <TouchableOpacity
-                          style={[
-                            styles.eppBox,
-                            eppSeleccionado[epp]?.A && styles.eppBoxOnA,
-                          ]}
+                          style={[styles.eppBox, eppSeleccionado[epp]?.A && styles.eppBoxOnA]}
                           onPress={() => toggleEppCampo(epp, "A")}
                           disabled={lockedAfterPdf}
                         >
-                          <MaterialCommunityIcons
-                            name={eppSeleccionado[epp]?.A ? "check-circle" : "circle-outline"}
-                            size={16}
-                            color={eppSeleccionado[epp]?.A ? "#fff" : FIORI.warning}
-                          />
-                          <Text style={[styles.eppBoxText, eppSeleccionado[epp]?.A && styles.eppBoxTextOn]}>
-                            A
-                          </Text>
+                          <MaterialCommunityIcons name={eppSeleccionado[epp]?.A ? "check-circle" : "circle-outline"} size={16} color={eppSeleccionado[epp]?.A ? "#fff" : FIORI.warning} />
+                          <Text style={[styles.eppBoxText, eppSeleccionado[epp]?.A && styles.eppBoxTextOn]}>A</Text>
                         </TouchableOpacity>
                       </View>
                     </View>
@@ -1478,8 +1384,8 @@ export default function FormularioRiesgosScreen() {
                 <View style={styles.taskCard}>
                   <Text style={styles.taskTitle}>Tarea 2 — Elige TOP 1 / TOP 2 / TOP 3 (sin repetir)</Text>
                   <Text style={styles.taskHint}>
-                    Al presionar <Text style={{ fontWeight: "900" }}>“Aplicar TOP 3”</Text>, se autollenarán abajo los bloques
-                    para capturar causas, medidas y acciones.
+                    Al presionar <Text style={{ fontWeight: "900" }}>“Aplicar TOP 3”</Text>, se autollenarán abajo los
+                    bloques para capturar causas, medidas y acciones.
                   </Text>
 
                   <View style={styles.card}>
@@ -1491,10 +1397,7 @@ export default function FormularioRiesgosScreen() {
                       valueField="value"
                       placeholder="Elige riesgo TOP 1"
                       value={topSeleccionIds[0]}
-                      onChange={(item) =>
-                        !lockedAfterPdf &&
-                        setTopSeleccionIds([item.value, topSeleccionIds[1], topSeleccionIds[2]])
-                      }
+                      onChange={(item) => !lockedAfterPdf && setTopSeleccionIds([item.value, topSeleccionIds[1], topSeleccionIds[2]])}
                       disable={lockedAfterPdf}
                     />
 
@@ -1506,10 +1409,7 @@ export default function FormularioRiesgosScreen() {
                       valueField="value"
                       placeholder="Elige riesgo TOP 2"
                       value={topSeleccionIds[1]}
-                      onChange={(item) =>
-                        !lockedAfterPdf &&
-                        setTopSeleccionIds([topSeleccionIds[0], item.value, topSeleccionIds[2]])
-                      }
+                      onChange={(item) => !lockedAfterPdf && setTopSeleccionIds([topSeleccionIds[0], item.value, topSeleccionIds[2]])}
                       disable={lockedAfterPdf}
                     />
 
@@ -1521,28 +1421,19 @@ export default function FormularioRiesgosScreen() {
                       valueField="value"
                       placeholder="Elige riesgo TOP 3"
                       value={topSeleccionIds[2]}
-                      onChange={(item) =>
-                        !lockedAfterPdf &&
-                        setTopSeleccionIds([topSeleccionIds[0], topSeleccionIds[1], item.value])
-                      }
+                      onChange={(item) => !lockedAfterPdf && setTopSeleccionIds([topSeleccionIds[0], topSeleccionIds[1], item.value])}
                       disable={lockedAfterPdf}
                     />
 
                     <View style={styles.topActionsRow}>
-                      <TouchableOpacity
-                        style={[styles.smallBtn, { backgroundColor: FIORI.accent }]}
-                        onPress={aplicarTop}
-                        disabled={lockedAfterPdf}
-                      >
+                      <TouchableOpacity style={[styles.smallBtn, { backgroundColor: FIORI.accent }]} onPress={aplicarTop} disabled={lockedAfterPdf}>
                         <Text style={[styles.smallBtnText, { color: "#fff" }]}>Aplicar TOP 3</Text>
                       </TouchableOpacity>
                     </View>
                   </View>
                 </View>
               ) : (
-                <Text style={{ color: FIORI.textMuted, fontSize: 12 }}>
-                  Marca al menos 3 riesgos para habilitar la selección TOP 3.
-                </Text>
+                <Text style={{ color: FIORI.textMuted, fontSize: 12 }}>Marca al menos 3 riesgos para habilitar la selección TOP 3.</Text>
               )}
 
               {/* TAREA 3 + 4 */}
@@ -1550,13 +1441,13 @@ export default function FormularioRiesgosScreen() {
                 <>
                   <View style={styles.taskCard}>
                     <Text style={styles.taskTitle}>Tarea 3 — Causas y medidas de control (para cada TOP)</Text>
-                    <Text style={styles.taskHint}>
-                      Aquí se autollenaron los riesgos TOP. Ahora captura la causa y 3 medidas por cada uno.
-                    </Text>
+                    <Text style={styles.taskHint}>Aquí se autollenaron los riesgos TOP. Ahora captura la causa y 3 medidas por cada uno.</Text>
 
                     {riesgosTopText.map((r, i) => (
                       <View key={i} style={styles.card}>
-                        <Text style={styles.cardTitle}>TOP {i + 1} — {r || "Sin seleccionar"}</Text>
+                        <Text style={styles.cardTitle}>
+                          TOP {i + 1} — {r || "Sin seleccionar"}
+                        </Text>
 
                         <LabeledInput
                           label="¿Por qué puede pasar?"
@@ -1588,9 +1479,7 @@ export default function FormularioRiesgosScreen() {
                               setMedidasTop(m);
                             }}
                             editable={!lockedAfterPdf}
-                            onFocus={() =>
-                              setActiveField({ key: "medida", i, j: idxM, label: `TOP ${i + 1} — Medida ${idxM + 1}` })
-                            }
+                            onFocus={() => setActiveField({ key: "medida", i, j: idxM, label: `TOP ${i + 1} — Medida ${idxM + 1}` })}
                             onBlur={() => setActiveField(null)}
                             inputAccessoryViewID={Platform.OS === "ios" ? ACCESSORY_ID : undefined}
                             placeholderTextColor="#9CA3AF"
@@ -1602,9 +1491,7 @@ export default function FormularioRiesgosScreen() {
 
                   <View style={styles.taskCard}>
                     <Text style={styles.taskTitle}>Tarea 4 — Acciones a realizar (1 por TOP) *</Text>
-                    <Text style={styles.taskHint}>
-                      Escribe una acción concreta para cada TOP. Estas acciones se reflejan en el PDF.
-                    </Text>
+                    <Text style={styles.taskHint}>Escribe una acción concreta para cada TOP. Estas acciones se reflejan en el PDF.</Text>
 
                     {acciones.map((a, i) => (
                       <LabeledInput
@@ -1628,23 +1515,15 @@ export default function FormularioRiesgosScreen() {
 
                   {/* ✅ NUEVO: Cambio de condiciones (nuevo riesgo) */}
                   <View style={styles.taskCard}>
-                    <Text style={styles.taskTitle}>
-                      Cambio de condiciones — Nuevo riesgo y medida de control
-                    </Text>
-                    <Text style={styles.taskHint}>
-                      Si durante el trabajo detectas un riesgo no contemplado, descríbelo y define la medida de control.
-                    </Text>
+                    <Text style={styles.taskTitle}>Cambio de condiciones — Nuevo riesgo y medida de control</Text>
+                    <Text style={styles.taskHint}>Si durante el trabajo detectas un riesgo no contemplado, descríbelo y define la medida de control.</Text>
 
                     <TouchableOpacity
                       style={styles.checkboxRow}
                       onPress={() => !lockedAfterPdf && setDetectaNuevoRiesgo((v) => !v)}
                       disabled={lockedAfterPdf}
                     >
-                      <Ionicons
-                        name={detectaNuevoRiesgo ? "checkbox" : "square-outline"}
-                        size={20}
-                        color={FIORI.accent}
-                      />
+                      <Ionicons name={detectaNuevoRiesgo ? "checkbox" : "square-outline"} size={20} color={FIORI.accent} />
                       <Text style={styles.checkboxLabel}>Sí, detecté un nuevo riesgo</Text>
                     </TouchableOpacity>
 
@@ -1660,13 +1539,7 @@ export default function FormularioRiesgosScreen() {
                               value={row.riesgo}
                               onChangeText={(v) => setNuevoRiesgoCampo(idx, "riesgo", v)}
                               editable={!lockedAfterPdf}
-                              onFocus={() =>
-                                setActiveField({
-                                  key: "nuevo_riesgo",
-                                  i: idx,
-                                  label: `Nuevo riesgo — renglón ${idx + 1}`,
-                                })
-                              }
+                              onFocus={() => setActiveField({ key: "nuevo_riesgo", i: idx, label: `Nuevo riesgo — renglón ${idx + 1}` })}
                               onBlur={() => setActiveField(null)}
                               inputAccessoryViewID={Platform.OS === "ios" ? ACCESSORY_ID : undefined}
                               placeholderTextColor="#9CA3AF"
@@ -1678,13 +1551,7 @@ export default function FormularioRiesgosScreen() {
                               value={row.medida}
                               onChangeText={(v) => setNuevoRiesgoCampo(idx, "medida", v)}
                               editable={!lockedAfterPdf}
-                              onFocus={() =>
-                                setActiveField({
-                                  key: "nuevo_medida",
-                                  i: idx,
-                                  label: `Medida de control — renglón ${idx + 1}`,
-                                })
-                              }
+                              onFocus={() => setActiveField({ key: "nuevo_medida", i: idx, label: `Medida de control — renglón ${idx + 1}` })}
                               onBlur={() => setActiveField(null)}
                               inputAccessoryViewID={Platform.OS === "ios" ? ACCESSORY_ID : undefined}
                               placeholderTextColor="#9CA3AF"
@@ -1703,8 +1570,8 @@ export default function FormularioRiesgosScreen() {
 
                   {!paso3Ok && (
                     <Text style={{ color: FIORI.textMuted, fontSize: 12 }}>
-                      Para continuar: selecciona ≥3 riesgos, aplica TOP 3, escribe las 3 acciones,
-                      y si marcaste “nuevo riesgo”, llena al menos un renglón.
+                      Para continuar: selecciona ≥3 riesgos, aplica TOP 3, escribe las 3 acciones, y si marcaste “nuevo
+                      riesgo”, llena al menos un renglón.
                     </Text>
                   )}
                 </>
@@ -1766,11 +1633,7 @@ export default function FormularioRiesgosScreen() {
       {/* Controles de paso */}
       <View style={styles.footerNav}>
         {paso > 1 && (
-          <TouchableOpacity
-            onPress={goPrev}
-            style={[styles.navBtn, styles.navBtnSecondary]}
-            disabled={lockedAfterPdf}
-          >
+          <TouchableOpacity onPress={goPrev} style={[styles.navBtn, styles.navBtnSecondary]} disabled={lockedAfterPdf}>
             <Text style={[styles.navBtnTextSecondary]}>Atrás</Text>
           </TouchableOpacity>
         )}
@@ -1788,11 +1651,7 @@ export default function FormularioRiesgosScreen() {
         {paso === 4 && (
           <TouchableOpacity
             onPress={onGuardarYGenerarPdf}
-            style={[
-              styles.navBtn,
-              styles.navBtnPrimaryStrong,
-              (saving || !canSubmit || lockedAfterPdf) && { opacity: 0.6 },
-            ]}
+            style={[styles.navBtn, styles.navBtnPrimaryStrong, (saving || !canSubmit || lockedAfterPdf) && { opacity: 0.6 }]}
             disabled={saving || !canSubmit || lockedAfterPdf}
           >
             {saving ? <ActivityIndicator color="#fff" /> : <Text style={styles.navBtnTextPrimary}>Guardar y enviar a SAP</Text>}
@@ -1801,11 +1660,7 @@ export default function FormularioRiesgosScreen() {
       </View>
 
       {/* Modal de firma */}
-      <Modal
-        visible={modalFirma.open}
-        animationType="slide"
-        onRequestClose={() => setModalFirma({ open: false, tipo: null })}
-      >
+      <Modal visible={modalFirma.open} animationType="slide" onRequestClose={() => setModalFirma({ open: false, tipo: null })}>
         <View style={{ flex: 1, backgroundColor: "#fff" }}>
           <View style={styles.modalHeader}>
             <Text style={styles.modalHeaderTitle}>Firma del técnico</Text>
@@ -1832,20 +1687,13 @@ export default function FormularioRiesgosScreen() {
           </View>
 
           <View style={styles.modalFooter}>
-            <Text style={{ color: FIORI.textMuted, fontSize: 12 }}>
-              Guarda para insertar la firma en el documento y en el PDF.
-            </Text>
+            <Text style={{ color: FIORI.textMuted, fontSize: 12 }}>Guarda para insertar la firma en el documento y en el PDF.</Text>
           </View>
         </View>
       </Modal>
 
       {/* Modal PDF */}
-      <Modal
-        visible={showPdfModal}
-        animationType="fade"
-        transparent
-        onRequestClose={closePdfModal}
-      >
+      <Modal visible={showPdfModal} animationType="fade" transparent onRequestClose={closePdfModal}>
         <View style={styles.pdfModalBackdrop}>
           <View style={styles.pdfModalCard}>
             <View style={styles.pdfModalHeader}>
@@ -1856,49 +1704,26 @@ export default function FormularioRiesgosScreen() {
             </View>
 
             <View style={{ padding: 14 }}>
-              {!!pdfLocalUri && (
-                <Text style={{ fontSize: 12, color: FIORI.textMuted }}>
-                  Archivo: {pdfLocalUri.split("/").pop()}
-                </Text>
-              )}
+              {!!pdfLocalUri && <Text style={{ fontSize: 12, color: FIORI.textMuted }}>Archivo: {pdfLocalUri.split("/").pop()}</Text>}
 
               <View style={{ marginTop: 14, gap: 10 }}>
-                <TouchableOpacity
-                  style={[styles.bigActionBtn, { backgroundColor: FIORI.accent }]}
-                  onPress={abrirPdfEnVisor}
-                  disabled={downloadingPdf}
-                >
+                <TouchableOpacity style={[styles.bigActionBtn, { backgroundColor: FIORI.accent }]} onPress={abrirPdfEnVisor} disabled={downloadingPdf}>
                   <Ionicons name="eye-outline" size={18} color="#fff" />
-                  <Text style={[styles.bigActionText, { color: "#fff" }]}>
-                    {downloadingPdf ? "Preparando…" : "Abrir en visor"}
-                  </Text>
+                  <Text style={[styles.bigActionText, { color: "#fff" }]}>{downloadingPdf ? "Preparando…" : "Abrir en visor"}</Text>
                 </TouchableOpacity>
 
-                <TouchableOpacity
-                  style={[styles.bigActionBtn, { backgroundColor: "#111827" }]}
-                  onPress={compartirPdf}
-                  disabled={downloadingPdf}
-                >
+                <TouchableOpacity style={[styles.bigActionBtn, { backgroundColor: "#111827" }]} onPress={compartirPdf} disabled={downloadingPdf}>
                   <Ionicons name="share-social-outline" size={18} color="#fff" />
-                  <Text style={[styles.bigActionText, { color: "#fff" }]}>
-                    {downloadingPdf ? "Preparando…" : "Compartir"}
-                  </Text>
+                  <Text style={[styles.bigActionText, { color: "#fff" }]}>{downloadingPdf ? "Preparando…" : "Compartir"}</Text>
                 </TouchableOpacity>
 
-                <TouchableOpacity
-                  style={[styles.bigActionBtn, { backgroundColor: "#F3F4F6" }]}
-                  onPress={closePdfModal}
-                >
+                <TouchableOpacity style={[styles.bigActionBtn, { backgroundColor: "#F3F4F6" }]} onPress={closePdfModal}>
                   <Ionicons name="close-circle-outline" size={18} color={FIORI.ink} />
                   <Text style={[styles.bigActionText, { color: FIORI.ink }]}>Cerrar</Text>
                 </TouchableOpacity>
               </View>
 
-              {!!pdfLocalUri && (
-                <Text style={{ fontSize: 11, color: FIORI.textMuted, marginTop: 10 }}>
-                  Ruta local: {pdfLocalUri}
-                </Text>
-              )}
+              {!!pdfLocalUri && <Text style={{ fontSize: 11, color: FIORI.textMuted, marginTop: 10 }}>Ruta local: {pdfLocalUri}</Text>}
             </View>
           </View>
         </View>
@@ -1943,9 +1768,7 @@ export default function FormularioRiesgosScreen() {
           <View style={styles.blockerCard}>
             <ActivityIndicator size="large" color={FIORI.accent} />
             <Text style={styles.blockerTitle}>Procesando…</Text>
-            <Text style={styles.blockerText}>
-              Generando PDF y enviando a SAP. No cierres la app.
-            </Text>
+            <Text style={styles.blockerText}>Generando PDF y enviando a SAP. No cierres la app.</Text>
           </View>
         </View>
       </Modal>
@@ -1959,37 +1782,6 @@ function theDateFormatter(setFecha, dateObj) {
   const mm = String(dateObj.getMonth() + 1).padStart(2, "0");
   const dd = String(dateObj.getDate()).padStart(2, "0");
   setFecha(`${yyyy}-${mm}-${dd}`);
-}
-
-/* ✅ Helpers ToAddresses */
-function buildRazonSocial(a) {
-  const parts = [a?.Name1, a?.Name2, a?.Name3, a?.Name4]
-    .map((x) => String(x || "").trim())
-    .filter(Boolean);
-  return parts.join(" ").trim();
-}
-
-function buildDireccion(a) {
-  const street = [a?.Street, a?.HouseNum1]
-    .map((x) => String(x || "").trim())
-    .filter(Boolean)
-    .join(" ");
-  const supl = [a?.StrSuppl1, a?.StrSuppl2, a?.StrSuppl3]
-    .map((x) => String(x || "").trim())
-    .filter(Boolean)
-    .join(" ");
-  const loc = [a?.Location, a?.City2, a?.City1]
-    .map((x) => String(x || "").trim())
-    .filter(Boolean)
-    .join(", ");
-  const reg = [a?.Region, a?.PostCode1]
-    .map((x) => String(x || "").trim())
-    .filter(Boolean)
-    .join(" ");
-  return [street, supl, loc, reg]
-    .map((x) => String(x || "").trim())
-    .filter(Boolean)
-    .join(", ");
 }
 
 /* ==== Componentes pequeños ==== */
@@ -2075,10 +1867,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     backgroundColor: FIORI.cardBg,
   },
-  stepCircleActive: {
-    borderColor: FIORI.accent,
-    backgroundColor: FIORI.accentSoft,
-  },
+  stepCircleActive: { borderColor: FIORI.accent, backgroundColor: FIORI.accentSoft },
   stepCircleDone: { borderColor: FIORI.accent, backgroundColor: FIORI.accent },
   stepCircleText: { fontSize: 12, color: FIORI.textMuted, fontWeight: "600" },
   stepCircleTextActive: { color: FIORI.accent },
@@ -2276,7 +2065,14 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  bigActionBtn: { flexDirection: "row", alignItems: "center", gap: 10, paddingVertical: 12, paddingHorizontal: 12, borderRadius: 12 },
+  bigActionBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+  },
   bigActionText: { fontWeight: "800", fontSize: 13 },
 
   // ✅ Barra arriba del teclado (Android)

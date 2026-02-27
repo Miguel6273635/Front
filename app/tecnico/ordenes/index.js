@@ -868,7 +868,7 @@ export default function ListaOrdenesTecnico() {
       await postCheckinEvidence(orderId, checkinPhotoBase64);
       await postChangeStatusTo0100(orderId);
 
-      Alert.alert("Check-in", "Evidencia enviada y estatus actualizado a 0100 ✅");
+      Alert.alert("Check-in", "Evidencia enviada y estatus actualizado a PENDIENTE");
 
       setShowCheckinModal(false);
       setCheckinPhotoBase64(null);
