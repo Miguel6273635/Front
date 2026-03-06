@@ -15,26 +15,83 @@ import {
 } from "react-native";
 import api from "../../../../../src/services/api";
 
-const AGR1_FIXED = "BASICO";
+/**
+ * ✅ Cobertura -> pares (Agrupador1, Agrupador2)
+ * Nota: Agrupador2 debe coincidir EXACTO con SAP (como tú lo pasaste).
+ */
+const COVERAGE_PAIRS = {
+  BASICA: [
+    { Agr1: "BASICO", Agr2: "GRASAS" },
+    { Agr1: "BASICO", Agr2: "DIELECTRIC" },
+    { Agr1: "BASICO", Agr2: "ACEITE" },
+    { Agr1: "BASICO", Agr2: "TRAPO" },
+    { Agr1: "BASICO", Agr2: "PAPEL_LIJA" },
+    { Agr1: "BASICO", Agr2: "TORNILLOS" },
+    { Agr1: "BASICO", Agr2: "PERNOS" },
+    { Agr1: "BASICO", Agr2: "ARAN_CUER" },
+  ],
+  MEDIA: [
+    // BASICO + MEDIO
+    { Agr1: "BASICO", Agr2: "GRASAS" },
+    { Agr1: "BASICO", Agr2: "DIELECTRIC" },
+    { Agr1: "BASICO", Agr2: "ACEITE" },
+    { Agr1: "BASICO", Agr2: "TRAPO" },
+    { Agr1: "BASICO", Agr2: "PAPEL_LIJA" },
+    { Agr1: "BASICO", Agr2: "TORNILLOS" },
+    { Agr1: "BASICO", Agr2: "PERNOS" },
+    { Agr1: "BASICO", Agr2: "ARAN_CUER" },
 
-const AGR2_OPTIONS = [
-  "GRASAS",
-  "DIELECTRICO",
-  "ACEITE",
-  "TRAPO",
-  "ESTOPA",
-  "BANDAMOTOR",
-  "CADENTRACC",
-  "FUSIBLE",
-  "DEMARESCAL",
-  "PEINES",
-  "TORNILLESP",
-  "BOBINAFREN",
-  "CONTACTOR",
-  "MICROSWTCH",
-  "BUJESESCAL",
-  "BOTONPAROS",
-];
+    { Agr1: "MEDIO", Agr2: "FUSIBLE_TC" },
+    { Agr1: "MEDIO", Agr2: "MECHAS" },
+    { Agr1: "MEDIO", Agr2: "DESLIZADOR" },
+    { Agr1: "MEDIO", Agr2: "FOCOS" },
+    { Agr1: "MEDIO", Agr2: "LAMPARA" },
+    { Agr1: "MEDIO", Agr2: "LAMP_EMERG" },
+    { Agr1: "MEDIO", Agr2: "PLAST_CABI" },
+    { Agr1: "MEDIO", Agr2: "PLAST_CONT" },
+    { Agr1: "MEDIO", Agr2: "BATERIA_RE" },
+    { Agr1: "MEDIO", Agr2: "CAM_ACEITE" },
+    { Agr1: "MEDIO", Agr2: "MICROSWICH" },
+    { Agr1: "MEDIO", Agr2: "CABLE_ELEC" },
+  ],
+  SEMI: [
+    // BASICO + MEDIO + SEMIFULL
+    { Agr1: "BASICO", Agr2: "GRASAS" },
+    { Agr1: "BASICO", Agr2: "DIELECTRIC" },
+    { Agr1: "BASICO", Agr2: "ACEITE" },
+    { Agr1: "BASICO", Agr2: "TRAPO" },
+    { Agr1: "BASICO", Agr2: "PAPEL_LIJA" },
+    { Agr1: "BASICO", Agr2: "TORNILLOS" },
+    { Agr1: "BASICO", Agr2: "PERNOS" },
+    { Agr1: "BASICO", Agr2: "ARAN_CUER" },
+
+    { Agr1: "MEDIO", Agr2: "FUSIBLE_TC" },
+    { Agr1: "MEDIO", Agr2: "MECHAS" },
+    { Agr1: "MEDIO", Agr2: "DESLIZADOR" },
+    { Agr1: "MEDIO", Agr2: "FOCOS" },
+    { Agr1: "MEDIO", Agr2: "LAMPARA" },
+    { Agr1: "MEDIO", Agr2: "LAMP_EMERG" },
+    { Agr1: "MEDIO", Agr2: "PLAST_CABI" },
+    { Agr1: "MEDIO", Agr2: "PLAST_CONT" },
+    { Agr1: "MEDIO", Agr2: "BATERIA_RE" },
+    { Agr1: "MEDIO", Agr2: "CAM_ACEITE" },
+    { Agr1: "MEDIO", Agr2: "MICROSWICH" },
+    { Agr1: "MEDIO", Agr2: "CABLE_ELEC" },
+
+    { Agr1: "SEMIFULL", Agr2: "EXEN_COLGA" },
+    { Agr1: "SEMIFULL", Agr2: "VENTI_CABIN" },
+    { Agr1: "SEMIFULL", Agr2: "ACEITERAS" },
+    { Agr1: "SEMIFULL", Agr2: "BALASTRAS" },
+    { Agr1: "SEMIFULL", Agr2: "MICRO_SEGU" },
+    { Agr1: "SEMIFULL", Agr2: "INTERLOCK" },
+    { Agr1: "SEMIFULL", Agr2: "BAND_MOTOR" },
+    { Agr1: "SEMIFULL", Agr2: "GOMA_CABI" },
+    { Agr1: "SEMIFULL", Agr2: "GOMA_TOPE" },
+    { Agr1: "SEMIFULL", Agr2: "CABLE_ACER" },
+    { Agr1: "SEMIFULL", Agr2: "RETEN_ACEI" },
+    { Agr1: "SEMIFULL", Agr2: "TRANF_ENER" },
+  ],
+};
 
 const uniqBy = (arr, keyFn) => {
   const map = new Map();
@@ -45,13 +102,18 @@ const uniqBy = (arr, keyFn) => {
   return Array.from(map.values());
 };
 
+// ID único para un “par”
+const pairId = (p) => `${String(p?.Agr1 || "").trim().toUpperCase()}__${String(p?.Agr2 || "").trim().toUpperCase()}`;
+
 export default function ConsumiblesFinalizacion({
   plant, // centro (opcional)
-  stylesGlobal, // opcional
-  FIORI, // opcional
-  onChange, // (selectedRows) => void
+  coberturaTipo, // ✅ "BASICA" | "MEDIA" | "SEMI"
+  stylesGlobal,
+  FIORI,
+  onChange,
 }) {
-  const [agr2Selected, setAgr2Selected] = useState([]); // multi
+  // ✅ Chips seleccionados = pares Agr1/Agr2
+  const [pairSelected, setPairSelected] = useState([]); // array de ids pairId()
   const [loadingMaterials, setLoadingMaterials] = useState(false);
   const [materials, setMaterials] = useState([]);
   const [q, setQ] = useState("");
@@ -60,108 +122,133 @@ export default function ConsumiblesFinalizacion({
   const [selected, setSelected] = useState([]);
   // { Material, Descripcion, Agrupador1, Agrupador2, Cantidad, Unidad, Centro, Almacen }
 
-  // ✅ Modal para capturar cantidad/unidad centrado
+  // Modal cantidad
   const [qtyModalOpen, setQtyModalOpen] = useState(false);
-  const [editingMat, setEditingMat] = useState(null); // {Material,Agrupador2,...}
+  const [editingMat, setEditingMat] = useState(null);
   const [qtyDraft, setQtyDraft] = useState("1");
   const [unitDraft, setUnitDraft] = useState("PZA");
 
-  // ✅ NUEVO: evita que respuestas viejas "pisen" a las nuevas cuando seleccionas varios chips
   const loadIdRef = useRef(0);
+
+  // ✅ Opciones disponibles según cobertura
+  const coverageKey = String(coberturaTipo || "").trim().toUpperCase();
+  const pairsForCoverage = useMemo(() => {
+    if (coverageKey === "MEDIA") return COVERAGE_PAIRS.MEDIA;
+    if (coverageKey === "SEMI") return COVERAGE_PAIRS.SEMI;
+    if (coverageKey === "BASICA") return COVERAGE_PAIRS.BASICA;
+
+    // Si no detectó cobertura, por default muestro BASICA (puedes cambiar a [] si prefieres)
+    return COVERAGE_PAIRS.BASICA;
+  }, [coverageKey]);
 
   // Propagar seleccionados al padre
   useEffect(() => {
     onChange?.(selected);
   }, [selected, onChange]);
 
-  // ✅ Cargar materiales al cambiar Agr2 (en paralelo + protección de carrera)
+  // ✅ Cuando cambia cobertura, limpiar selección de chips/materiales (para evitar mezclar)
+  useEffect(() => {
+    setPairSelected([]);
+    setMaterials([]);
+    setQ("");
+    // OJO: NO borro "selected" (los consumibles ya elegidos), por si el usuario ya capturó cantidades.
+    // Si quieres que también se borre, descomenta:
+    // setSelected([]);
+  }, [coverageKey]);
+
+  // ✅ Cargar materiales al cambiar chips (pares) - en paralelo + protección de carrera
   useEffect(() => {
     let mounted = true;
     const myLoadId = ++loadIdRef.current;
 
     (async () => {
       setMaterials([]);
-      if (!agr2Selected.length) return;
+      if (!pairSelected.length) return;
 
       setLoadingMaterials(true);
       try {
-        const a2List = agr2Selected.map((a2) =>
-          String(a2).trim().toUpperCase(),
-        );
+        const selectedPairs = pairsForCoverage.filter((p) => pairSelected.includes(pairId(p)));
 
-        const urls = a2List.map(
-          (a2Safe) =>
+        const urls = selectedPairs.map((p) => {
+          const a1 = String(p.Agr1).trim().toUpperCase();
+          const a2 = String(p.Agr2).trim().toUpperCase();
+          return (
             `/api/odata/ZSD_CATALOGOS_SRV/MaterialesCoberturaSet` +
-            `?$filter=Agrupador1 eq '${AGR1_FIXED}' and Agrupador2 eq '${a2Safe}'`,
-        );
+            `?$filter=Agrupador1 eq '${a1}' and Agrupador2 eq '${a2}'`
+          );
+        });
 
         const responses = await Promise.all(urls.map((u) => api.get(u)));
 
-        // Si ya hubo otra carga más nueva, ignora esta
         if (!mounted || myLoadId !== loadIdRef.current) return;
 
         const all = [];
-        for (const res of responses) {
+        for (let i = 0; i < responses.length; i++) {
+          const res = responses[i];
           const rows = res?.data?.d?.results || res?.data?.results || [];
+
+          // identificamos el par que originó esta respuesta
+          const p = selectedPairs[i];
+          const Agrupador1 = String(p?.Agr1 || "").trim().toUpperCase();
+          const Agrupador2 = String(p?.Agr2 || "").trim().toUpperCase();
+
           for (const r of rows) {
             all.push({
               Id: String(r?.Id || "").trim(),
               Material: String(r?.Material || "").trim(),
-              Agrupador1: AGR1_FIXED,
-              Agrupador2: String(r?.Agrupador2 || "").trim(),
-              Descripcion: String(
-                r?.Descripcion || r?.Description || "",
-              ).trim(),
+              Agrupador1,
+              Agrupador2,
+              Descripcion: String(r?.Descripcion || r?.Description || "").trim(),
             });
           }
         }
 
         const deduped = uniqBy(
           all.filter((x) => x.Material),
-          (x) => `${x.Material}__${x.Descripcion}__${x.Agrupador2}`,
+          (x) => `${x.Material}__${x.Descripcion}__${x.Agrupador1}__${x.Agrupador2}`
         );
 
         if (mounted && myLoadId === loadIdRef.current) setMaterials(deduped);
       } catch (e) {
         if (mounted && myLoadId === loadIdRef.current) setMaterials([]);
       } finally {
-        if (mounted && myLoadId === loadIdRef.current)
-          setLoadingMaterials(false);
+        if (mounted && myLoadId === loadIdRef.current) setLoadingMaterials(false);
       }
     })();
 
     return () => {
       mounted = false;
     };
-  }, [agr2Selected]);
+  }, [pairSelected, pairsForCoverage]);
 
   const filtered = useMemo(() => {
-    const qq = String(q || "")
-      .toUpperCase()
-      .trim();
+    const qq = String(q || "").toUpperCase().trim();
     if (!qq) return materials;
     return materials.filter((m) => {
-      const hay =
-        `${m.Material} ${m.Descripcion} ${m.Agrupador2}`.toUpperCase();
+      const hay = `${m.Material} ${m.Descripcion} ${m.Agrupador1} ${m.Agrupador2}`.toUpperCase();
       return hay.includes(qq);
     });
   }, [materials, q]);
 
-  const toggleAgr2 = (val) => {
-    const v = String(val).trim().toUpperCase();
-    setAgr2Selected((prev) =>
-      prev.includes(v) ? prev.filter((x) => x !== v) : [...prev, v],
-    );
+  const togglePair = (p) => {
+    const id = pairId(p);
+    setPairSelected((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
   };
 
   const isSelectedMat = (mat) =>
     selected.some(
-      (s) => s.Material === mat.Material && s.Agrupador2 === mat.Agrupador2,
+      (s) =>
+        s.Material === mat.Material &&
+        String(s.Agrupador1).toUpperCase() === String(mat.Agrupador1).toUpperCase() &&
+        String(s.Agrupador2).toUpperCase() === String(mat.Agrupador2).toUpperCase()
     );
 
   const openQtyModalFor = (mat) => {
     const sel = selected.find(
-      (s) => s.Material === mat.Material && s.Agrupador2 === mat.Agrupador2,
+      (s) =>
+        s.Material === mat.Material &&
+        String(s.Agrupador1).toUpperCase() === String(mat.Agrupador1).toUpperCase() &&
+        String(s.Agrupador2).toUpperCase() === String(mat.Agrupador2).toUpperCase()
     );
     setEditingMat(mat);
     setQtyDraft(sel?.Cantidad ?? "1");
@@ -177,49 +264,49 @@ export default function ConsumiblesFinalizacion({
   const confirmQtyModal = () => {
     if (!editingMat) return closeQtyModal();
 
-    const qClean = String(qtyDraft || "")
-      .replace(",", ".")
-      .replace(/[^0-9.]/g, "");
-
-    const uClean =
-      String(unitDraft || "")
-        .toUpperCase()
-        .trim() || "PZA";
+    const qClean = String(qtyDraft || "").replace(",", ".").replace(/[^0-9.]/g, "");
+    const uClean = String(unitDraft || "").toUpperCase().trim() || "PZA";
 
     setSelected((prev) =>
       prev.map((s) =>
         s.Material === editingMat.Material &&
-        s.Agrupador2 === editingMat.Agrupador2
+        String(s.Agrupador1).toUpperCase() === String(editingMat.Agrupador1).toUpperCase() &&
+        String(s.Agrupador2).toUpperCase() === String(editingMat.Agrupador2).toUpperCase()
           ? { ...s, Cantidad: qClean || "1", Unidad: uClean }
-          : s,
-      ),
+          : s
+      )
     );
 
     closeQtyModal();
   };
 
-  // ✅ al seleccionar material, abre modal centrado para cantidad/unidad
+  // ✅ al seleccionar material, abre modal para cantidad/unidad
   const toggleMaterial = (mat) => {
     setSelected((prev) => {
       const exists = prev.find(
-        (s) => s.Material === mat.Material && s.Agrupador2 === mat.Agrupador2,
+        (s) =>
+          s.Material === mat.Material &&
+          String(s.Agrupador1).toUpperCase() === String(mat.Agrupador1).toUpperCase() &&
+          String(s.Agrupador2).toUpperCase() === String(mat.Agrupador2).toUpperCase()
       );
 
-      // Si ya estaba, lo quita
       if (exists) {
         return prev.filter(
           (s) =>
-            !(s.Material === mat.Material && s.Agrupador2 === mat.Agrupador2),
+            !(
+              s.Material === mat.Material &&
+              String(s.Agrupador1).toUpperCase() === String(mat.Agrupador1).toUpperCase() &&
+              String(s.Agrupador2).toUpperCase() === String(mat.Agrupador2).toUpperCase()
+            )
         );
       }
 
-      // Si no estaba, lo agrega con default
-      const next = [
+      return [
         ...prev,
         {
           Material: mat.Material,
           Descripcion: mat.Descripcion,
-          Agrupador1: AGR1_FIXED,
+          Agrupador1: mat.Agrupador1,
           Agrupador2: mat.Agrupador2,
           Cantidad: "1",
           Unidad: "PZA",
@@ -227,11 +314,8 @@ export default function ConsumiblesFinalizacion({
           Almacen: "BSAT",
         },
       ];
-
-      return next;
     });
 
-    // Abrir modal después (ya con seleccionado)
     setTimeout(() => openQtyModalFor(mat), 0);
   };
 
@@ -243,35 +327,37 @@ export default function ConsumiblesFinalizacion({
       <Text style={[s.title, { color: P.text || "#0B1F3B" }]}>Consumibles</Text>
 
       <View style={s.row}>
-        <Text style={s.label}>Agrupador1:</Text>
-        <Text style={s.value}>{AGR1_FIXED}</Text>
+        <Text style={s.label}>Cobertura:</Text>
+        <Text style={s.value}>{coverageKey || "—"}</Text>
         <Text style={[s.label, { marginLeft: 12 }]}>Centro:</Text>
         <Text style={s.value}>{plant || "—"}</Text>
       </View>
 
-      <Text style={[s.label, { marginTop: 10 }]}>Tipo (Agrupador2)</Text>
+      <Text style={[s.label, { marginTop: 10 }]}>Tipos disponibles</Text>
 
       <View style={s.chipsWrap}>
-        {AGR2_OPTIONS.map((opt) => {
-          const v = String(opt).trim().toUpperCase();
-          const active = agr2Selected.includes(v);
+        {pairsForCoverage.map((p) => {
+          const id = pairId(p);
+          const active = pairSelected.includes(id);
+
+          // ✅ etiqueta clara para evitar colisiones y que se entienda:
+          const label = `${p.Agr1} · ${p.Agr2}`;
+
           return (
             <TouchableOpacity
-              key={v}
-              onPress={() => toggleAgr2(v)}
+              key={id}
+              onPress={() => togglePair(p)}
               style={[s.chip, active && s.chipActive]}
               activeOpacity={0.9}
             >
-              <Text style={[s.chipText, active && s.chipTextActive]}>{v}</Text>
+              <Text style={[s.chipText, active && s.chipTextActive]}>{label}</Text>
             </TouchableOpacity>
           );
         })}
       </View>
 
-      {!agr2Selected.length ? (
-        <Text style={s.hint}>
-          Selecciona uno o varios tipos para cargar materiales.
-        </Text>
+      {!pairSelected.length ? (
+        <Text style={s.hint}>Selecciona uno o varios tipos para cargar materiales.</Text>
       ) : loadingMaterials ? (
         <View style={{ paddingVertical: 10 }}>
           <ActivityIndicator />
@@ -292,22 +378,21 @@ export default function ConsumiblesFinalizacion({
 
           <FlatList
             data={filtered}
-            keyExtractor={(item, idx) =>
-              `${item.Material}-${item.Agrupador2}-${idx}`
-            }
+            keyExtractor={(item, idx) => `${item.Material}-${item.Agrupador1}-${item.Agrupador2}-${idx}`}
             scrollEnabled={false}
-            // ✅ Empuja el final para que NO lo tapen los botones fijos de abajo
             ListFooterComponent={<View style={{ height: 180 }} />}
             renderItem={({ item }) => {
               const active = isSelectedMat(item);
+              const selectedRow = selected.find(
+                (x) =>
+                  x.Material === item.Material &&
+                  String(x.Agrupador1).toUpperCase() === String(item.Agrupador1).toUpperCase() &&
+                  String(x.Agrupador2).toUpperCase() === String(item.Agrupador2).toUpperCase()
+              );
 
               return (
                 <View style={s.matRow}>
-                  <TouchableOpacity
-                    onPress={() => toggleMaterial(item)}
-                    style={s.matLeft}
-                    activeOpacity={0.9}
-                  >
+                  <TouchableOpacity onPress={() => toggleMaterial(item)} style={s.matLeft} activeOpacity={0.9}>
                     <View style={[s.checkbox, active && s.checkboxOn]}>
                       {active ? <Text style={s.checkboxTxt}>✓</Text> : null}
                     </View>
@@ -315,22 +400,13 @@ export default function ConsumiblesFinalizacion({
                     <View style={{ flex: 1 }}>
                       <Text style={s.matCode}>{item.Material}</Text>
                       <Text style={s.matDesc}>{item.Descripcion}</Text>
-                      <Text style={s.matMeta}>Tipo: {item.Agrupador2}</Text>
+                      <Text style={s.matMeta}>
+                        Cobertura: {item.Agrupador1} · Tipo: {item.Agrupador2}
+                      </Text>
 
                       {active ? (
                         <Text style={s.matMeta}>
-                          Cantidad/Unidad:{" "}
-                          {selected.find(
-                            (x) =>
-                              x.Material === item.Material &&
-                              x.Agrupador2 === item.Agrupador2,
-                          )?.Cantidad || "1"}{" "}
-                          {selected.find(
-                            (x) =>
-                              x.Material === item.Material &&
-                              x.Agrupador2 === item.Agrupador2,
-                          )?.Unidad || "PZA"}
-                          {"  "}— toca para editar
+                          Cantidad/Unidad: {selectedRow?.Cantidad || "1"} {selectedRow?.Unidad || "PZA"} — toca para editar
                         </Text>
                       ) : null}
                     </View>
@@ -343,28 +419,14 @@ export default function ConsumiblesFinalizacion({
       )}
 
       {/* ✅ MODAL CENTRADO */}
-      <Modal
-        visible={qtyModalOpen}
-        transparent
-        animationType="fade"
-        onRequestClose={closeQtyModal}
-      >
+      <Modal visible={qtyModalOpen} transparent animationType="fade" onRequestClose={closeQtyModal}>
         <Pressable style={s.modalBackdrop} onPress={closeQtyModal}>
-          <KeyboardAvoidingView
-            behavior={Platform.OS === "ios" ? "padding" : undefined}
-            style={s.modalCenter}
-          >
-            <Pressable
-              style={[s.modalCard, { borderColor: P.border || "#DDE6F2" }]}
-              onPress={() => {}}
-            >
-              <Text style={[s.modalTitle, { color: P.text || "#0B1F3B" }]}>
-                Cantidad del consumible
-              </Text>
+          <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={s.modalCenter}>
+            <Pressable style={[s.modalCard, { borderColor: P.border || "#DDE6F2" }]} onPress={() => {}}>
+              <Text style={[s.modalTitle, { color: P.text || "#0B1F3B" }]}>Cantidad del consumible</Text>
 
               <Text style={s.modalSub}>
-                {editingMat?.Material || ""}{" "}
-                {editingMat?.Descripcion ? `— ${editingMat.Descripcion}` : ""}
+                {editingMat?.Material || ""} {editingMat?.Descripcion ? `— ${editingMat.Descripcion}` : ""}
               </Text>
 
               <View style={s.modalRow}>
@@ -383,29 +445,16 @@ export default function ConsumiblesFinalizacion({
 
                 <View style={{ flex: 1 }}>
                   <Text style={s.modalLabel}>Unidad</Text>
-                  <TextInput
-                    value={unitDraft}
-                    onChangeText={setUnitDraft}
-                    placeholder="PZA"
-                    style={s.modalInput}
-                  />
+                  <TextInput value={unitDraft} onChangeText={setUnitDraft} placeholder="PZA" style={s.modalInput} />
                 </View>
               </View>
 
               <View style={s.modalActions}>
-                <TouchableOpacity
-                  onPress={closeQtyModal}
-                  style={s.btnGhost}
-                  activeOpacity={0.9}
-                >
+                <TouchableOpacity onPress={closeQtyModal} style={s.btnGhost} activeOpacity={0.9}>
                   <Text style={s.btnGhostTxt}>Cancelar</Text>
                 </TouchableOpacity>
 
-                <TouchableOpacity
-                  onPress={confirmQtyModal}
-                  style={s.btnPrimary}
-                  activeOpacity={0.9}
-                >
+                <TouchableOpacity onPress={confirmQtyModal} style={s.btnPrimary} activeOpacity={0.9}>
                   <Text style={s.btnPrimaryTxt}>Guardar</Text>
                 </TouchableOpacity>
               </View>
@@ -426,13 +475,7 @@ const localStyles = StyleSheet.create({
     marginTop: 12,
   },
   title: { fontSize: 14, fontWeight: "900" },
-  row: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginTop: 8,
-    gap: 6,
-    flexWrap: "wrap",
-  },
+  row: { flexDirection: "row", alignItems: "center", marginTop: 8, gap: 6, flexWrap: "wrap" },
   label: { color: "#63718B", fontWeight: "800", fontSize: 12 },
   value: { color: "#0B1F3B", fontWeight: "900", fontSize: 12 },
 
@@ -488,61 +531,18 @@ const localStyles = StyleSheet.create({
   matDesc: { marginTop: 2, color: "#0B1F3B", fontWeight: "700" },
   matMeta: { marginTop: 2, color: "#63718B", fontSize: 11, fontWeight: "700" },
 
-  // ✅ Modal styles
   modalBackdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.35)" },
-  modalCenter: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    padding: 16,
-  },
-  modalCard: {
-    width: "100%",
-    maxWidth: 420,
-    backgroundColor: "#fff",
-    borderRadius: 14,
-    borderWidth: 1,
-    padding: 14,
-  },
+  modalCenter: { flex: 1, alignItems: "center", justifyContent: "center", padding: 16 },
+  modalCard: { width: "100%", maxWidth: 420, backgroundColor: "#fff", borderRadius: 14, borderWidth: 1, padding: 14 },
   modalTitle: { fontSize: 14, fontWeight: "900" },
   modalSub: { marginTop: 6, color: "#63718B", fontWeight: "800", fontSize: 12 },
   modalRow: { flexDirection: "row", marginTop: 12 },
-  modalLabel: {
-    color: "#63718B",
-    fontWeight: "800",
-    fontSize: 12,
-    marginBottom: 6,
-  },
-  modalInput: {
-    borderWidth: 1,
-    borderColor: "#DDE6F2",
-    borderRadius: 10,
-    paddingHorizontal: 10,
-    paddingVertical: 10,
-    fontWeight: "800",
-    backgroundColor: "#fff",
-  },
+  modalLabel: { color: "#63718B", fontWeight: "800", fontSize: 12, marginBottom: 6 },
+  modalInput: { borderWidth: 1, borderColor: "#DDE6F2", borderRadius: 10, paddingHorizontal: 10, paddingVertical: 10, fontWeight: "800", backgroundColor: "#fff" },
 
-  modalActions: {
-    flexDirection: "row",
-    justifyContent: "flex-end",
-    gap: 10,
-    marginTop: 14,
-  },
-  btnGhost: {
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: "#DDE6F2",
-    backgroundColor: "#F5F7FA",
-  },
+  modalActions: { flexDirection: "row", justifyContent: "flex-end", gap: 10, marginTop: 14 },
+  btnGhost: { paddingHorizontal: 12, paddingVertical: 10, borderRadius: 10, borderWidth: 1, borderColor: "#DDE6F2", backgroundColor: "#F5F7FA" },
   btnGhostTxt: { fontWeight: "900", color: "#0B1F3B" },
-  btnPrimary: {
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderRadius: 10,
-    backgroundColor: "#0A6ED1",
-  },
+  btnPrimary: { paddingHorizontal: 12, paddingVertical: 10, borderRadius: 10, backgroundColor: "#0A6ED1" },
   btnPrimaryTxt: { fontWeight: "900", color: "#fff" },
 });

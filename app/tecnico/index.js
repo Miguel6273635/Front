@@ -49,12 +49,12 @@ const TILES = [
     icon: "navigate-outline",
     onPress: () => router.push("/tecnico/rutas"),
   },
-  /*{
+  {
     key: "documentos",
     title: "Documentos de mantenimiento",
     icon: "documents-outline",
     onPress: () => router.push("/tecnico/documentos"),
-  },*/
+  },
 ];
 
 // ====== Tile estilo Fiori ======

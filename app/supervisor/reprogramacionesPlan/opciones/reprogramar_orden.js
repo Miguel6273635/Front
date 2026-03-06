@@ -575,9 +575,6 @@ export default function ReprogramarOrden() {
           Mes visible: <Text style={styles.bold}>{monthLabel}</Text>
         </Text>
 
-        <Text style={styles.hint}>
-          *Se ocultan si Userstatus es únicamente códigos 0001..0011.
-        </Text>
       </View>
 
       <View style={[styles.card, { marginTop: 12 }]}>

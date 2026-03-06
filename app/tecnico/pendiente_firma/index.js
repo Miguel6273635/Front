@@ -87,9 +87,7 @@ function extractCodes(raw) {
 function isPending0400(item) {
   const codes = extractCodes(item?.userstatus ?? item?.Userstatus ?? "");
   const apiCode = normalizeCode(item?.estatus_code ?? item?.estatusCode ?? "");
-  const all = Array.from(
-    new Set([...(codes || []), ...(apiCode ? [apiCode] : [])])
-  );
+  const all = Array.from(new Set([...(codes || []), ...(apiCode ? [apiCode] : [])]));
   return all.includes("0400");
 }
 
@@ -137,11 +135,7 @@ function CheckBox({ checked, disabled, onPress }) {
   return (
     <Pressable
       onPress={disabled ? null : onPress}
-      style={[
-        styles.cbBox,
-        checked && styles.cbBoxChecked,
-        disabled && { opacity: 0.5 },
-      ]}
+      style={[styles.cbBox, checked && styles.cbBoxChecked, disabled && { opacity: 0.5 }]}
       hitSlop={10}
     >
       {checked ? <Ionicons name="checkmark" size={16} color="#fff" /> : null}
@@ -188,6 +182,31 @@ function detectTipoMantenimiento(orden) {
 }
 
 /* =========================
+   ✅ Normalizar operaciones (para que el HTML sea consistente)
+========================= */
+function normalizeOpsForPdf(ops = []) {
+  if (!Array.isArray(ops)) return [];
+  return ops.map((op) => {
+    const Activity = op.Activity || op.activity || op.Vornr || "";
+    const SubActivity = op.SubActivity || op.subactivity || op.Uvorn || "";
+    const Description = op.Description || op.description || op.Ltxa1 || "";
+    const StandardTextKey = op.StandardTextKey || op.standardTextKey || "";
+
+    return {
+      ...op,
+      activity: String(Activity || ""),
+      subactivity: String(SubActivity || ""),
+      description: String(Description || ""),
+      Activity: String(Activity || ""),
+      SubActivity: String(SubActivity || ""),
+      Description: String(Description || ""),
+      StandardTextKey: String(StandardTextKey || ""),
+      standardTextKey: String(StandardTextKey || ""),
+    };
+  });
+}
+
+/* =========================
    ✅ Fetch detalle (cache → API)
    - Necesitamos orden + operaciones para generar PDF
 ========================= */
@@ -196,26 +215,32 @@ async function fetchOrdenFullForPdf({ apiClient, token, orderId }) {
   try {
     const cached = await loadOrdenTecnicoDetail(orderId);
     if (cached?.data?.Orderid) {
-      return cached.data;
+      // por si venían ops ya mezcladas en cache:
+      const ops = normalizeOpsForPdf(cached?.data?.operaciones || []);
+      return { ...cached.data, operaciones: ops };
     }
   } catch {}
 
   const headers = token ? { Authorization: `Bearer ${token}` } : undefined;
 
-  const resOrden = await apiClient.get(`/api/ordenes/sap/${orderId}`, {
-    headers,
-  });
+  const resOrden = await apiClient.get(`/api/ordenes/sap/${orderId}`, { headers });
   const baseOrden = resOrden?.data || {};
 
   let ops = [];
   try {
-    const resOps = await apiClient.get(`/api/operaciones/sap/${orderId}`, {
-      headers,
-    });
-    ops = Array.isArray(resOps.data) ? resOps.data : [];
+    const resOps = await apiClient.get(`/api/operaciones/sap/${orderId}`, { headers });
+    const rawOps =
+      resOps?.data?.d?.results ||
+      resOps?.data?.results ||
+      resOps?.data?.operaciones ||
+      resOps?.data ||
+      [];
+    ops = Array.isArray(rawOps) ? rawOps : [];
   } catch {
     ops = Array.isArray(baseOrden?.operaciones) ? baseOrden.operaciones : [];
   }
+
+  ops = normalizeOpsForPdf(ops);
 
   return { ...baseOrden, operaciones: ops };
 }
@@ -233,12 +258,9 @@ function logSapPayload(label, payload, { stripBase64 = false } = {}) {
       return;
     }
 
-    // clonar y sustituir base64 por un resumen
     const cloned = JSON.parse(JSON.stringify(payload));
     const att = cloned?.Attachments?.[0];
-    if (att?.Base64) {
-      att.Base64 = `<<base64 omitted: ${String(att.Base64).length} chars>>`;
-    }
+    if (att?.Base64) att.Base64 = `<<base64 omitted: ${String(att.Base64).length} chars>>`;
     console.log(label);
     console.log(JSON.stringify(cloned, null, 2));
   } catch (e) {
@@ -276,11 +298,7 @@ export default function PendienteFirmaIndex() {
 
   // ✅ envío
   const [sending, setSending] = useState(false);
-  const [sendProgress, setSendProgress] = useState({
-    done: 0,
-    total: 0,
-    current: "",
-  });
+  const [sendProgress, setSendProgress] = useState({ done: 0, total: 0, current: "" });
   const [sendResults, setSendResults] = useState([]); // { orderId, ok, msg }
 
   // ✅ firma: ref para disparar "Guardar" y "Limpiar" con botones RN
@@ -293,9 +311,7 @@ export default function PendienteFirmaIndex() {
 
   const fetchOrdenes0400 = useCallback(
     async ({ isRefresh = false } = {}) => {
-      const userEmail = safeStr(
-        user?.correo || user?.email || user?.upn || user?.username
-      ).trim();
+      const userEmail = safeStr(user?.correo || user?.email || user?.upn || user?.username).trim();
 
       try {
         if (isRefresh) setRefreshing(true);
@@ -305,10 +321,7 @@ export default function PendienteFirmaIndex() {
         const isOnline = !!(net?.isConnected && net?.isInternetReachable !== false);
 
         if (!isOnline) {
-          Alert.alert(
-            "Sin conexión",
-            "Para esta vista (0400) se requiere internet para consultar SAP."
-          );
+          Alert.alert("Sin conexión", "Para esta vista (0400) se requiere internet para consultar SAP.");
           setAllOrdenes([]);
           return;
         }
@@ -341,17 +354,13 @@ export default function PendienteFirmaIndex() {
         setSelectedMap((prev) => {
           const valid = new Set(only0400.map((x) => String(x?.Orderid)));
           const next = {};
-          for (const k of Object.keys(prev)) {
-            if (valid.has(k) && prev[k]) next[k] = true;
-          }
+          for (const k of Object.keys(prev)) if (valid.has(k) && prev[k]) next[k] = true;
           return next;
         });
       } catch (e) {
         console.error("fetchOrdenes0400 ERROR:", e?.response?.data || e?.message || e);
         const serverMsg =
-          e?.response?.data?.detail ||
-          e?.response?.data?.error ||
-          "No se pudieron cargar las órdenes 0400.";
+          e?.response?.data?.detail || e?.response?.data?.error || "No se pudieron cargar las órdenes 0400.";
         Alert.alert("Error", serverMsg);
         setAllOrdenes([]);
       } finally {
@@ -492,15 +501,16 @@ export default function PendienteFirmaIndex() {
 
                   const tipo = detectTipoMantenimiento(ordenFull);
 
-                  // 3) construir HTML (incluye firma + checks)
-                  const html = buildMantenimientoHtml({
+                  // 3) construir HTML (✅ OJO: buildMantenimientoHtml es async)
+                  const html = await buildMantenimientoHtml({
                     tipo,
                     orden: ordenFull,
-                    operaciones: Array.isArray(ordenFull?.operaciones)
-                      ? ordenFull.operaciones
-                      : [],
+                    operaciones: Array.isArray(ordenFull?.operaciones) ? ordenFull.operaciones : [],
                     checkedMap,
                     signatureData: firmaDataUrl,
+
+                    // ✅ recomendado para que el PDF muestre el correo si tu plantilla lo usa
+                    clienteEmail: email,
                   });
 
                   // 4) generar PDF + base64
@@ -511,9 +521,7 @@ export default function PendienteFirmaIndex() {
 
                   // 5) payload attachment (TU JSON)
                   const fileName =
-                    tipo === "escalera"
-                      ? "mantenimiento_escaleras.pdf"
-                      : "mantenimiento_elevadores.pdf";
+                    tipo === "escalera" ? "mantenimiento_escaleras.pdf" : "mantenimiento_elevadores.pdf";
 
                   const payloadAttachment = {
                     WorkOrderHeader: { Orderid: orderId },
@@ -542,32 +550,19 @@ export default function PendienteFirmaIndex() {
                     Return: [],
                   };
 
-                  // ✅ logs solicitados (sin tirar 10MB de base64 a consola)
-                  logSapPayload("=== SAP PAYLOAD (ATTACHMENT) ===", payloadAttachment, {
-                    stripBase64: true,
-                  });
-                  logSapPayload(
-                    "=== SAP PAYLOAD (STATUS 0300 / remove 0400) ===",
-                    payloadStatus0300
-                  );
+                  // ✅ logs (sin tirar el base64 completo)
+                  logSapPayload("=== SAP PAYLOAD (ATTACHMENT) ===", payloadAttachment, { stripBase64: true });
+                  logSapPayload("=== SAP PAYLOAD (STATUS 0300 / remove 0400) ===", payloadStatus0300);
 
                   // 7) enviar a SAP (1) attachment
-                  await api.post(
-                    `/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet`,
-                    payloadAttachment,
-                    {
-                      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-                    }
-                  );
+                  await api.post(`/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet`, payloadAttachment, {
+                    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+                  });
 
                   // 8) enviar a SAP (2) status
-                  await api.post(
-                    `/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet`,
-                    payloadStatus0300,
-                    {
-                      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-                    }
-                  );
+                  await api.post(`/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet`, payloadStatus0300, {
+                    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+                  });
 
                   results.push({ orderId, ok: true, msg: "Enviado OK (PDF + 0300)." });
                 } catch (err) {
@@ -587,9 +582,7 @@ export default function PendienteFirmaIndex() {
               // ✅ UI: quitar de la lista las que salieron OK
               const okSet = new Set(results.filter((r) => r.ok).map((r) => r.orderId));
               if (okSet.size) {
-                setAllOrdenes((prev) =>
-                  (prev || []).filter((it) => !okSet.has(String(it?.Orderid)))
-                );
+                setAllOrdenes((prev) => (prev || []).filter((it) => !okSet.has(String(it?.Orderid))));
                 setSelectedMap((prev) => {
                   const next = { ...(prev || {}) };
                   for (const id of okSet) delete next[id];
@@ -605,7 +598,6 @@ export default function PendienteFirmaIndex() {
                 `Correctas: ${okCount}\nCon error: ${failCount}\n\nRevisa la consola para ver los JSON enviados.`
               );
 
-              // si todo ok, salimos de modo selección
               if (failCount === 0) {
                 setSelectMode(false);
                 clearSelection();
@@ -696,22 +688,13 @@ export default function PendienteFirmaIndex() {
             }}
             activeOpacity={0.85}
           >
-            <Ionicons
-              name={selectMode ? "close" : "checkbox-outline"}
-              size={18}
-              color="#fff"
-              style={{ marginRight: 6 }}
-            />
+            <Ionicons name={selectMode ? "close" : "checkbox-outline"} size={18} color="#fff" style={{ marginRight: 6 }} />
             <Text style={styles.actionBtnText}>{selectMode ? "Cancelar" : "Seleccionar"}</Text>
           </TouchableOpacity>
         </View>
 
         <View style={{ flexDirection: "row", gap: 10, marginTop: 10 }}>
-          <TouchableOpacity
-            style={styles.refreshBtn}
-            onPress={() => fetchOrdenes0400({ isRefresh: true })}
-            activeOpacity={0.85}
-          >
+          <TouchableOpacity style={styles.refreshBtn} onPress={() => fetchOrdenes0400({ isRefresh: true })} activeOpacity={0.85}>
             <Text style={styles.refreshBtnText}>Recargar</Text>
           </TouchableOpacity>
 
@@ -772,14 +755,7 @@ export default function PendienteFirmaIndex() {
       {/* ===== Barra inferior (solo si selectMode) ===== */}
       {selectMode ? (
         <View style={styles.bottomBar}>
-          <View
-            style={{
-              flexDirection: "row",
-              gap: 10,
-              flexWrap: "wrap",
-              justifyContent: "flex-end",
-            }}
-          >
+          <View style={{ flexDirection: "row", gap: 10, flexWrap: "wrap", justifyContent: "flex-end" }}>
             <TouchableOpacity
               style={[
                 styles.bottomBtn,
@@ -794,18 +770,13 @@ export default function PendienteFirmaIndex() {
             </TouchableOpacity>
 
             <TouchableOpacity
-              style={[
-                styles.bottomBtn,
-                { backgroundColor: selectedIds.length ? FIORI.accent : "#9AA5B1" },
-              ]}
+              style={[styles.bottomBtn, { backgroundColor: selectedIds.length ? FIORI.accent : "#9AA5B1" }]}
               onPress={startFirmaFlow}
               activeOpacity={0.85}
               disabled={!selectedIds.length || sending}
             >
               <Ionicons name="create-outline" size={18} color="#fff" style={{ marginRight: 6 }} />
-              <Text style={[styles.bottomBtnText, { color: "#fff" }]}>
-                Agregar firma del cliente
-              </Text>
+              <Text style={[styles.bottomBtnText, { color: "#fff" }]}>Agregar firma del cliente</Text>
             </TouchableOpacity>
 
             <TouchableOpacity
@@ -823,9 +794,7 @@ export default function PendienteFirmaIndex() {
               disabled={!selectedIds.length || !firmaDataUrl || !isValidEmail(clienteEmail) || sending}
             >
               <Ionicons name="cloud-upload-outline" size={18} color="#fff" style={{ marginRight: 6 }} />
-              <Text style={[styles.bottomBtnText, { color: "#fff" }]}>
-                {sending ? "Enviando…" : "Enviar órdenes"}
-              </Text>
+              <Text style={[styles.bottomBtnText, { color: "#fff" }]}>{sending ? "Enviando…" : "Enviar órdenes"}</Text>
             </TouchableOpacity>
           </View>
 
@@ -846,19 +815,17 @@ export default function PendienteFirmaIndex() {
                 </Text>
               </>
             ) : (
-              <> · Correo: <Text style={{ fontWeight: "900", color: FIORI.danger }}>pendiente</Text></>
+              <>
+                {" "}
+                · Correo: <Text style={{ fontWeight: "900", color: FIORI.danger }}>pendiente</Text>
+              </>
             )}
           </Text>
         </View>
       ) : null}
 
       {/* ===== Modal Firma ===== */}
-      <Modal
-        visible={showFirmaModal}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setShowFirmaModal(false)}
-      >
+      <Modal visible={showFirmaModal} transparent animationType="slide" onRequestClose={() => setShowFirmaModal(false)}>
         <View style={styles.modalBackdrop}>
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>Firma del cliente</Text>
@@ -898,7 +865,7 @@ export default function PendienteFirmaIndex() {
                 webStyle={`
                   .m-signature-pad { box-shadow: none; border: none; }
                   .m-signature-pad--body { border: 1px solid #DDE6F2; border-radius: 12px; }
-                  .m-signature-pad--footer { display: none; margin: 0px; } /* ocultamos footer interno */
+                  .m-signature-pad--footer { display: none; margin: 0px; }
                   body,html { width: 100%; height: 100%; }
                 `}
               />
@@ -929,7 +896,7 @@ export default function PendienteFirmaIndex() {
                     Alert.alert("Correo inválido", "Escribe un correo válido (ej: nombre@dominio.com).");
                     return;
                   }
-                  signatureRef.current?.readSignature?.(); // ✅ dispara onOK
+                  signatureRef.current?.readSignature?.();
                 }}
               >
                 <Ionicons name="checkmark-done-outline" size={18} color="#fff" style={{ marginRight: 6 }} />
@@ -968,11 +935,7 @@ export default function PendienteFirmaIndex() {
                 {sendResults.slice(-3).map((r) => (
                   <Text
                     key={`${r.orderId}-${r.ok ? "ok" : "fail"}`}
-                    style={{
-                      fontSize: 12,
-                      color: r.ok ? FIORI.ok : FIORI.danger,
-                      marginTop: 4,
-                    }}
+                    style={{ fontSize: 12, color: r.ok ? FIORI.ok : FIORI.danger, marginTop: 4 }}
                   >
                     {r.ok ? "✅" : "❌"} {r.orderId}: {r.msg}
                   </Text>
@@ -997,12 +960,7 @@ const styles = StyleSheet.create({
     borderBottomColor: FIORI.border,
     borderBottomWidth: 1,
     ...Platform.select({
-      ios: {
-        shadowColor: "#000",
-        shadowOpacity: 0.03,
-        shadowRadius: 6,
-        shadowOffset: { width: 0, height: 2 },
-      },
+      ios: { shadowColor: "#000", shadowOpacity: 0.03, shadowRadius: 6, shadowOffset: { width: 0, height: 2 } },
       android: { elevation: 1 },
     }),
   },
@@ -1031,12 +989,7 @@ const styles = StyleSheet.create({
   actionBtnDanger: { backgroundColor: FIORI.danger },
   actionBtnText: { color: "#fff", fontWeight: "900" },
 
-  refreshBtn: {
-    backgroundColor: FIORI.accent,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderRadius: 10,
-  },
+  refreshBtn: { backgroundColor: FIORI.accent, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 10 },
   refreshBtnText: { color: "#fff", fontWeight: "900" },
 
   clearBtn: {
@@ -1104,16 +1057,9 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: FIORI.border,
   },
-  bottomBtn: {
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderRadius: 10,
-    flexDirection: "row",
-    alignItems: "center",
-  },
+  bottomBtn: { paddingHorizontal: 12, paddingVertical: 10, borderRadius: 10, flexDirection: "row", alignItems: "center" },
   bottomBtnText: { fontWeight: "900" },
 
-  // ✅ input correo modal
   emailInput: {
     backgroundColor: FIORI.cardSubtle,
     borderRadius: 12,
@@ -1125,7 +1071,6 @@ const styles = StyleSheet.create({
     borderColor: FIORI.border,
   },
 
-  // Modal firma
   modalBackdrop: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.45)",
@@ -1153,17 +1098,9 @@ const styles = StyleSheet.create({
     backgroundColor: "#fff",
   },
 
-  smallBtn: {
-    marginTop: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderRadius: 10,
-    flexDirection: "row",
-    alignItems: "center",
-  },
+  smallBtn: { marginTop: 12, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 10, flexDirection: "row", alignItems: "center" },
   smallBtnText: { fontWeight: "900" },
 
-  // Modal envío/progreso
   blockBackdrop: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.35)",

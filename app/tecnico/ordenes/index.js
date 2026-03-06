@@ -963,7 +963,7 @@ export default function ListaOrdenesTecnico() {
             <Text style={styles.label}>Fin: {finishLabel}</Text>
 
             <Text style={styles.label}>
-              Estatus: {st.label} {st.code ? `(${st.code})` : ""}
+              Estatus: {st.label} {/*{st.code ? `(${st.code})` : ""}*/}
             </Text>
           </View>
         </View>

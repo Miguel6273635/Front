@@ -1,10 +1,16 @@
 // app/tecnico/ordenes/[orderid]/mantto-cables.js
 // Registro de mantenimiento de cables — Frontend (Expo Router + React Native)
-// - Auto-llenado (solo lectura) desde GET /api/mantenimiento-cables/datos/:orderid
-// - Captura del técnico (listo para POST /api/mantenimiento-cables/guardar)
-// - Diseño: Header/Footer de tus componentes + grid responsive para "Diámetros y desgaste"
+//
+// ✅ MODO ACTUAL: SIN BACKEND (datos fijos)
+// - No hace GET (evita el 404 /mantenimiento-cables/datos/[orderid])
+// - Mantiene la función load comentada para re-activar después
+//
+// 🔁 Para reactivar backend en el futuro:
+// 1) Cambia USE_BACKEND a true
+// 2) Descomenta el import de api y la función load
+// 3) El useEffect ya está listo para llamar load() solo si USE_BACKEND=true
 
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback } from "react";
 import {
   View,
   Text,
@@ -15,11 +21,27 @@ import {
   ActivityIndicator,
   Alert,
   Switch,
-} from 'react-native';
-import Header from '../../../../src/components/Header';
-import { useLocalSearchParams, router } from 'expo-router';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import api from '../../../../src/services/api';
+} from "react-native";
+import Header from "../../../../src/components/Header";
+import { useLocalSearchParams, router } from "expo-router";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+// import api from "../../../../src/services/api"; // 🔁 (BACKEND) descomenta cuando vuelvas a usar GET/POST reales
+
+// =======================
+// ✅ Toggle de backend
+// =======================
+const USE_BACKEND = false;
+
+// =======================
+// ✅ Datos fijos (tu demo)
+// =======================
+const FIXED_AUTO = {
+  orden: "40215133",
+  cliente: "Liverpool",
+  equipo: "MX19EM829-A2",
+  tecnico_nombre: "Julio García",
+  start_date: "03/03/2026",
+};
 
 // -------- Utilitarios UI --------
 const SectionTitle = ({ children }) => (
@@ -30,13 +52,13 @@ const Card = ({ children, style }) => (
   <View style={[styles.card, style]}>{children}</View>
 );
 
-const Label = ({ children }) => (
-  <Text style={styles.label}>{children}</Text>
+const Label = ({ children, style }) => (
+  <Text style={[styles.label, style]}>{children}</Text>
 );
 
 const Readonly = ({ children }) => (
   <View style={styles.readonly}>
-    <Text style={styles.readonlyText}>{String(children ?? '—')}</Text>
+    <Text style={styles.readonlyText}>{String(children ?? "—")}</Text>
   </View>
 );
 
@@ -45,8 +67,13 @@ const Input = (props) => (
 );
 
 const Chip = ({ active, children, onPress }) => (
-  <TouchableOpacity onPress={onPress} style={[styles.chip, active && styles.chipOn]}>
-    <Text style={[styles.chipText, active && styles.chipTextOn]}>{children}</Text>
+  <TouchableOpacity
+    onPress={onPress}
+    style={[styles.chip, active && styles.chipOn]}
+  >
+    <Text style={[styles.chipText, active && styles.chipTextOn]}>
+      {children}
+    </Text>
   </TouchableOpacity>
 );
 
@@ -56,7 +83,6 @@ const Toggle = ({ value, onValueChange }) => (
 
 // -------- Card por cable (grid responsive) --------
 function CableCard({ row, onChange }) {
-  // Mantiene un estado local para calcular % en vivo y evitar parpadeos
   const [local, setLocal] = useState(row);
 
   useEffect(() => setLocal(row), [row]);
@@ -79,7 +105,7 @@ function CableCard({ row, onChange }) {
         <Text style={styles.cableCardTitle}>Cable #{local.cable_no}</Text>
         <View style={styles.badgePct}>
           <Text style={styles.badgePctText}>
-            {local?.desgaste_pct != null ? `${local.desgaste_pct}%` : '—'}
+            {local?.desgaste_pct != null ? `${local.desgaste_pct}%` : "—"}
           </Text>
         </View>
       </View>
@@ -89,9 +115,9 @@ function CableCard({ row, onChange }) {
           <Label>Ø (mm)</Label>
           <Input
             keyboardType="numeric"
-            value={local?.diametro_mm?.toString() ?? ''}
+            value={local?.diametro_mm?.toString() ?? ""}
             onChangeText={(t) =>
-              setLocal((s) => ({ ...s, diametro_mm: t.replace(',', '.') }))
+              setLocal((s) => ({ ...s, diametro_mm: t.replace(",", ".") }))
             }
             placeholder="0.00"
           />
@@ -101,11 +127,11 @@ function CableCard({ row, onChange }) {
           <Label>Desgaste (mm)</Label>
           <Input
             keyboardType="numeric"
-            value={local?.parte_desgaste_mm?.toString() ?? ''}
+            value={local?.parte_desgaste_mm?.toString() ?? ""}
             onChangeText={(t) =>
               setLocal((s) => ({
                 ...s,
-                parte_desgaste_mm: t.replace(',', '.'),
+                parte_desgaste_mm: t.replace(",", "."),
               }))
             }
             placeholder="0.00"
@@ -116,18 +142,18 @@ function CableCard({ row, onChange }) {
           <Label>Intacta (mm)</Label>
           <Input
             keyboardType="numeric"
-            value={local?.parte_intacta_mm?.toString() ?? ''}
+            value={local?.parte_intacta_mm?.toString() ?? ""}
             onChangeText={(t) =>
               setLocal((s) => ({
                 ...s,
-                parte_intacta_mm: t.replace(',', '.'),
+                parte_intacta_mm: t.replace(",", "."),
               }))
             }
             placeholder="0.00"
           />
         </View>
 
-        <View style={[styles.cableCol, { alignItems: 'flex-start' }]}>
+        <View style={[styles.cableCol, { alignItems: "flex-start" }]}>
           <Label>Marca “Peor”</Label>
           <View style={styles.peorRow}>
             <Text style={styles.peorText}>Peor</Text>
@@ -146,23 +172,31 @@ function CableCard({ row, onChange }) {
 export default function ManttoCablesScreen() {
   const { orderid } = useLocalSearchParams();
 
-  const [loading, setLoading] = useState(true);
+  // ✅ Como USE_BACKEND=false, no hay "cargando" por GET
+  const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [auto, setAuto] = useState(null);
+
+  // ✅ Auto fijo (para mostrar en "Resumen de la orden")
+  const [auto, setAuto] = useState(FIXED_AUTO);
 
   const [form, setForm] = useState({
-    orderid: '',
+    orderid: "",
     created_by: null,
-    tipo_reporte: 'overhaul',
+    tipo_reporte: "overhaul",
     cantidad_cables: 8,
     diametro_estandar_mm: null,
-    seccion_diametros: Array.from({ length: 8 }, (_, i) => ({ cable_no: i + 1 })),
-    seccion_rupturas: Array.from({ length: 8 }, (_, i) => ({ cable_no: i + 1, hay: false })),
+    seccion_diametros: Array.from({ length: 8 }, (_, i) => ({
+      cable_no: i + 1,
+    })),
+    seccion_rupturas: Array.from({ length: 8 }, (_, i) => ({
+      cable_no: i + 1,
+      hay: false,
+    })),
     seccion_longitud: { encontrado: false },
-    seccion_oxido: { encontrado: false, alcance: 'no' },
-    seccion_tension: { estado: 'bien' },
+    seccion_oxido: { encontrado: false, alcance: "no" },
+    seccion_tension: { estado: "bien" },
     seccion_deformaciones: { encontrado: false },
-    seccion_terminales: { estado: 'sin_anomalias' },
+    seccion_terminales: { estado: "sin_anomalias" },
     resultado_total: { bien: true, tipos_problema: [] },
   });
 
@@ -175,126 +209,177 @@ export default function ManttoCablesScreen() {
     });
   };
 
-  const load = useCallback(async () => {
-    try {
-      setLoading(true);
-      const token = await AsyncStorage.getItem('token');
-      const userStr = await AsyncStorage.getItem('user');
-      const user = userStr ? JSON.parse(userStr) : null;
-
-      const { data, status } = await api.get(
-        `/mantenimiento-cables/datos/${orderid}`,
-        {
-          headers: { Authorization: `Bearer ${token}` },
-          validateStatus: () => true,
-        }
-      );
-
-      if (status >= 400) throw { response: { status, data } };
-
-      let autoFromApi = data?.auto;
-      // Fallback por si algún día llega plano:
-      if (!autoFromApi && data) {
-        autoFromApi = {
-          cliente: data?.cliente ?? data?.Client ?? '',
-          equipo: data?.equipo ?? data?.Equipment ?? '',
-          start_date: data?.start_date ?? data?.StartDate ?? '',
-          tecnico_nombre: data?.tecnico_nombre ?? data?.nombre ?? '',
-          partner_rol: data?.partner_rol ?? data?.PartnRoleOld ?? '',
-          partner_id: data?.partner_id ?? data?.PartnerOld ?? '',
-        };
-      }
-
-      if (!autoFromApi) {
-        throw { response: { status: 404, data: { error: 'Sin datos de la orden' } } };
-      }
-
-      setAuto(autoFromApi);
-
-      const existing = data?.form || {};
-      setForm((s) => ({
-        ...s,
-        orderid: orderid?.toString(),
-        created_by: user?.id ?? s.created_by,
-        ...existing,
-        seccion_diametros: (existing.seccion_diametros ?? s.seccion_diametros)
-          .slice(0, 8)
-          .concat(
-            Array.from(
-              { length: Math.max(0, 8 - (existing.seccion_diametros?.length || 0)) },
-              (_, i) => ({ cable_no: (existing.seccion_diametros?.length || 0) + i + 1 })
-            )
-          ),
-        seccion_rupturas: (existing.seccion_rupturas ?? s.seccion_rupturas)
-          .slice(0, 8)
-          .concat(
-            Array.from(
-              { length: Math.max(0, 8 - (existing.seccion_rupturas?.length || 0)) },
-              (_, i) => ({ cable_no: (existing.seccion_rupturas?.length || 0) + i + 1, hay: false })
-            )
-          ),
-      }));
-    } catch (e) {
-      console.error('[ManttoCables] load error', e?.response?.status, e?.response?.data || e?.message);
-      const status = e?.response?.status;
-      const msg = e?.response?.data?.error || e?.message || 'Error desconocido';
-      Alert.alert('Error al cargar', `(${status || '??'}) ${msg}`);
-    } finally {
-      setLoading(false);
-    }
+  // ✅ Para que el form tenga el orderid (aunque sea fijo)
+  useEffect(() => {
+    const oid = orderid?.toString();
+    setForm((s) => ({
+      ...s,
+      orderid: oid && oid !== "[orderid]" ? oid : FIXED_AUTO.orden,
+    }));
   }, [orderid]);
 
-  useEffect(() => {
-    load();
-  }, [load]);
+  // ==========================
+  // 🔁 (BACKEND) Carga por API
+  // ==========================
+  // const load = useCallback(async () => {
+  //   try {
+  //     setLoading(true);
+  //     const token = await AsyncStorage.getItem("token");
+  //     const userStr = await AsyncStorage.getItem("user");
+  //     const user = userStr ? JSON.parse(userStr) : null;
+  //
+  //     // Importante: orderid debe venir real, no "[orderid]"
+  //     const oid = orderid?.toString();
+  //     if (!oid || oid === "[orderid]") {
+  //       throw {
+  //         response: { status: 400, data: { error: "orderid inválido en la ruta" } },
+  //       };
+  //     }
+  //
+  //     const { data, status } = await api.get(`/mantenimiento-cables/datos/${oid}`, {
+  //       headers: { Authorization: `Bearer ${token}` },
+  //       validateStatus: () => true,
+  //     });
+  //
+  //     if (status >= 400) throw { response: { status, data } };
+  //
+  //     let autoFromApi = data?.auto;
+  //     if (!autoFromApi && data) {
+  //       autoFromApi = {
+  //         cliente: data?.cliente ?? data?.Client ?? "",
+  //         equipo: data?.equipo ?? data?.Equipment ?? "",
+  //         start_date: data?.start_date ?? data?.StartDate ?? "",
+  //         tecnico_nombre: data?.tecnico_nombre ?? data?.nombre ?? "",
+  //         partner_rol: data?.partner_rol ?? data?.PartnRoleOld ?? "",
+  //         partner_id: data?.partner_id ?? data?.PartnerOld ?? "",
+  //       };
+  //     }
+  //
+  //     if (!autoFromApi) {
+  //       throw {
+  //         response: { status: 404, data: { error: "Sin datos de la orden" } },
+  //       };
+  //     }
+  //
+  //     setAuto({
+  //       orden: oid,
+  //       cliente: autoFromApi?.cliente ?? "",
+  //       equipo: autoFromApi?.equipo ?? "",
+  //       tecnico_nombre: autoFromApi?.tecnico_nombre ?? "",
+  //       start_date: autoFromApi?.start_date ?? "",
+  //     });
+  //
+  //     const existing = data?.form || {};
+  //     setForm((s) => ({
+  //       ...s,
+  //       orderid: oid,
+  //       created_by: user?.id ?? s.created_by,
+  //       ...existing,
+  //       seccion_diametros: (existing.seccion_diametros ?? s.seccion_diametros)
+  //         .slice(0, 8)
+  //         .concat(
+  //           Array.from(
+  //             { length: Math.max(0, 8 - (existing.seccion_diametros?.length || 0)) },
+  //             (_, i) => ({
+  //               cable_no: (existing.seccion_diametros?.length || 0) + i + 1,
+  //             })
+  //           )
+  //         ),
+  //       seccion_rupturas: (existing.seccion_rupturas ?? s.seccion_rupturas)
+  //         .slice(0, 8)
+  //         .concat(
+  //           Array.from(
+  //             { length: Math.max(0, 8 - (existing.seccion_rupturas?.length || 0)) },
+  //             (_, i) => ({
+  //               cable_no: (existing.seccion_rupturas?.length || 0) + i + 1,
+  //               hay: false,
+  //             })
+  //           )
+  //         ),
+  //     }));
+  //   } catch (e) {
+  //     console.error(
+  //       "[ManttoCables] load error",
+  //       e?.response?.status,
+  //       e?.response?.data || e?.message
+  //     );
+  //     const status = e?.response?.status;
+  //     const msg = e?.response?.data?.error || e?.message || "Error desconocido";
+  //     Alert.alert("Error al cargar", `(${status || "??"}) ${msg}`);
+  //   } finally {
+  //     setLoading(false);
+  //   }
+  // }, [orderid]);
+  //
+  // useEffect(() => {
+  //   if (USE_BACKEND) load();
+  // }, [load]);
 
   const save = async () => {
     try {
       setSaving(true);
-      const token = await AsyncStorage.getItem('token');
+      // const token = await AsyncStorage.getItem("token"); // 🔁 si luego vuelves a POST real
+
       const payload = {
         ...form,
-        diametro_estandar_mm: form.diametro_estandar_mm ? Number(form.diametro_estandar_mm) : null,
+        diametro_estandar_mm: form.diametro_estandar_mm
+          ? Number(form.diametro_estandar_mm)
+          : null,
         cantidad_cables: form.cantidad_cables ? Number(form.cantidad_cables) : 8,
         seccion_diametros: (form.seccion_diametros || []).map((r) => ({
           ...r,
-          diametro_mm: r.diametro_mm != null && r.diametro_mm !== '' ? Number(r.diametro_mm) : null,
+          diametro_mm:
+            r.diametro_mm != null && r.diametro_mm !== ""
+              ? Number(r.diametro_mm)
+              : null,
           parte_desgaste_mm:
-            r.parte_desgaste_mm != null && r.parte_desgaste_mm !== '' ? Number(r.parte_desgaste_mm) : null,
+            r.parte_desgaste_mm != null && r.parte_desgaste_mm !== ""
+              ? Number(r.parte_desgaste_mm)
+              : null,
           parte_intacta_mm:
-            r.parte_intacta_mm != null && r.parte_intacta_mm !== '' ? Number(r.parte_intacta_mm) : null,
-          desgaste_pct: r.desgaste_pct != null && r.desgaste_pct !== '' ? Number(r.desgaste_pct) : null,
+            r.parte_intacta_mm != null && r.parte_intacta_mm !== ""
+              ? Number(r.parte_intacta_mm)
+              : null,
+          desgaste_pct:
+            r.desgaste_pct != null && r.desgaste_pct !== ""
+              ? Number(r.desgaste_pct)
+              : null,
         })),
       };
 
-      // Cuando tengas endpoint real:
-      // const { data, status } = await api.post('/mantenimiento-cables/guardar', payload, {
+      // 🔁 Cuando tengas endpoint real:
+      // const { data, status } = await api.post("/mantenimiento-cables/guardar", payload, {
       //   headers: { Authorization: `Bearer ${token}` },
       //   validateStatus: () => true,
       // });
 
-      // Simulación:
+      // ✅ Simulación:
       const status = 200;
       const data = { ok: true };
 
       if (status >= 400) {
-        if (data?.detail) return Alert.alert('Validación', JSON.stringify(data.detail, null, 2));
-        return Alert.alert('Error', data?.error || 'No se pudo guardar el formulario');
+        if (data?.detail)
+          return Alert.alert("Validación", JSON.stringify(data.detail, null, 2));
+        return Alert.alert("Error", data?.error || "No se pudo guardar el formulario");
       }
 
       if (data?.ok) {
-        Alert.alert('Guardado', 'El formulario se guardó correctamente', [
-          { text: 'OK', onPress: () => router.back() },
+        Alert.alert("Guardado", "El formulario se guardó correctamente", [
+          { text: "OK", onPress: () => router.back() },
         ]);
       } else {
-        Alert.alert('Atención', 'No se pudo confirmar el guardado');
+        Alert.alert("Atención", "No se pudo confirmar el guardado");
       }
     } catch (e) {
-      console.error('[ManttoCables] save error', e?.response?.status, e?.response?.data || e?.message);
+      console.error(
+        "[ManttoCables] save error",
+        e?.response?.status,
+        e?.response?.data || e?.message
+      );
       if (e?.response?.data?.detail) {
-        Alert.alert('Validación', JSON.stringify(e.response.data.detail, null, 2));
+        Alert.alert("Validación", JSON.stringify(e.response.data.detail, null, 2));
       } else {
-        Alert.alert('Error', e?.response?.data?.error || 'No se pudo guardar el formulario');
+        Alert.alert("Error", e?.response?.data?.error || "No se pudo guardar el formulario");
       }
     } finally {
       setSaving(false);
@@ -303,7 +388,7 @@ export default function ManttoCablesScreen() {
 
   if (loading) {
     return (
-      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+      <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
         <ActivityIndicator size="large" />
         <Text style={{ marginTop: 8 }}>Cargando…</Text>
       </View>
@@ -311,7 +396,7 @@ export default function ManttoCablesScreen() {
   }
 
   return (
-    <View style={{ flex: 1, backgroundColor: '#F5F7FB' }}>
+    <View style={{ flex: 1, backgroundColor: "#F5F7FB" }}>
       <Header title="Registro de mantenimiento de cables" />
 
       <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 120 }}>
@@ -321,7 +406,7 @@ export default function ManttoCablesScreen() {
           <View style={styles.quickGrid}>
             <View style={styles.quickItem}>
               <Label>Orden</Label>
-              <Readonly>{orderid?.toString()}</Readonly>
+              <Readonly>{auto?.orden}</Readonly>
             </View>
             <View style={styles.quickItem}>
               <Label>Cliente</Label>
@@ -336,14 +421,11 @@ export default function ManttoCablesScreen() {
               <Readonly>{auto?.tecnico_nombre}</Readonly>
             </View>
           </View>
+
           <View style={styles.quickGrid}>
             <View style={styles.quickItem}>
               <Label>Fecha inicio</Label>
-              <Readonly>{(auto?.start_date ?? '').toString()}</Readonly>
-            </View>
-            <View style={styles.quickItem}>
-              <Label>Partner (rol / id)</Label>
-              <Readonly>{`${auto?.partner_rol ?? '—'} / ${auto?.partner_id ?? '—'}`}</Readonly>
+              <Readonly>{auto?.start_date}</Readonly>
             </View>
           </View>
         </Card>
@@ -353,11 +435,15 @@ export default function ManttoCablesScreen() {
         <Card>
           <Label>Tipo de reporte</Label>
           <View style={styles.chipsWrap}>
-            {['overhaul', 'ajuste_reparacion_sustitucion'].map((t) => {
+            {["overhaul", "ajuste_reparacion_sustitucion"].map((t) => {
               const active = form.tipo_reporte === t;
               return (
-                <Chip key={t} active={active} onPress={() => update({ tipo_reporte: t })}>
-                  {t === 'overhaul' ? 'Overhaul' : 'Ajuste/Rep./Sust.'}
+                <Chip
+                  key={t}
+                  active={active}
+                  onPress={() => update({ tipo_reporte: t })}
+                >
+                  {t === "overhaul" ? "Overhaul" : "Ajuste/Rep./Sust."}
                 </Chip>
               );
             })}
@@ -369,7 +455,9 @@ export default function ManttoCablesScreen() {
               <Input
                 keyboardType="numeric"
                 value={String(form.cantidad_cables ?? 8)}
-                onChangeText={(t) => update({ cantidad_cables: Number(t || 8) })}
+                onChangeText={(t) =>
+                  update({ cantidad_cables: Number(t || 8) })
+                }
                 placeholder="8"
                 editable={false}
               />
@@ -378,7 +466,7 @@ export default function ManttoCablesScreen() {
               <Label>Diámetro estándar (mm)</Label>
               <Input
                 keyboardType="numeric"
-                value={form.diametro_estandar_mm?.toString() ?? ''}
+                value={form.diametro_estandar_mm?.toString() ?? ""}
                 onChangeText={(t) => update({ diametro_estandar_mm: t })}
                 placeholder="0.00"
               />
@@ -395,7 +483,9 @@ export default function ManttoCablesScreen() {
               <CableCard
                 key={row.cable_no}
                 row={row}
-                onChange={(patch) => updateArrayItem('seccion_diametros', idx, patch)}
+                onChange={(patch) =>
+                  updateArrayItem("seccion_diametros", idx, patch)
+                }
               />
             ))}
         </View>
@@ -414,7 +504,7 @@ export default function ManttoCablesScreen() {
                   <Toggle
                     value={r.hay}
                     onValueChange={(v) =>
-                      updateArrayItem('seccion_rupturas', idx, { hay: v })
+                      updateArrayItem("seccion_rupturas", idx, { hay: v })
                     }
                   />
                 </View>
@@ -426,9 +516,9 @@ export default function ManttoCablesScreen() {
                         <Label>Rupturas por paso</Label>
                         <Input
                           keyboardType="numeric"
-                          value={r.rupturas_por_paso?.toString() ?? ''}
+                          value={r.rupturas_por_paso?.toString() ?? ""}
                           onChangeText={(t) =>
-                            updateArrayItem('seccion_rupturas', idx, {
+                            updateArrayItem("seccion_rupturas", idx, {
                               rupturas_por_paso: Number(t || 0),
                             })
                           }
@@ -438,9 +528,9 @@ export default function ManttoCablesScreen() {
                       <View style={styles.col}>
                         <Label>Posición en cabina</Label>
                         <Input
-                          value={r.posicion_cabina ?? ''}
+                          value={r.posicion_cabina ?? ""}
                           onChangeText={(t) =>
-                            updateArrayItem('seccion_rupturas', idx, {
+                            updateArrayItem("seccion_rupturas", idx, {
                               posicion_cabina: t,
                             })
                           }
@@ -454,7 +544,7 @@ export default function ManttoCablesScreen() {
                       <Toggle
                         value={!!r.cambio}
                         onValueChange={(v) =>
-                          updateArrayItem('seccion_rupturas', idx, { cambio: v })
+                          updateArrayItem("seccion_rupturas", idx, { cambio: v })
                         }
                       />
                     </View>
@@ -474,7 +564,10 @@ export default function ManttoCablesScreen() {
               value={form.seccion_longitud?.encontrado}
               onValueChange={(v) =>
                 update({
-                  seccion_longitud: { ...(form.seccion_longitud || {}), encontrado: v },
+                  seccion_longitud: {
+                    ...(form.seccion_longitud || {}),
+                    encontrado: v,
+                  },
                 })
               }
             />
@@ -486,7 +579,7 @@ export default function ManttoCablesScreen() {
                 <Label>Cable #</Label>
                 <Input
                   keyboardType="numeric"
-                  value={form.seccion_longitud?.cable_no?.toString() ?? ''}
+                  value={form.seccion_longitud?.cable_no?.toString() ?? ""}
                   onChangeText={(t) =>
                     update({
                       seccion_longitud: {
@@ -501,7 +594,7 @@ export default function ManttoCablesScreen() {
               <View style={styles.col}>
                 <Label>Posición en cabina</Label>
                 <Input
-                  value={form.seccion_longitud?.posicion_cabina ?? ''}
+                  value={form.seccion_longitud?.posicion_cabina ?? ""}
                   onChangeText={(t) =>
                     update({
                       seccion_longitud: {
@@ -517,7 +610,7 @@ export default function ManttoCablesScreen() {
                 <Label>Longitud (mm)</Label>
                 <Input
                   keyboardType="numeric"
-                  value={form.seccion_longitud?.longitud_mm?.toString() ?? ''}
+                  value={form.seccion_longitud?.longitud_mm?.toString() ?? ""}
                   onChangeText={(t) =>
                     update({
                       seccion_longitud: {
@@ -552,7 +645,7 @@ export default function ManttoCablesScreen() {
             <>
               <Label>Alcance</Label>
               <View style={styles.chipsWrap}>
-                {['completo', 'parcial', 'no'].map((opt) => {
+                {["completo", "parcial", "no"].map((opt) => {
                   const active = form.seccion_oxido?.alcance === opt;
                   return (
                     <Chip
@@ -560,7 +653,10 @@ export default function ManttoCablesScreen() {
                       active={active}
                       onPress={() =>
                         update({
-                          seccion_oxido: { ...(form.seccion_oxido || {}), alcance: opt },
+                          seccion_oxido: {
+                            ...(form.seccion_oxido || {}),
+                            alcance: opt,
+                          },
                         })
                       }
                     >
@@ -575,7 +671,7 @@ export default function ManttoCablesScreen() {
                   <Label>Cable #</Label>
                   <Input
                     keyboardType="numeric"
-                    value={form.seccion_oxido?.cable_no?.toString() ?? ''}
+                    value={form.seccion_oxido?.cable_no?.toString() ?? ""}
                     onChangeText={(t) =>
                       update({
                         seccion_oxido: {
@@ -590,7 +686,7 @@ export default function ManttoCablesScreen() {
                 <View style={styles.col}>
                   <Label>Posición en cabina</Label>
                   <Input
-                    value={form.seccion_oxido?.posicion_cabina ?? ''}
+                    value={form.seccion_oxido?.posicion_cabina ?? ""}
                     onChangeText={(t) =>
                       update({
                         seccion_oxido: {
@@ -612,7 +708,7 @@ export default function ManttoCablesScreen() {
         <Card>
           <Label>Estado</Label>
           <View style={styles.chipsWrap}>
-            {['bien', 'pendiente_corregir', 'corregido'].map((opt) => {
+            {["bien", "pendiente_corregir", "corregido"].map((opt) => {
               const active = form.seccion_tension?.estado === opt;
               return (
                 <Chip
@@ -651,7 +747,7 @@ export default function ManttoCablesScreen() {
                 <Label>Cable #</Label>
                 <Input
                   keyboardType="numeric"
-                  value={form.seccion_deformaciones?.cable_no?.toString() ?? ''}
+                  value={form.seccion_deformaciones?.cable_no?.toString() ?? ""}
                   onChangeText={(t) =>
                     update({
                       seccion_deformaciones: {
@@ -666,7 +762,7 @@ export default function ManttoCablesScreen() {
               <View style={styles.col}>
                 <Label>Posición en cabina</Label>
                 <Input
-                  value={form.seccion_deformaciones?.posicion_cabina ?? ''}
+                  value={form.seccion_deformaciones?.posicion_cabina ?? ""}
                   onChangeText={(t) =>
                     update({
                       seccion_deformaciones: {
@@ -681,7 +777,7 @@ export default function ManttoCablesScreen() {
               <View style={styles.col}>
                 <Label>Problema</Label>
                 <Input
-                  value={form.seccion_deformaciones?.problema ?? ''}
+                  value={form.seccion_deformaciones?.problema ?? ""}
                   onChangeText={(t) =>
                     update({
                       seccion_deformaciones: {
@@ -702,7 +798,7 @@ export default function ManttoCablesScreen() {
         <Card>
           <Label>Estado</Label>
           <View style={styles.chipsWrap}>
-            {['grietas', 'grasa', 'sin_anomalias'].map((opt) => {
+            {["grietas", "grasa", "sin_anomalias"].map((opt) => {
               const active = form.seccion_terminales?.estado === opt;
               return (
                 <Chip
@@ -724,7 +820,9 @@ export default function ManttoCablesScreen() {
             <Chip
               active={!!form.resultado_total?.bien}
               onPress={() =>
-                update({ resultado_total: { ...(form.resultado_total || {}), bien: true } })
+                update({
+                  resultado_total: { ...(form.resultado_total || {}), bien: true },
+                })
               }
             >
               Bien
@@ -735,7 +833,7 @@ export default function ManttoCablesScreen() {
                 update({
                   resultado_total: {
                     ...(form.resultado_total || {}),
-                    cambio_inmediato: !(form.resultado_total?.cambio_inmediato),
+                    cambio_inmediato: !form.resultado_total?.cambio_inmediato,
                   },
                 })
               }
@@ -748,7 +846,7 @@ export default function ManttoCablesScreen() {
                 update({
                   resultado_total: {
                     ...(form.resultado_total || {}),
-                    programar_cambio: !(form.resultado_total?.programar_cambio),
+                    programar_cambio: !form.resultado_total?.programar_cambio,
                   },
                 })
               }
@@ -759,46 +857,59 @@ export default function ManttoCablesScreen() {
 
           <Label style={{ marginTop: 12 }}>Tipos de problema</Label>
           <View style={styles.chipsWrap}>
-            {['diametro', 'tension', 'rupturas', 'dobleces', 'desgaste', 'terminales', 'oxido', 'otros'].map(
-              (opt) => {
-                const active = form.resultado_total?.tipos_problema?.includes(opt);
-                return (
-                  <Chip
-                    key={opt}
-                    active={active}
-                    onPress={() => {
-                      const cur = new Set(form.resultado_total?.tipos_problema || []);
-                      if (active) cur.delete(opt);
-                      else cur.add(opt);
-                      update({
-                        resultado_total: {
-                          ...(form.resultado_total || {}),
-                          tipos_problema: Array.from(cur),
-                        },
-                      });
-                    }}
-                  >
-                    {opt}
-                  </Chip>
-                );
-              }
-            )}
+            {[
+              "diametro",
+              "tension",
+              "rupturas",
+              "dobleces",
+              "desgaste",
+              "terminales",
+              "oxido",
+              "otros",
+            ].map((opt) => {
+              const active = form.resultado_total?.tipos_problema?.includes(opt);
+              return (
+                <Chip
+                  key={opt}
+                  active={active}
+                  onPress={() => {
+                    const cur = new Set(form.resultado_total?.tipos_problema || []);
+                    if (active) cur.delete(opt);
+                    else cur.add(opt);
+                    update({
+                      resultado_total: {
+                        ...(form.resultado_total || {}),
+                        tipos_problema: Array.from(cur),
+                      },
+                    });
+                  }}
+                >
+                  {opt}
+                </Chip>
+              );
+            })}
           </View>
 
           <Label style={{ marginTop: 12 }}>Detalle</Label>
           <Input
             multiline
-            style={{ height: 120, textAlignVertical: 'top' }}
+            style={{ height: 120, textAlignVertical: "top" }}
             placeholder="Notas, observaciones, medidas…"
-            value={form.resultado_total?.detalle ?? ''}
+            value={form.resultado_total?.detalle ?? ""}
             onChangeText={(t) =>
-              update({ resultado_total: { ...(form.resultado_total || {}), detalle: t } })
+              update({
+                resultado_total: { ...(form.resultado_total || {}), detalle: t },
+              })
             }
           />
         </Card>
 
         <TouchableOpacity style={styles.primary} onPress={save} disabled={saving}>
-          {saving ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryText}>Guardar</Text>}
+          {saving ? (
+            <ActivityIndicator color="#fff" />
+          ) : (
+            <Text style={styles.primaryText}>Guardar</Text>
+          )}
         </TouchableOpacity>
       </ScrollView>
     </View>
@@ -807,126 +918,126 @@ export default function ManttoCablesScreen() {
 
 // -------- Estilos --------
 const styles = StyleSheet.create({
-  section: { marginTop: 18, fontSize: 18, fontWeight: '800', color: '#1f2937' },
+  section: { marginTop: 18, fontSize: 18, fontWeight: "800", color: "#1f2937" },
 
   card: {
-    backgroundColor: '#fff',
+    backgroundColor: "#fff",
     borderRadius: 14,
     padding: 16,
     marginTop: 10,
     borderWidth: 1,
-    borderColor: '#e5e7eb',
-    shadowColor: '#000',
+    borderColor: "#e5e7eb",
+    shadowColor: "#000",
     shadowOpacity: 0.03,
     shadowRadius: 6,
     elevation: 1,
   },
 
-  label: { fontSize: 12, color: '#6b7280', marginBottom: 6 },
+  label: { fontSize: 12, color: "#6b7280", marginBottom: 6 },
   readonly: {
     borderWidth: 1,
-    borderColor: '#e5e7eb',
+    borderColor: "#e5e7eb",
     borderRadius: 12,
     paddingVertical: 12,
     paddingHorizontal: 14,
-    backgroundColor: '#f9fafb',
+    backgroundColor: "#f9fafb",
   },
-  readonlyText: { fontSize: 16, color: '#111827' },
+  readonlyText: { fontSize: 16, color: "#111827" },
 
   input: {
     borderWidth: 1,
-    borderColor: '#d1d5db',
+    borderColor: "#d1d5db",
     borderRadius: 12,
     paddingVertical: 12,
     paddingHorizontal: 14,
-    backgroundColor: '#fff',
+    backgroundColor: "#fff",
     fontSize: 16,
-    color: '#111827',
+    color: "#111827",
   },
 
-  chipsWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  chipsWrap: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
 
   chip: {
     borderWidth: 1,
-    borderColor: '#c7cdd6',
+    borderColor: "#c7cdd6",
     paddingVertical: 10,
     paddingHorizontal: 14,
     borderRadius: 999,
-    backgroundColor: '#fff',
+    backgroundColor: "#fff",
   },
-  chipOn: { backgroundColor: '#111827', borderColor: '#111827' },
-  chipText: { color: '#111827', fontWeight: '700' },
-  chipTextOn: { color: '#fff' },
+  chipOn: { backgroundColor: "#111827", borderColor: "#111827" },
+  chipText: { color: "#111827", fontWeight: "700" },
+  chipTextOn: { color: "#fff" },
 
-  row2: { flexDirection: 'row', gap: 12, flexWrap: 'wrap' },
-  row3: { flexDirection: 'row', gap: 12, flexWrap: 'wrap' },
+  row2: { flexDirection: "row", gap: 12, flexWrap: "wrap" },
+  row3: { flexDirection: "row", gap: 12, flexWrap: "wrap" },
   col: { flexGrow: 1, minWidth: 220, flexBasis: 0 },
 
   // -------- Resumen rápido --------
-  quickGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
+  quickGrid: { flexDirection: "row", flexWrap: "wrap", gap: 12 },
   quickItem: { flexGrow: 1, minWidth: 220, flexBasis: 0 },
 
   // -------- Grid de cables (responsive) --------
   cablesWrap: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
+    flexDirection: "row",
+    flexWrap: "wrap",
     gap: 12,
   },
 
   cableCard: {
     flexGrow: 1,
-    minWidth: 260,     // en móvil 1 por fila
-    maxWidth: 360,     // en desktop cabe 2-3 por fila
-    flexBasis: '48%',  // ayuda a que sean 2 por fila en anchos medianos
-    backgroundColor: '#fff',
+    minWidth: 260,
+    maxWidth: 360,
+    flexBasis: "48%",
+    backgroundColor: "#fff",
     borderRadius: 14,
     padding: 14,
     borderWidth: 1,
-    borderColor: '#e5e7eb',
+    borderColor: "#e5e7eb",
   },
 
   cableCardHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
     marginBottom: 12,
   },
-  cableCardTitle: { fontWeight: '800', fontSize: 16, color: '#111827' },
+  cableCardTitle: { fontWeight: "800", fontSize: 16, color: "#111827" },
   badgePct: {
     minWidth: 64,
     paddingVertical: 6,
     paddingHorizontal: 10,
-    backgroundColor: '#eef2ff',
+    backgroundColor: "#eef2ff",
     borderRadius: 999,
-    alignItems: 'center',
+    alignItems: "center",
   },
-  badgePctText: { fontWeight: '800', color: '#374151' },
+  badgePctText: { fontWeight: "800", color: "#374151" },
 
   cableGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
+    flexDirection: "row",
+    flexWrap: "wrap",
     gap: 12,
   },
   cableCol: { flexGrow: 1, minWidth: 160, flexBasis: 0 },
 
-  peorRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 6 },
-  peorText: { fontSize: 14, color: '#111827' },
+  peorRow: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 6 },
+  peorText: { fontSize: 14, color: "#111827" },
 
   block: { marginBottom: 6 },
-  blockTitle: { fontWeight: '800', color: '#111827', marginBottom: 6 },
+  blockTitle: { fontWeight: "800", color: "#111827", marginBottom: 6 },
   hr: {
     height: 1,
-    backgroundColor: '#eceff3',
+    backgroundColor: "#eceff3",
     marginTop: 12,
     marginBottom: 6,
   },
 
   primary: {
     marginTop: 18,
-    backgroundColor: '#2563eb',
+    backgroundColor: "#2563eb",
     padding: 16,
     borderRadius: 14,
-    alignItems: 'center',
+    alignItems: "center",
   },
-  primaryText: { color: '#fff', fontWeight: '900', fontSize: 16 },
+  primaryText: { color: "#fff", fontWeight: "900", fontSize: 16 },
 });

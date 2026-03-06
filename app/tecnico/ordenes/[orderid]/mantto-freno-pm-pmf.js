@@ -207,17 +207,17 @@ export default function ManttoFrenoPMFForm() {
         <Section>Datos del documento</Section>
         <Card>
           <Row2>
-            <Col><Label>CLIENTE</Label><Input value={cliente} onChangeText={setCliente} placeholder="Cliente / Razón social" /></Col>
-            <Col><Label>No. EQUIPO</Label><Input value={noEquipo} onChangeText={setNoEquipo} placeholder={auto?.equipo || '—'} /></Col>
+            <Col><Label>CLIENTE</Label><Input value="Liverpool" onChangeText={setCliente} placeholder="Cliente / Razón social" /></Col>
+            <Col><Label>No. EQUIPO</Label><Input value="MX19EM829-A2" onChangeText={setNoEquipo} placeholder={auto?.equipo || '—'} /></Col>
           </Row2>
           <Row2>
             <Col>
               <Label>NOMBRE DEL TÉCNICO</Label>
-              <Input value={tecnicoNombre} onChangeText={setTecnicoNombre} placeholder={auto?.tecnico_nombre || '—'} />
+              <Input value="Juan Chávez" onChangeText={setTecnicoNombre} placeholder={auto?.tecnico_nombre || '—'} />
             </Col>
             <Col>
               <Label>No. NÓMINA</Label>
-              <Input value={tecnicoNomina} onChangeText={setTecnicoNomina} placeholder={auto?.nomina || '—'}  />
+              <Input value="3289" onChangeText={setTecnicoNomina} placeholder={auto?.nomina || '—'}  />
             </Col>
           </Row2>
           <Row2>

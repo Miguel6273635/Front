@@ -45,7 +45,6 @@ import { ListaOperacionesAgrupadas } from "./secciones/ListaOperacionesDetalle";
 import PieDetalleOrden from "./secciones/PieDetalleOrden";
 import ConsumiblesFinalizacion from "./secciones/ConsumiblesFinalizacion";
 
-
 // ✅ Cola offline SAP
 import { processSapQueue, upsertSapQueueItem } from "../../../../src/offline/sapQueue";
 
@@ -69,6 +68,9 @@ const FIORI = {
 /* ====================== Orden iniciada (contador) ====================== */
 const ORDER_START_KEY = (orderId) => `orderStart:${orderId}`;
 const ORDER_FINISH_KEY = (orderId) => `orderFinish:${orderId}`;
+
+// ✅ NUEVO: tiempo transcurrido congelable (para 0400)
+const ORDER_ELAPSED_KEY = (orderId) => `orderElapsed:${orderId}`;
 
 /* ====================== ✅ Pendiente de firma (persistir checks) ====================== */
 const PENDING_SIGN_KEY = (orderId) => `pendingSign:${orderId}`;
@@ -126,10 +128,31 @@ async function clearOrderFinish(orderId) {
   } catch {}
 }
 
+// ✅ NUEVO: elapsed persistente
+async function loadOrderElapsed(orderId) {
+  try {
+    const raw = await AsyncStorage.getItem(ORDER_ELAPSED_KEY(orderId));
+    const v = raw ? Number(raw) : null;
+    return Number.isFinite(v) ? v : null;
+  } catch {
+    return null;
+  }
+}
+async function saveOrderElapsed(orderId, ms) {
+  try {
+    await AsyncStorage.setItem(ORDER_ELAPSED_KEY(orderId), String(ms));
+  } catch {}
+}
+async function clearOrderElapsed(orderId) {
+  try {
+    await AsyncStorage.removeItem(ORDER_ELAPSED_KEY(orderId));
+  } catch {}
+}
+
 async function loadPendingSign(orderId) {
   try {
     const raw = await AsyncStorage.getItem(PENDING_SIGN_KEY(orderId));
-    return raw ? JSON.parse(raw) : null; // { checkedMap, savedAt }
+    return raw ? JSON.parse(raw) : null; // { checkedMap, savedAt, confirmationsSent?, confirmationsFinishMs? }
   } catch {
     return null;
   }
@@ -215,6 +238,129 @@ function buildSequentialWindows(startMs, mins) {
     cursor = end;
     return win;
   });
+}
+
+/* ======================
+   ✅ NUEVO: Materiales/Consumibles → ConfirmationMaterialSet
+   - Se manda a SAP dentro del MISMO payload de confirmaciones
+   - NO mandamos Almacen (te dijeron que ya no)
+====================== */
+function toNum(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+function normalizeConsumiblesToMaterialSet(consumiblesRows, plantFallback) {
+  const rows = Array.isArray(consumiblesRows) ? consumiblesRows : [];
+
+  const out = [];
+  for (const r of rows) {
+    // soporta variantes de nombres de campos
+    const Material = String(
+      r?.Material ?? r?.material ?? r?.codigo ?? r?.Codigo ?? r?.matnr ?? ""
+    ).trim();
+
+    const CantidadRaw = r?.Cantidad ?? r?.cantidad ?? r?.qty ?? r?.Qty ?? r?.quantity ?? "0";
+    const Unidad = String(r?.Unidad ?? r?.unidad ?? r?.uom ?? r?.Uom ?? "").trim();
+    const Centro = "TLP1";
+
+    const qtyNum = toNum(CantidadRaw);
+    const qtyOk = qtyNum != null ? qtyNum > 0 : String(CantidadRaw || "").trim() !== "" && String(CantidadRaw) !== "0";
+
+    if (!Material) continue;
+    if (!qtyOk) continue;
+    if (!Unidad) continue;
+    if (!Centro) continue;
+
+    out.push({
+      Material,
+      Cantidad: String(CantidadRaw),
+      Unidad,
+      Centro,
+      // ✅ NO Almacen
+    });
+  }
+
+  return out;
+}
+
+/* ======================
+   ✅ NUEVO: construir payload de confirmaciones desde ops seleccionadas
+   (sirve para 0400 y 0300 si necesitas)
+====================== */
+function buildConfirmationPayloadFromSelectedOps({
+  orderId,
+  opsAll,
+  selectedIds,
+  startMs,
+  finishMs,
+  consumiblesRows,
+  plantFallback,
+}) {
+  const selectedOpsRaw = (selectedIds || [])
+    .map((idKey) => (opsAll || []).find((op) => String(op.id) === String(idKey)))
+    .filter(Boolean);
+
+  // dedupe por Activity/SubActivity
+  const uniqByOp = (ops) => {
+    const map = new Map();
+    for (const op of ops) {
+      const act = String(op.activity || op.Activity || "").trim();
+      const sub = String(op.subactivity || op.SubActivity || "").trim();
+      const key = `${act}__${sub}`;
+      if (!map.has(key)) map.set(key, op);
+    }
+    return Array.from(map.values());
+  };
+
+  const selectedOps = uniqByOp(selectedOpsRaw);
+  if (!selectedOps.length) return null;
+
+  if (!Number.isFinite(startMs) || !Number.isFinite(finishMs) || finishMs <= startMs) return null;
+
+  const totalMs = Math.max(0, finishMs - startMs);
+  const totalMin = msToMinutesRounded(totalMs);
+
+  const minsArr = prorateMinutes(totalMin, selectedOps.length);
+  const windows = buildSequentialWindows(startMs, minsArr);
+
+  const ConfirmationMaterialSet = normalizeConsumiblesToMaterialSet(consumiblesRows, plantFallback);
+
+  return {
+    Order: "S1",
+    ConfirmationOrderSet: selectedOps.map((op, idx) => {
+      const actRaw = String(op.activity || op.Activity || "").trim();
+      const subRaw = String(op.subactivity || op.SubActivity || "").trim();
+
+      const Operation = actRaw.padStart(4, "0");
+      const SubActivity = subRaw ? subRaw.padStart(4, "0") : "";
+
+      const w = windows[idx];
+
+      const row = {
+        ConfNo: "",
+        Orderid: orderId,
+        Operation,
+        PostgDate: sapDateFromMs(finishMs),
+
+        ActWork: String(minsArr[idx]),
+        UnWork: "min",
+
+        ExecStartDate: sapDateFromMs(w.start),
+        ExecFinDate: sapDateFromMs(w.end),
+
+        ExecStartTime: sapTimePTFromMs(w.start),
+        ExecFinTime: sapTimePTFromMs(w.end),
+
+        FinConf: "X",
+      };
+
+      if (SubActivity) row.SubActivity = SubActivity;
+      return row;
+    }),
+    // ✅ AQUÍ VAN LOS CONSUMIBLES
+    ConfirmationMaterialSet,
+    Return: [],
+  };
 }
 
 /* ====================== ✅ Dirección igual que rutas-asignadas ====================== */
@@ -377,6 +523,22 @@ function detectTipoMantenimiento(orden) {
 }
 
 /* ======================
+   ✅ Detectar cobertura desde ShortText (COBERTURABASICA/MEDIA/SEMI)
+   Ej: "0040000034000010COBERTURASEMI"
+====================== */
+function detectCoberturaFromShortText(shortText) {
+  const s = String(shortText || "").toUpperCase();
+  const idx = s.indexOf("COBERTURA");
+  if (idx < 0) return null;
+
+  const tail = s.slice(idx); // "COBERTURASEMI..."
+  if (tail.includes("COBERTURABASICA")) return "BASICA";
+  if (tail.includes("COBERTURAMEDIA")) return "MEDIA";
+  if (tail.includes("COBERTURASEMI")) return "SEMI";
+  return null;
+}
+
+/* ======================
    ✅ ESTATUS: detectar 0200 vs 0400 + armar payload 0300
 ====================== */
 function normalizeCode(code) {
@@ -470,16 +632,15 @@ export default function DetalleOrden() {
   // ✅ correo cliente para estatus 0300
   const [clienteEmail, setClienteEmail] = useState("");
 
-  // ✅ NUEVO: nombre/cargo/aviso cliente (para PDF y registro)
+  // ✅ nombre/cargo/aviso cliente (para PDF y registro)
   const [clienteNombre, setClienteNombre] = useState("");
   const [clienteCargo, setClienteCargo] = useState("");
   const [avisoCliente, setAvisoCliente] = useState("");
 
-  // ✅ NUEVO: descripción breve del técnico (para PDF)
+  // ✅ descripción breve del técnico (para PDF)
   const [notaTecnico, setNotaTecnico] = useState("");
 
-  // ✅ (Siguiente paso) consumibles/cobertura (por ahora placeholders para que no truene)
-  const [coberturaAgr1, setCoberturaAgr1] = useState(null);
+  // ✅ Consumibles / cobertura
   const [consumibles, setConsumibles] = useState([]);
 
   // ===== iniciar orden + contador (SOLO LOCAL) =====
@@ -487,6 +648,9 @@ export default function DetalleOrden() {
   const [orderStartedAtMs, setOrderStartedAtMs] = useState(null);
   const [orderFinishedAtMs, setOrderFinishedAtMs] = useState(null);
   const [nowTick, setNowTick] = useState(Date.now());
+
+  // ✅ NUEVO: elapsed congelado (para 0400 / final)
+  const [orderElapsedMs, setOrderElapsedMs] = useState(null);
 
   // ===== ✅ PREVIEW MANTENIMIENTO (ANTES DE ENVIAR) =====
   const [showMantPreview, setShowMantPreview] = useState(false);
@@ -505,6 +669,7 @@ export default function DetalleOrden() {
 
       const savedStart = await loadOrderStart(orderIdGuess);
       const savedFinish = await loadOrderFinish(orderIdGuess);
+      const savedElapsed = await loadOrderElapsed(orderIdGuess);
 
       if (mounted) {
         if (savedStart) {
@@ -512,6 +677,7 @@ export default function DetalleOrden() {
           setNowTick(Date.now());
         }
         if (savedFinish) setOrderFinishedAtMs(savedFinish);
+        if (savedElapsed != null) setOrderElapsedMs(savedElapsed);
       }
     })();
 
@@ -581,6 +747,7 @@ export default function DetalleOrden() {
 
   // 🔴 0400 NO es "finalizada real", es PENDIENTE DE FIRMA
   const isOrderFinishedReal = !!orden?.isFinal || ["0300", "0500"].includes(statusCode);
+  const isPending0400 = statusCode === "0400" || String(statusCode).includes("0400");
 
   const estatusTxt = String(orden?.estatus_label || orden?.estatus || orden?.status || "")
     .trim()
@@ -603,6 +770,13 @@ export default function DetalleOrden() {
     isNoMant || isOrderSinEmpezar || isOrderPendiente0100 || isOrderFinishedReal || !checkinDone;
 
   const canStartTimer = isOrderEnProceso && !isNoMant && !isOrderFinishedReal && !!checkinDone;
+
+  // ✅ cobertura detectada ya con la orden cargada
+  const coberturaTipo = String(orden?.cobertura_tipo || "").trim().toUpperCase();
+
+  // ✅ NUEVO: visibilidad del timer
+  const showRunningTimer = isOrderEnProceso && !!orderStartedAtMs;
+  const showFrozenTimer = isPending0400 && orderElapsedMs != null;
 
   /* ====================== Helpers Offline (UI + cache + opstate + queue) ====================== */
   const safeSaveDetailIfWindow = async (orderId, detailObj) => {
@@ -650,8 +824,19 @@ export default function DetalleOrden() {
   };
 
   const updateLocalOrderAsFinalizada0300 = async (orderId, finishMs) => {
+    // ✅ guardar finish
     await saveOrderFinish(orderId, finishMs);
     setOrderFinishedAtMs(finishMs);
+
+    // ✅ guardar elapsed final (si hay start)
+    try {
+      const startMs = await loadOrderStart(orderId);
+      if (startMs) {
+        const elapsedFinal = Math.max(0, finishMs - startMs);
+        await saveOrderElapsed(orderId, elapsedFinal);
+        setOrderElapsedMs(elapsedFinal);
+      }
+    } catch {}
 
     setOrden((prev) => ({
       ...(prev || {}),
@@ -675,21 +860,21 @@ export default function DetalleOrden() {
   };
 
   const enqueueSap = async ({ type, orderId, endpoint, payload, dedupeKey, method }) => {
-  if (typeof upsertSapQueueItem !== "function") {
-    throw new Error(
-      "upsertSapQueueItem no existe en src/offline/sapQueue.js. Asegúrate de exportarla."
-    );
-  }
+    if (typeof upsertSapQueueItem !== "function") {
+      throw new Error(
+        "upsertSapQueueItem no existe en src/offline/sapQueue.js. Asegúrate de exportarla."
+      );
+    }
 
-  await upsertSapQueueItem({
-    type,
-    orderId,
-    endpoint,
-    payload,
-    method: method || "POST",
-    dedupeKey, // ✅ IMPORTANTE
-  });
-};
+    await upsertSapQueueItem({
+      type,
+      orderId,
+      endpoint,
+      payload,
+      method: method || "POST",
+      dedupeKey, // ✅ IMPORTANTE
+    });
+  };
 
   const obtenerOrden = async () => {
     const orderIdParam = String(id || "").trim();
@@ -713,6 +898,9 @@ export default function DetalleOrden() {
         const savedFinishCached = await loadOrderFinish(cachedOrderId);
         if (savedFinishCached) setOrderFinishedAtMs(savedFinishCached);
 
+        const savedElapsedCached = await loadOrderElapsed(cachedOrderId);
+        if (savedElapsedCached != null) setOrderElapsedMs(savedElapsedCached);
+
         const pendingCached = await loadPendingSign(cachedOrderId);
         if (pendingCached?.checkedMap) setCheckedMap(pendingCached.checkedMap);
 
@@ -734,7 +922,10 @@ export default function DetalleOrden() {
 
       if (!isOnline) {
         if (!cached?.data) {
-          Alert.alert("Sin conexión", "No hay internet y no hay detalle guardado aún para esta orden.");
+          Alert.alert(
+            "Sin conexión",
+            "No hay internet y no hay detalle guardado aún para esta orden."
+          );
         }
         return;
       }
@@ -742,6 +933,37 @@ export default function DetalleOrden() {
       // 2) Online: trae detalle base
       const resOrden = await api.get(`/api/ordenes/sap/${orderIdParam}`);
       const baseOrden = resOrden.data || {};
+
+      // ✅ traer ShortText real desde WorkOrderHeaderSet (OData) para detectar COBERTURA
+      let shortTextHeader = "";
+      try {
+        const resHeader = await api.get(
+          `/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet('${orderIdParam}')`
+        );
+
+        shortTextHeader =
+          resHeader?.data?.d?.ShortText ||
+          resHeader?.data?.d?.shorttext ||
+          resHeader?.data?.d?.ShortText ||
+          resHeader?.data?.d?.shorttext ||
+          "";
+      } catch (e) {
+        console.warn(
+          "[COBERTURA] No se pudo cargar WorkOrderHeaderSet:",
+          e?.response?.data || e?.message || e
+        );
+      }
+
+      // ✅ Detectar cobertura desde ShortText (primero OData, luego el baseOrden si lo trae)
+      const shortTextForCoverage =
+        shortTextHeader ||
+        baseOrden?.ShortText ||
+        baseOrden?.shorttext ||
+        baseOrden?.Shorttext ||
+        baseOrden?.shortText ||
+        "";
+
+      const coberturaDetectada = detectCoberturaFromShortText(shortTextForCoverage);
 
       // 3) addresses
       let direccionSap = "";
@@ -802,6 +1024,11 @@ export default function DetalleOrden() {
 
       const data = {
         ...baseOrden,
+
+        // ✅ Guardar ShortText real y cobertura detectada
+        ShortText: shortTextForCoverage || baseOrden?.ShortText || "",
+        cobertura_tipo: coberturaDetectada || baseOrden?.cobertura_tipo || null,
+
         direccion:
           direccionSap ||
           baseOrden?.direccion ||
@@ -849,6 +1076,14 @@ export default function DetalleOrden() {
           setOrderFinishedAtMs(oldFinish);
         }
 
+        const oldElapsed = await loadOrderElapsed(orderIdParam);
+        const realElapsed = await loadOrderElapsed(orderIdReal);
+        if (oldElapsed != null && realElapsed == null) {
+          await saveOrderElapsed(orderIdReal, oldElapsed);
+          await clearOrderElapsed(orderIdParam);
+          setOrderElapsedMs(oldElapsed);
+        }
+
         const oldPending = await loadPendingSign(orderIdParam);
         const realPending = await loadPendingSign(orderIdReal);
         if (oldPending && !realPending) {
@@ -860,12 +1095,12 @@ export default function DetalleOrden() {
       // restaurar checks si 0400
       try {
         const sc = String(data?.estatus_code || data?.userstatus || "").trim();
-        const isPending0400 = sc.includes("0400");
+        const isPending0400Local2 = sc.includes("0400");
 
         const pending = await loadPendingSign(orderIdReal);
         if (pending?.checkedMap) {
           setCheckedMap(pending.checkedMap || {});
-          if (isPending0400) setFinalizeMode(true);
+          if (isPending0400Local2) setFinalizeMode(true);
         }
       } catch {}
 
@@ -880,6 +1115,8 @@ export default function DetalleOrden() {
         estatusTxtLocal === "EN PROCESO" ||
         statusCodeLocal === "0200";
 
+      const isPending0400Local =
+        statusCodeLocal === "0400" || String(statusCodeLocal).includes("0400");
       const isFinalLocal = ["0300", "0500"].includes(statusCodeLocal) || !!data?.isFinal;
 
       if (isEnProcesoLocal) {
@@ -888,7 +1125,15 @@ export default function DetalleOrden() {
           setOrderStartedAtMs(savedStart);
           setNowTick(Date.now());
         }
+      } else if (isPending0400Local) {
+        // ✅ 0400: NO borrar start; el timer se muestra congelado con elapsed
+        const savedStart = await loadOrderStart(orderIdReal);
+        if (savedStart) setOrderStartedAtMs(savedStart);
+
+        const savedElapsed = await loadOrderElapsed(orderIdReal);
+        if (savedElapsed != null) setOrderElapsedMs(savedElapsed);
       } else {
+        // ✅ otros estados sí limpian start
         setOrderStartedAtMs(null);
         await clearOrderStart(orderIdReal);
       }
@@ -896,6 +1141,9 @@ export default function DetalleOrden() {
       if (isFinalLocal) {
         const savedFinish = await loadOrderFinish(orderIdReal);
         if (savedFinish) setOrderFinishedAtMs(savedFinish);
+
+        const savedElapsed = await loadOrderElapsed(orderIdReal);
+        if (savedElapsed != null) setOrderElapsedMs(savedElapsed);
       }
     } catch (error) {
       console.error("Error al obtener orden (SAP):", error?.response?.data || error);
@@ -914,6 +1162,9 @@ export default function DetalleOrden() {
 
         const savedFinish = await loadOrderFinish(cachedOrderId);
         if (savedFinish) setOrderFinishedAtMs(savedFinish);
+
+        const savedElapsed = await loadOrderElapsed(cachedOrderId);
+        if (savedElapsed != null) setOrderElapsedMs(savedElapsed);
 
         const pending = await loadPendingSign(cachedOrderId);
         if (pending?.checkedMap) setCheckedMap(pending.checkedMap);
@@ -1032,6 +1283,10 @@ export default function DetalleOrden() {
             await clearOrderFinish(orderId);
             setOrderFinishedAtMs(null);
 
+            // ✅ reiniciar elapsed para nueva corrida
+            await clearOrderElapsed(orderId);
+            setOrderElapsedMs(null);
+
             const startMs = Date.now();
             await saveOrderStart(orderId, startMs);
             setOrderStartedAtMs(startMs);
@@ -1134,7 +1389,7 @@ export default function DetalleOrden() {
     setFinalizeMode(true);
   };
 
-  // ✅ Guardar checks como pendiente de firma (0400)
+  // ✅ Guardar checks como pendiente de firma (0400) + ✅ CONFIRMACIONES + ✅ CONSUMIBLES
   const guardarPendienteDeFirma = async () => {
     const orderId = String(orden?.Orderid || id || "").trim();
     if (!orderId) return;
@@ -1145,10 +1400,26 @@ export default function DetalleOrden() {
       return;
     }
 
+    // Para confirmaciones necesitas cronómetro
+    if (!orderStartedAtMs) {
+      Alert.alert(
+        "Sin cronómetro",
+        "No se detectó el inicio del cronómetro. Inicia la orden para poder prorratear y mandar operaciones."
+      );
+      return;
+    }
+
     try {
       setSavingPending0400(true);
 
-      await savePendingSign(orderId, { checkedMap, savedAt: Date.now() });
+      const finishMs = Date.now();
+
+      // ✅ Congelar tiempo al pasar a 0400 (para poder visualizarlo después)
+      if (orderStartedAtMs) {
+        const elapsed = Math.max(0, finishMs - orderStartedAtMs);
+        await saveOrderElapsed(orderId, elapsed);
+        setOrderElapsedMs(elapsed);
+      }
 
       // ✅ Estatus 0400 (quita 0200)
       const payload0400 = {
@@ -1161,16 +1432,56 @@ export default function DetalleOrden() {
         Return: [],
       };
 
+      // ✅ Confirmaciones (operaciones) + ✅ ConfirmationMaterialSet (consumibles)
+      const opsAll = Array.isArray(orden?.operaciones) ? orden.operaciones : [];
+      const plantFallback = String(orden?.Plant || orden?.plant || orden?.centro || "").trim();
+
+      const confirmationPayload0400 = buildConfirmationPayloadFromSelectedOps({
+        orderId,
+        opsAll,
+        selectedIds,
+        startMs: orderStartedAtMs,
+        finishMs,
+        consumiblesRows: consumibles, // ✅ usa lo seleccionado en UI
+        plantFallback,
+      });
+
+      if (!confirmationPayload0400) {
+        Alert.alert("Error", "No se pudo armar el payload de confirmaciones de operaciones.");
+        return;
+      }
+
+      // ✅ si NO hay consumibles, igual mandamos confirmaciones (SAP lo acepta)
+      // si SÍ hay, se manda ConfirmationMaterialSet dentro del payload
+
+      // ✅ Guardar pendingSign con bandera para NO duplicar confirmaciones después
+      await savePendingSign(orderId, {
+        checkedMap,
+        savedAt: Date.now(),
+        confirmationsSent: true, // ✅ anti-duplicado
+        confirmationsFinishMs: finishMs,
+      });
+
       const net = await NetInfo.fetch();
       const isOnline = !!(net?.isConnected && net?.isInternetReachable !== false);
 
       if (!isOnline) {
+        // 1) Encolar estatus 0400
         await enqueueSap({
           type: "STATUS",
           orderId,
           endpoint: "/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet",
           payload: payload0400,
           dedupeKey: `STATUS:${orderId}`,
+        });
+
+        // 2) Encolar confirmaciones + consumibles (dedupe para no repetir)
+        await enqueueSap({
+          type: "CONFIRMATIONS",
+          orderId,
+          endpoint: "/api/odata/ZCS_CREATE_CONFIRMATION_SRV/ConfirmationHeaderSet",
+          payload: confirmationPayload0400,
+          dedupeKey: `CONFIRMATIONS:${orderId}:0400`,
         });
 
         setOrden((prev) => ({
@@ -1193,21 +1504,31 @@ export default function DetalleOrden() {
 
         Alert.alert(
           "Guardado (sin internet)",
-          "Se guardaron los checks como pendiente de firma. Cuando vuelva el internet se enviará el estatus 0400."
+          "Se guardó 0400 y se encolaron confirmaciones + consumibles. Cuando vuelva el internet se enviará todo."
         );
-      } else {
-        await api.post(`/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet`, payload0400);
 
-        setOrden((prev) => ({
-          ...(prev || {}),
-          estatus_code: "0400",
-          userstatus: "0400",
-          estatus_label: prev?.estatus_label || "PENDIENTE DE FIRMA",
-        }));
-
-        Alert.alert("Listo", "Se guardó como pendiente de firma (0400).");
+        setFinalizeMode(false);
+        return;
       }
 
+      // ===== ONLINE =====
+      // 1) Enviar estatus 0400
+      await api.post(`/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet`, payload0400);
+
+      // 2) Enviar confirmaciones + consumibles
+      await api.post(
+        `/api/odata/ZCS_CREATE_CONFIRMATION_SRV/ConfirmationHeaderSet`,
+        confirmationPayload0400
+      );
+
+      setOrden((prev) => ({
+        ...(prev || {}),
+        estatus_code: "0400",
+        userstatus: "0400",
+        estatus_label: prev?.estatus_label || "PENDIENTE DE FIRMA",
+      }));
+
+      Alert.alert("Listo", "Se guardó 0400 y se enviaron confirmaciones + consumibles.");
       setFinalizeMode(false);
     } catch (e) {
       console.error("Error guardando pendiente de firma:", e?.response?.data || e);
@@ -1228,6 +1549,14 @@ export default function DetalleOrden() {
       return;
     }
 
+    // ✅ Congelar elapsed también cuando vas a firmar (por si cambia el estatus / UI)
+    if (orderStartedAtMs) {
+      const elapsed = Math.max(0, Date.now() - orderStartedAtMs);
+      await saveOrderElapsed(orderId, elapsed);
+      setOrderElapsedMs(elapsed);
+    }
+
+    // OJO: aquí NO marcamos confirmationsSent; esto es solo “guardar progreso”
     await savePendingSign(orderId, { checkedMap, savedAt: Date.now() });
     setShowSignModal(true);
   };
@@ -1248,7 +1577,6 @@ export default function DetalleOrden() {
       return;
     }
 
-    // ✅ NUEVO: validar nombre/cargo
     if (!String(clienteNombre || "").trim()) {
       Alert.alert("Falta nombre", "Escribe el nombre del cliente (obligatorio).");
       return;
@@ -1281,7 +1609,13 @@ export default function DetalleOrden() {
       setSavingSignature(true);
 
       const finishMs = Date.now();
-      const totalMs = Math.max(0, finishMs - orderStartedAtMs);
+
+      // ✅ guardar elapsed “final” para visualización local (por si se va a 0400/preview)
+      const elapsedNow = Math.max(0, finishMs - orderStartedAtMs);
+      await saveOrderElapsed(orderId, elapsedNow);
+      setOrderElapsedMs(elapsedNow);
+
+      const totalMs = elapsedNow;
       const totalMin = msToMinutesRounded(totalMs);
 
       const opsAll = Array.isArray(orden?.operaciones) ? orden.operaciones : [];
@@ -1320,7 +1654,11 @@ export default function DetalleOrden() {
         currentCode,
       });
 
-      // ✅ Confirmaciones (operaciones)
+      // ✅ ConfirmationMaterialSet desde consumibles seleccionados
+      const plantFallback = String(orden?.Plant || orden?.plant || orden?.centro || "").trim();
+      const ConfirmationMaterialSet = normalizeConsumiblesToMaterialSet(consumibles, plantFallback);
+
+      // ✅ Confirmaciones (operaciones) + ✅ consumibles en el mismo payload
       const confirmationPayload = {
         Order: "S1",
         ConfirmationOrderSet: selectedOps.map((op, idx) => {
@@ -1353,38 +1691,43 @@ export default function DetalleOrden() {
           if (SubActivity) row.SubActivity = SubActivity;
           return row;
         }),
+        // ✅ AQUÍ VAN LOS CONSUMIBLES
+        ConfirmationMaterialSet,
         Return: [],
       };
 
       // ✅ Generar HTML + PDF (para preview + base64)
       const tipo = detectTipoMantenimiento(orden);
 
-      const html = buildMantenimientoHtml({
+      const html = await buildMantenimientoHtml({
         tipo,
         orden,
         operaciones: opsAll,
         checkedMap,
         signatureData,
 
-        // ✅ NUEVO: datos extra para el PDF (aunque tu builder aún no los use)
         clienteEmail: email,
         clienteNombre: String(clienteNombre || "").trim(),
         clienteCargo: String(clienteCargo || "").trim(),
         avisoCliente: String(avisoCliente || "").trim(),
         notaTecnico: String(notaTecnico || "").trim(),
 
-        // (paso siguiente)
-        coberturaAgr1,
+        coberturaTipo: coberturaTipo || null,
         consumibles,
+
+        // ✅ tiempos
+        startMs: orderStartedAtMs,
+        finishMs,
+        elapsedMs: Math.max(0, finishMs - orderStartedAtMs),
       });
 
-      setMantHtmlPreview(html);
+      setMantHtmlPreview(String(html || ""));
 
       let pdfBase64 = "";
       let pdfUri = null;
 
       try {
-        const { uri } = await Print.printToFileAsync({ html });
+        const { uri } = await Print.printToFileAsync({ html: String(html || "") });
         pdfUri = uri;
         setMantPdfUri(uri);
 
@@ -1419,7 +1762,6 @@ export default function DetalleOrden() {
         change0300WithPdfPayload,
         confirmationPayload,
 
-        // ✅ guardamos también info extra por si luego la quieres mandar o loguear
         clienteNombre: String(clienteNombre || "").trim(),
         clienteCargo: String(clienteCargo || "").trim(),
         avisoCliente: String(avisoCliente || "").trim(),
@@ -1461,7 +1803,7 @@ export default function DetalleOrden() {
     }
   };
 
-  // ✅ PASO 2: Continuar -> aquí sí se envía / encola y redirige
+  // ✅ PASO 2: Continuar -> aquí sí se envía / encola y redirige (sin duplicar confirmaciones si ya se mandaron en 0400)
   const continuarFinalizacionDespuesPreview = async () => {
     if (!pendingFinalize?.orderId) {
       setShowMantPreview(false);
@@ -1477,11 +1819,19 @@ export default function DetalleOrden() {
       const net = await NetInfo.fetch();
       const isOnline = !!(net?.isConnected && net?.isInternetReachable !== false);
 
+      // ✅ anti-duplicado: si en 0400 ya mandaste confirmaciones, no las vuelvas a mandar en 0300
+      let alreadySentConfirmations = false;
+      try {
+        const pending = await loadPendingSign(orderId);
+        alreadySentConfirmations = !!pending?.confirmationsSent;
+      } catch {}
+
       // ✅ logs solicitados (sin reventar consola por base64)
       logSapPayload("=== SAP PAYLOAD (CHANGE 0300 + PDF) ===", change0300WithPdfPayload, {
         stripBase64: true,
       });
-      logSapPayload("=== SAP PAYLOAD (CONFIRMATIONS) ===", confirmationPayload);
+      logSapPayload("=== SAP PAYLOAD (CONFIRMATIONS + CONSUMIBLES) ===", confirmationPayload);
+      console.log("CONFIRMATIONS alreadySent:", alreadySentConfirmations);
 
       if (!isOnline) {
         // UI local
@@ -1497,15 +1847,20 @@ export default function DetalleOrden() {
           dedupeKey: `STATUS:${orderId}`, // ✅ pisa el 0400 si existía
         });
 
+        // 2) encolar confirmaciones+consumibles SOLO si NO se mandaron en 0400
+        if (!alreadySentConfirmations) {
+          await enqueueSap({
+            type: "CONFIRMATIONS",
+            orderId,
+            endpoint: "/api/odata/ZCS_CREATE_CONFIRMATION_SRV/ConfirmationHeaderSet",
+            payload: confirmationPayload,
+            dedupeKey: `CONFIRMATIONS:${orderId}:0300`,
+          });
+        } else {
+          console.log("✅ Saltando enqueue confirmaciones (ya fueron enviadas en 0400)");
+        }
 
-        // 2) encolar: Confirmaciones (operaciones)
-        await enqueueSap({
-          type: "CONFIRMATIONS",
-          orderId,
-          endpoint: "/api/odata/ZCS_CREATE_CONFIRMATION_SRV/ConfirmationHeaderSet",
-          payload: confirmationPayload,
-        });
-
+        // ✅ ya quedó elapsed final guardado; ahora sí limpias el start
         await clearOrderStart(orderId);
         setOrderStartedAtMs(null);
 
@@ -1518,7 +1873,9 @@ export default function DetalleOrden() {
 
         Alert.alert(
           "Finalizado (offline)",
-          "Se mostró el reporte, se marcó 0300 local y se encoló: (0300+PDF) + confirmaciones."
+          alreadySentConfirmations
+            ? "Se encoló (0300+PDF). Confirmaciones+consumibles ya se habían enviado en 0400."
+            : "Se encoló: (0300+PDF) + confirmaciones+consumibles."
         );
 
         router.replace("/tecnico/ordenes");
@@ -1537,16 +1894,21 @@ export default function DetalleOrden() {
       // 1) ✅ UN SOLO POST: 0300 + PDF
       await api.post(`/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet`, change0300WithPdfPayload);
 
-      // 2) ✅ Confirmaciones (operaciones)
-      await api.post(
-        `/api/odata/ZCS_CREATE_CONFIRMATION_SRV/ConfirmationHeaderSet`,
-        confirmationPayload
-      );
+      // 2) ✅ Confirmaciones+consumibles SOLO si NO se mandaron en 0400
+      if (!alreadySentConfirmations) {
+        await api.post(
+          `/api/odata/ZCS_CREATE_CONFIRMATION_SRV/ConfirmationHeaderSet`,
+          confirmationPayload
+        );
+      } else {
+        console.log("✅ Saltando POST confirmaciones (ya fueron enviadas en 0400)");
+      }
 
       // UI local final
       await updateLocalOpsAsFinalizadas(orderId, selectedIds);
       await updateLocalOrderAsFinalizada0300(orderId, finishMs);
 
+      // ✅ ya quedó elapsed final guardado; ahora sí limpias el start
       await clearOrderStart(orderId);
       setOrderStartedAtMs(null);
 
@@ -1557,7 +1919,12 @@ export default function DetalleOrden() {
       setShowMantPreview(false);
       setPendingFinalize(null);
 
-      Alert.alert("Orden finalizada", "Se envió: (0300 + PDF) y confirmaciones.");
+      Alert.alert(
+        "Orden finalizada",
+        alreadySentConfirmations
+          ? "Se envió: (0300 + PDF). Confirmaciones+consumibles ya se habían enviado en 0400."
+          : "Se envió: (0300 + PDF) y confirmaciones+consumibles."
+      );
       router.replace("/tecnico/ordenes");
     } catch (error) {
       console.error("Error al finalizar (SAP):", error?.response?.data || error);
@@ -1602,11 +1969,18 @@ export default function DetalleOrden() {
               </Text>
             </TouchableOpacity>
           </View>
-        ) : isOrderEnProceso && orderStartedAtMs ? (
+        ) : showRunningTimer ? (
           <View style={styles.topActionBar}>
             <View style={styles.timerPill}>
               <Ionicons name="time-outline" size={16} color={FIORI.text} />
               <Text style={styles.timerText}>{msToHMS(nowTick - orderStartedAtMs)}</Text>
+            </View>
+          </View>
+        ) : showFrozenTimer ? (
+          <View style={styles.topActionBar}>
+            <View style={styles.timerPill}>
+              <Ionicons name="pause-circle-outline" size={16} color={FIORI.text} />
+              <Text style={styles.timerText}>{msToHMS(orderElapsedMs)}</Text>
             </View>
           </View>
         ) : null}
@@ -1666,11 +2040,18 @@ export default function DetalleOrden() {
             </Text>
           </TouchableOpacity>
         </View>
-      ) : isOrderEnProceso && orderStartedAtMs ? (
+      ) : showRunningTimer ? (
         <View style={styles.topActionBar}>
           <View style={styles.timerPill}>
             <Ionicons name="time-outline" size={16} color={FIORI.text} />
             <Text style={styles.timerText}>{msToHMS(nowTick - orderStartedAtMs)}</Text>
+          </View>
+        </View>
+      ) : showFrozenTimer ? (
+        <View style={styles.topActionBar}>
+          <View style={styles.timerPill}>
+            <Ionicons name="pause-circle-outline" size={16} color={FIORI.text} />
+            <Text style={styles.timerText}>{msToHMS(orderElapsedMs)}</Text>
           </View>
         </View>
       ) : null}
@@ -1716,12 +2097,6 @@ export default function DetalleOrden() {
                 orderId={String(orden?.Orderid || id || "").trim()}
               />
 
-              {/* ✅ PASO SIGUIENTE:
-                  Aquí después vamos a desplegar:
-                  - Consumibles (según cobertura)
-                  - Nota técnico
-                Por ahora dejamos nota técnico aquí para que ya quede integrado sin romper.
-              */}
               {finalizeMode ? (
                 <View style={[styles.panel, { marginTop: 12 }]}>
                   <Text style={styles.panelTitle}>Descripción breve del técnico</Text>
@@ -1748,8 +2123,10 @@ export default function DetalleOrden() {
                     }}
                   />
 
-                   <ConsumiblesFinalizacion
+                  {/* ✅ Consumibles filtrados por cobertura */}
+                  <ConsumiblesFinalizacion
                     plant={String(orden?.Plant || orden?.plant || orden?.centro || "").trim()}
+                    coberturaTipo={coberturaTipo || null}
                     FIORI={FIORI}
                     onChange={(rows) => setConsumibles(rows)}
                   />
@@ -1805,7 +2182,7 @@ export default function DetalleOrden() {
         clienteEmail={clienteEmail}
         setClienteEmail={setClienteEmail}
         isValidEmail={isValidEmail}
-        // ✅ NUEVO: nombre/cargo/aviso
+        // ✅ nombre/cargo/aviso
         clienteNombre={clienteNombre}
         setClienteNombre={setClienteNombre}
         clienteCargo={clienteCargo}
