@@ -183,22 +183,28 @@ async function saveOpState(orderId, state) {
 }
 
 /* ====================== Helpers generales ====================== */
-function parseSapDateToMs(val) {
+function parseSapDate(val) {
   if (!val) return null;
 
-  if (typeof val === "string" && val.includes("/Date(")) {
-    const ms = Number(val.replace("/Date(", "").replace(")/", ""));
-    return Number.isFinite(ms) ? ms : null;
+  if (typeof val === "string" && val.startsWith("/Date(")) {
+    const ms = parseInt(val.replace("/Date(", "").replace(")/", ""), 10);
+    if (!Number.isNaN(ms)) return new Date(ms);
+    return null;
   }
 
-  const t = new Date(val).getTime();
-  return Number.isFinite(t) ? t : null;
+  const d = new Date(val);
+  return isNaN(d.getTime()) ? null : d;
 }
 
 function fmtDMY(val) {
-  const ms = parseSapDateToMs(val);
-  if (!ms) return "—";
-  return new Date(ms).toLocaleDateString();
+  const d = parseSapDate(val);
+  if (!d) return "—";
+
+  const dd = String(d.getUTCDate()).padStart(2, "0");
+  const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const yyyy = d.getUTCFullYear();
+
+  return `${dd}/${mm}/${yyyy}`;
 }
 
 const opKey = (orderId, op) =>
@@ -1558,8 +1564,8 @@ export default function DetalleOrden() {
 
     // OJO: aquí NO marcamos confirmationsSent; esto es solo “guardar progreso”
     await savePendingSign(orderId, { checkedMap, savedAt: Date.now() });
-    setShowSignModal(true);
-  };
+      setShowSignModal(true);
+    };
 
   // ✅ PASO 1: Preparar finalización + generar preview (NO ENVÍA AÚN)
   const confirmarFinalizarConFirma = async () => {
@@ -1709,13 +1715,22 @@ export default function DetalleOrden() {
         clienteEmail: email,
         clienteNombre: String(clienteNombre || "").trim(),
         clienteCargo: String(clienteCargo || "").trim(),
+
+        tecnicoNombre: String(
+          user?.nombre ||
+          user?.name ||
+          user?.fullName ||
+          user?.displayName ||
+          user?.username ||
+          ""
+        ).trim(),
+
         avisoCliente: String(avisoCliente || "").trim(),
         notaTecnico: String(notaTecnico || "").trim(),
 
         coberturaTipo: coberturaTipo || null,
         consumibles,
 
-        // ✅ tiempos
         startMs: orderStartedAtMs,
         finishMs,
         elapsedMs: Math.max(0, finishMs - orderStartedAtMs),
@@ -1819,14 +1834,14 @@ export default function DetalleOrden() {
       const net = await NetInfo.fetch();
       const isOnline = !!(net?.isConnected && net?.isInternetReachable !== false);
 
-      // ✅ anti-duplicado: si en 0400 ya mandaste confirmaciones, no las vuelvas a mandar en 0300
+      // anti-duplicado: si en 0400 ya mandaste confirmaciones, no las vuelvas a mandar en 0300
       let alreadySentConfirmations = false;
       try {
         const pending = await loadPendingSign(orderId);
         alreadySentConfirmations = !!pending?.confirmationsSent;
       } catch {}
 
-      // ✅ logs solicitados (sin reventar consola por base64)
+      // logs solicitados (sin reventar consola por base64)
       logSapPayload("=== SAP PAYLOAD (CHANGE 0300 + PDF) ===", change0300WithPdfPayload, {
         stripBase64: true,
       });
@@ -1844,7 +1859,7 @@ export default function DetalleOrden() {
           orderId,
           endpoint: "/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet",
           payload: change0300WithPdfPayload,
-          dedupeKey: `STATUS:${orderId}`, // ✅ pisa el 0400 si existía
+          dedupeKey: `STATUS:${orderId}`, // pisa el 0400 si existía
         });
 
         // 2) encolar confirmaciones+consumibles SOLO si NO se mandaron en 0400
@@ -1857,10 +1872,10 @@ export default function DetalleOrden() {
             dedupeKey: `CONFIRMATIONS:${orderId}:0300`,
           });
         } else {
-          console.log("✅ Saltando enqueue confirmaciones (ya fueron enviadas en 0400)");
+          console.log("Saltando enqueue confirmaciones (ya fueron enviadas en 0400)");
         }
 
-        // ✅ ya quedó elapsed final guardado; ahora sí limpias el start
+        // ya quedó elapsed final guardado; ahora sí limpias el start
         await clearOrderStart(orderId);
         setOrderStartedAtMs(null);
 
@@ -1874,8 +1889,8 @@ export default function DetalleOrden() {
         Alert.alert(
           "Finalizado (offline)",
           alreadySentConfirmations
-            ? "Se encoló (0300+PDF). Confirmaciones+consumibles ya se habían enviado en 0400."
-            : "Se encoló: (0300+PDF) + confirmaciones+consumibles."
+            ? "Se encoló (Estatus 0300+PDF). Confirmaciones+consumibles ya se habían enviado en 0400."
+            : "Se encoló: (Estatus 0300+PDF) + confirmaciones+consumibles."
         );
 
         router.replace("/tecnico/ordenes");
@@ -1891,24 +1906,24 @@ export default function DetalleOrden() {
         return;
       }
 
-      // 1) ✅ UN SOLO POST: 0300 + PDF
+      // 1) UN SOLO POST: 0300 + PDF
       await api.post(`/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet`, change0300WithPdfPayload);
 
-      // 2) ✅ Confirmaciones+consumibles SOLO si NO se mandaron en 0400
+      // 2) Confirmaciones+consumibles SOLO si NO se mandaron en 0400
       if (!alreadySentConfirmations) {
         await api.post(
           `/api/odata/ZCS_CREATE_CONFIRMATION_SRV/ConfirmationHeaderSet`,
           confirmationPayload
         );
       } else {
-        console.log("✅ Saltando POST confirmaciones (ya fueron enviadas en 0400)");
+        console.log("Saltando POST confirmaciones (ya fueron enviadas en 0400)");
       }
 
       // UI local final
       await updateLocalOpsAsFinalizadas(orderId, selectedIds);
       await updateLocalOrderAsFinalizada0300(orderId, finishMs);
 
-      // ✅ ya quedó elapsed final guardado; ahora sí limpias el start
+      //  ya quedó elapsed final guardado; ahora sí limpias el start
       await clearOrderStart(orderId);
       setOrderStartedAtMs(null);
 
@@ -2099,15 +2114,15 @@ export default function DetalleOrden() {
 
               {finalizeMode ? (
                 <View style={[styles.panel, { marginTop: 12 }]}>
-                  <Text style={styles.panelTitle}>Descripción breve del técnico</Text>
+                  <Text style={styles.panelTitle}>Descripción general de las actividades</Text>
                   <Text style={{ color: FIORI.textMuted, fontWeight: "700", marginBottom: 8 }}>
-                    Se insertará en el PDF como “Detalle/Descripción de actividades”.
+                    Se insertará en el PDF.
                   </Text>
 
                   <TextInput
                     value={notaTecnico}
                     onChangeText={setNotaTecnico}
-                    placeholder="Ej: Se ajustó freno, limpieza general, lubricación..."
+                    placeholder="Insertar descripción"
                     placeholderTextColor={FIORI.textMuted}
                     multiline
                     style={{

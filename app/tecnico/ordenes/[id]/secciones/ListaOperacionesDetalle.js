@@ -287,7 +287,7 @@ export function ListaOperacionesAgrupadas({
                           color={allChecked || someChecked ? FIORI.brand : FIORI.textMuted}
                         />
                         <Text style={{ fontWeight: "900", color: FIORI.text, fontSize: 12 }}>
-                          Marcar todo ({checkedCount}/{opIds.length})
+                          Marcar todas las operaciones ({checkedCount}/{opIds.length})
                         </Text>
                       </TouchableOpacity>
                     </View>

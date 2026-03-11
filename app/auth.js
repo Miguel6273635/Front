@@ -20,8 +20,8 @@ export default function AuthCallbackScreen() {
 
     (async () => {
       try {
-        // ✅ Si Azure regresó access_denied (cancelación del usuario),
-        // no mostramos error: regresamos al login
+        // Si Azure regresó access_denied (cancelación del usuario),
+        // no se mostrará error: regresamos al login
         if (params?.error === "access_denied" && !params?.code) {
           await AsyncStorage.removeItem("sso_code_verifier");
           router.replace("/(auth)/login");

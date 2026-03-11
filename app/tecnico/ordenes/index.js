@@ -21,6 +21,7 @@ import * as ImagePicker from "expo-image-picker";
 import * as ImageManipulator from "expo-image-manipulator";
 import NetInfo from "@react-native-community/netinfo";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { useFocusEffect } from "@react-navigation/native";
 
 import {
   loadOrdenesTecnicoList,
@@ -612,6 +613,12 @@ export default function ListaOrdenesTecnico() {
     fetchOrdenes();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fetchOrdenes]);
+
+  useFocusEffect(
+    useCallback(() => {
+      fetchOrdenes({ isRefresh: true });
+    }, [fetchOrdenes])
+  );
 
   // ✅ filtrar en memoria
   useEffect(() => {

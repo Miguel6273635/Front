@@ -160,12 +160,29 @@ function normalizeNomina(raw) {
   return String(raw || "").trim();
 }
 
-// util: formato YYYY-MM-DD
-function theDateFormatter(setFecha, dateObj) {
-  const yyyy = dateObj.getFullYear();
-  const mm = String(dateObj.getMonth() + 1).padStart(2, "0");
-  const dd = String(dateObj.getDate()).padStart(2, "0");
-  setFecha(`${yyyy}-${mm}-${dd}`);
+/* ✅ Helpers fecha SAP (MISMA LÓGICA QUE INDEX/DETALLE) */
+function parseSapDate(value) {
+  if (!value) return null;
+
+  if (typeof value === "string" && value.startsWith("/Date(")) {
+    const ms = parseInt(value.replace("/Date(", "").replace(")/", ""), 10);
+    if (!Number.isNaN(ms)) return new Date(ms);
+    return null;
+  }
+
+  const d = new Date(value);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+function formatSapDateDMY(value) {
+  const d = parseSapDate(value);
+  if (!d) return "";
+
+  const dd = String(d.getUTCDate()).padStart(2, "0");
+  const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const yyyy = d.getUTCFullYear();
+
+  return `${dd}/${mm}/${yyyy}`;
 }
 
 export default function FormularioRiesgosScreen() {
@@ -540,8 +557,8 @@ export default function FormularioRiesgosScreen() {
         }
 
         const startIso = ord?.StartDate || ord?.start_date || ord?.Startdate || ord?.startDate;
-        const startDate = startIso ? new Date(startIso) : new Date();
-        if (!fecha) theDateFormatter(setFecha, startDate);
+        const fechaSap = startIso ? formatSapDateDMY(startIso) : formatSapDateDMY(new Date());
+        if (!fecha) setFecha(fechaSap);
 
         const ot = String(ord?.order_type || ord?.OrderType || ord?.orderType || "").trim();
         setRutinaria(esRutinaria(ot));

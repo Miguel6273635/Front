@@ -116,7 +116,7 @@ export const AuthProvider = ({ children }) => {
     setRefreshTimer(t);
   };
 
-  // ✅ carga sesión desde SQLite primero (y de AsyncStorage como fallback)
+  // carga sesión desde SQLite primero (y de AsyncStorage como fallback)
   useEffect(() => {
     const loadStorage = async () => {
       try {
@@ -137,7 +137,7 @@ export const AuthProvider = ({ children }) => {
         if (storedToken && storedUser) {
           setToken(storedToken);
           setUser(JSON.parse(storedUser));
-          await scheduleRefresh(); // ✅ programa refresco si ya hay sesión
+          await scheduleRefresh(); // programa refresco si ya hay sesión
         } else {
           setToken(null);
           setUser(null);
@@ -191,13 +191,13 @@ export const AuthProvider = ({ children }) => {
 
     const result = await WebBrowser.openAuthSessionAsync(authUrl, REDIRECT_URI);
 
-    // ✅ Si el usuario canceló/cerró el browser, limpiamos PKCE y regresamos "cancelled"
+    //  Si el usuario canceló/cerró el browser, limpiamos PKCE y regresamos "cancelled"
     if (result.type === "dismiss" || result.type === "cancel") {
       await AsyncStorage.removeItem("sso_code_verifier");
       return { ok: false, cancelled: true, type: result.type };
     }
 
-    // ✅ Cualquier otra cosa diferente a success, lo tratamos como fallo de sesión
+    //  Cualquier otra cosa diferente a success, lo tratamos como fallo de sesión
     if (result.type !== "success") {
       return { ok: false, cancelled: false, type: result.type };
     }
@@ -261,14 +261,14 @@ export const AuthProvider = ({ children }) => {
     const error = params?.error;
     const errorDescription = params?.error_description;
 
-    // ✅ CASO CLAVE: el usuario canceló en Microsoft y Azure devuelve access_denied
+    // CASO CLAVE: el usuario canceló en Microsoft y Azure devuelve access_denied
     if (error === "access_denied" && !code) {
       await AsyncStorage.removeItem("sso_code_verifier");
       router.replace("/(auth)/login");
       return { ok: false, cancelled: true };
     }
 
-    // ✅ Otros errores reales
+    // Otros errores reales
     if (error) {
       throw new Error(
         `SSO error: ${String(error)}${errorDescription ? ` - ${String(errorDescription)}` : ""}`
@@ -333,7 +333,7 @@ export const AuthProvider = ({ children }) => {
 
     await AsyncStorage.removeItem("sso_code_verifier");
 
-    await scheduleRefresh(); // ✅ programa refresco desde ya
+    await scheduleRefresh(); //  programa refresco desde ya
 
     router.replace(pickHomeByRole(u.rol_id));
     return { ok: true };
@@ -375,7 +375,7 @@ export const AuthProvider = ({ children }) => {
     router.replace("/(auth)/login");
   };
 
-  // ✅ Cuando la app regresa a foreground: si ya está por vencer y hay red, intenta refrescar
+  //  Cuando la app regresa a foreground: si ya está por vencer y hay red, intenta refrescar
   useEffect(() => {
     const sub = AppState.addEventListener("change", async (state) => {
       if (state !== "active") return;
@@ -390,7 +390,7 @@ export const AuthProvider = ({ children }) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
 
-  // ✅ Exponer auth a api.js SIN archivo extra (simple)
+  // Exponer auth a api.js SIN archivo extra (simple)
   useEffect(() => {
     globalThis.__AUTH__ = {
       ensureValidToken,

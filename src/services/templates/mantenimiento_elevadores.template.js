@@ -5,157 +5,551 @@ export const HTML_ELEVADORES = `<!DOCTYPE html>
   <title>Reporte de Mantenimiento - Elevadores</title>
   <style>
     * { box-sizing: border-box; }
-    body { font-family: Arial, sans-serif; margin: 0; padding: 0; color: #111; }
-    @page { size: letter; margin: 14mm 12mm 16mm 12mm; }
 
-    .pagina { width: 100%; }
-
-    .header { display:flex; align-items:center; justify-content:space-between; gap:12px; }
-    .logoBox { width: 160px; }
-    .logoBox img { width:100%; height:auto; object-fit:contain; display:block; }
-
-    .titleBox { flex:1; text-align:right; }
-    .titleBox .titulo { font-size:16px; font-weight:800; margin:0; }
-    .titleBox .sub { font-size:12px; margin-top:4px; color:#444; }
-
-    .divider { height:1px; background:#000; margin:10px 0; }
-
-    .coberturaBar{
-      border:1px solid #000; border-radius:10px; padding:8px 10px;
-      font-size:12px; font-weight:900; text-transform:uppercase;
-      margin-bottom:10px;
+    @page {
+      size: letter;
+      margin: 12mm 10mm 14mm 10mm;
     }
 
-    .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
-    .grid3 { display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; }
+    html, body {
+      margin: 0;
+      padding: 0;
+      font-family: Arial, sans-serif;
+      color: #111;
+      font-size: 10px;
+      line-height: 1.2;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
 
-    .field { border:1px solid #000; border-radius:10px; padding:8px; }
-    .label { font-size:11px; font-weight:800; margin-bottom:4px; }
-    .value { font-size:12px; font-weight:700; }
+    body {
+      counter-reset: page;
+      background: #fff;
+    }
 
-    .sectionTitle { font-size:13px; font-weight:900; margin:12px 0 8px; }
-    .box { border:1px solid #000; border-radius:10px; padding:10px; }
+    .pagina {
+      width: 100%;
+    }
 
-    .muted { color:#555; font-weight:700; }
+    /* ===== Header compacto ===== */
+    .header {
+      width: 100%;
+      display: table;
+      table-layout: fixed;
+      margin-bottom: 4px;
+    }
 
-    /* Operaciones */
-    .opsWrap { display:flex; flex-direction:column; gap:10px; }
-    .ubicCard { border:1px solid #D0D0D0; border-radius:10px; padding:10px; }
-    .ubicTitle { font-size:12px; font-weight:900; margin-bottom:8px; }
-    .ubicItems { display:flex; flex-direction:column; gap:6px; }
+    .headerLogo,
+    .headerDivider,
+    .headerText {
+      display: table-cell;
+      vertical-align: middle;
+    }
 
-    .opItem { display:flex; gap:8px; align-items:flex-start; }
-    .cb { width:18px; font-size:14px; line-height:18px; }
-    .opBody { flex:1; }
-    .opLine1 { font-size:11px; font-weight:800; }
-    .opStk { font-size:11px; color:#333; font-weight:700; margin-top:2px; }
+    .headerLogo {
+      width: 86px;
+    }
 
-    /* Evitar cortes feos */
-    .field, .box, .ubicCard, .firmaWrap, .consumiblesBox { page-break-inside: avoid; break-inside: avoid; }
+    .headerLogo img {
+      width: 78px;
+      height: auto;
+      display: block;
+      object-fit: contain;
+    }
 
-    /* Consumibles */
-    .consumiblesBox { margin-top:10px; }
+    .headerDivider {
+      width: 8px;
+      border-left: 1.5px solid #000;
+    }
 
-    /* Firma */
-    .firmaWrap { margin-top:10px; display:grid; grid-template-columns:1fr 1fr; gap:12px; }
-    .firmaBox { border:1px solid #000; border-radius:10px; padding:10px; min-height:130px; }
-    .firmaLabel { font-size:11px; font-weight:900; margin-bottom:8px; }
-    .firmaImg { width:100%; height:80px; object-fit:contain; border-top:1px dashed #999; padding-top:8px; }
-    .firmaEmpty { font-size:12px; color:#666; border-top:1px dashed #999; padding-top:10px; }
+    .headerText {
+      padding-left: 8px;
+    }
 
-    /* Footer simple (sin counters raros para evitar páginas en blanco) */
-    .footerNote { margin-top:10px; font-size:9px; color:#777; text-align:center; }
+    .empresa {
+      font-size: 8px;
+      font-weight: 700;
+      line-height: 1.1;
+    }
+
+    .titulo {
+      font-size: 14px;
+      font-weight: 900;
+      margin-top: 2px;
+      line-height: 1.05;
+    }
+
+    .subtitulo {
+      font-size: 9px;
+      color: #444;
+      font-weight: 700;
+      margin-top: 1px;
+      letter-spacing: 0.2px;
+    }
+
+    .divider {
+      height: 1px;
+      background: #000;
+      margin: 4px 0 6px 0;
+    }
+
+    .coberturaBar {
+      border: 1px solid #000;
+      border-radius: 5px;
+      padding: 4px 8px;
+      font-size: 9px;
+      font-weight: 900;
+      text-transform: uppercase;
+      margin-bottom: 6px;
+      text-align: center;
+      background: #F7F7F7;
+    }
+
+    /* ===== Layout general compacto ===== */
+    .table2,
+    .table3 {
+      width: 100%;
+      border-collapse: separate;
+      border-spacing: 4px 4px;
+      margin: 0 -4px;
+    }
+
+    .table2 td {
+      width: 50%;
+      vertical-align: top;
+    }
+
+    .table3 td {
+      width: 33.3333%;
+      vertical-align: top;
+    }
+
+    .field {
+      border: 1px solid #000;
+      border-radius: 5px;
+      padding: 5px 6px;
+      min-height: 34px;
+      width: 100%;
+      background: #fff;
+    }
+
+    .field.tight {
+      min-height: 30px;
+    }
+
+    .label {
+      font-size: 8px;
+      font-weight: 900;
+      margin-bottom: 2px;
+      text-transform: uppercase;
+      letter-spacing: 0.1px;
+    }
+
+    .value {
+      font-size: 10px;
+      font-weight: 700;
+      color: #111;
+      word-break: break-word;
+    }
+
+    .muted {
+      color: #555;
+      font-weight: 700;
+    }
+
+    .sectionTitle {
+      font-size: 10px;
+      font-weight: 900;
+      margin: 7px 0 4px 0;
+      text-transform: uppercase;
+      letter-spacing: 0.2px;
+    }
+
+    .box {
+      border: 1px solid #000;
+      border-radius: 5px;
+      padding: 6px;
+      background: #fff;
+    }
+
+    /* ===== Operaciones ===== */
+    .opsWrap {
+      display: block;
+    }
+
+    .ubicCard {
+      border: 1px solid #D0D0D0;
+      border-radius: 5px;
+      padding: 6px;
+      margin-bottom: 5px;
+      background: #fff;
+      page-break-inside: auto;
+      break-inside: auto;
+    }
+
+    .ubicCard:last-child {
+      margin-bottom: 0;
+    }
+
+    .ubicTitle {
+      font-size: 9px;
+      font-weight: 900;
+      margin-bottom: 4px;
+      text-transform: uppercase;
+      color: #111;
+    }
+
+    .ubicGrid {
+      display: table;
+      width: 100%;
+      table-layout: fixed;
+    }
+
+    .opsCol {
+      display: table-cell;
+      vertical-align: top;
+      width: 50%;
+    }
+
+    .opsCol:first-child {
+      padding-right: 6px;
+    }
+
+    .opsCol:last-child {
+      padding-left: 6px;
+    }
+
+    .opItem {
+      width: 100%;
+      display: table;
+      table-layout: fixed;
+      margin-bottom: 4px;
+      page-break-inside: avoid;
+      break-inside: avoid;
+    }
+
+    .opItem:last-child {
+      margin-bottom: 0;
+    }
+
+    .cbWrap,
+    .opBody {
+      display: table-cell;
+      vertical-align: top;
+    }
+
+    .cbWrap {
+      width: 16px;
+    }
+
+    .cb {
+      font-size: 11px;
+      line-height: 1;
+      display: inline-block;
+      margin-top: 1px;
+    }
+
+    .opBody {
+      padding-left: 2px;
+    }
+
+    .opCode {
+      font-size: 9px;
+      font-weight: 900;
+      color: #111;
+      line-height: 1.1;
+    }
+
+    .opDesc {
+      font-size: 8px;
+      color: #222;
+      margin-top: 1px;
+      line-height: 1.15;
+      word-break: break-word;
+    }
+
+    .opDescEmpty {
+      color: #777;
+      font-style: italic;
+    }
+
+    .opStk {
+      font-size: 8px;
+      color: #333;
+      margin-top: 1px;
+      line-height: 1.1;
+      word-break: break-word;
+    }
+
+    /* ===== Comentarios ===== */
+    .commentBlock {
+      white-space: pre-wrap;
+      word-break: break-word;
+      min-height: 18px;
+    }
+
+    .commentSpacer {
+      height: 5px;
+    }
+
+    /* ===== Consumibles ===== */
+    .consumiblesBox {
+      overflow: visible;
+      page-break-inside: auto;
+      break-inside: auto;
+    }
+
+    .consumiblesBox table {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+      font-size: 8px;
+    }
+
+    .consumiblesBox th,
+    .consumiblesBox td {
+      border: 1px solid #DDE6F2;
+      padding: 4px 4px;
+      vertical-align: top;
+      word-break: break-word;
+    }
+
+    .consumiblesBox th {
+      background: #F5F7FA;
+      text-align: center;
+      font-weight: 900;
+    }
+
+    /* ===== Firma ===== */
+    .firmaWrap {
+      width: 100%;
+      display: table;
+      table-layout: fixed;
+      border-spacing: 0;
+      margin-top: 6px;
+      page-break-inside: avoid;
+      break-inside: avoid;
+    }
+
+    .firmaCol {
+      display: table-cell;
+      vertical-align: top;
+      width: 50%;
+    }
+
+    .firmaCol.left {
+      padding-right: 4px;
+    }
+
+    .firmaCol.right {
+      padding-left: 4px;
+    }
+
+    .firmaBox {
+      border: 1px solid #000;
+      border-radius: 5px;
+      padding: 6px;
+      min-height: 72px;
+    }
+
+    .firmaLabel {
+      font-size: 8px;
+      font-weight: 900;
+      margin-bottom: 5px;
+      text-transform: uppercase;
+    }
+
+    .firmaImg {
+      width: 100%;
+      height: 34px;
+      object-fit: contain;
+      border-top: 1px dashed #999;
+      padding-top: 4px;
+      display: block;
+    }
+
+    .firmaEmpty {
+      font-size: 9px;
+      color: #666;
+      border-top: 1px dashed #999;
+      padding-top: 5px;
+    }
+
+    .firmaDataLine {
+      font-size: 8px;
+      margin-bottom: 3px;
+      word-break: break-word;
+      line-height: 1.15;
+    }
+
+    .firmaDataLine strong {
+      font-weight: 900;
+    }
+
+    /* ===== Footer ===== */
+    .footerFixed {
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      text-align: center;
+      font-size: 7px;
+      color: #666;
+      border-top: 1px solid #DDE6F2;
+      padding-top: 3px;
+    }
+
+    .pageNumber:before {
+      content: counter(page);
+    }
+
+    .pageCount:before {
+      content: counter(pages);
+    }
+
+    .footerNote {
+      margin-top: 5px;
+      font-size: 7px;
+      color: #777;
+      text-align: center;
+    }
+
+    /* ===== Reglas para evitar páginas vacías ===== */
+    .field {
+      page-break-inside: avoid;
+      break-inside: avoid;
+    }
+
+    .box,
+    .consumiblesBox,
+    .firmaWrap,
+    .ubicGrid {
+      page-break-inside: auto;
+      break-inside: auto;
+    }
   </style>
 </head>
 <body>
   <div class="pagina">
     <div class="header">
-      <div class="logoBox">
-        <img src="{{LOGO_DATA_URI}}" alt="Logo" />
+      <div class="headerLogo">
+        <img src="{{LOGO_DATA_URI}}" alt="Logo Mitsubishi" />
       </div>
-      <div class="titleBox">
-        <p class="titulo">REPORTE DE MANTENIMIENTO</p>
-        <p class="sub">ELEVADORES</p>
+      <div class="headerDivider"></div>
+      <div class="headerText">
+        <div class="empresa">MITSUBISHI ELECTRIC DE MÉXICO, S.A. DE C.V.</div>
+        <div class="titulo">REPORTE DE MANTENIMIENTO</div>
+        <div class="subtitulo">ELEVADORES</div>
       </div>
     </div>
 
     <div class="divider"></div>
 
-    <div class="coberturaBar">{{COBERTURA_TIPO}}</div>
+    <div class="coberturaBar">Cobertura: {{COBERTURA_TIPO}}</div>
 
-    <div class="grid2">
-      <div class="field">
-        <div class="label">ORDEN</div>
-        <div class="value">{{ORDERID}}</div>
-      </div>
-      <div class="field">
-        <div class="label">EQUIPO</div>
-        <div class="value">{{EQUIPMENT}}</div>
-      </div>
+    <table class="table2">
+      <tr>
+        <td>
+          <div class="field">
+            <div class="label">Orden</div>
+            <div class="value">{{ORDERID}}</div>
+          </div>
+        </td>
+        <td>
+          <div class="field">
+            <div class="label">Equipo</div>
+            <div class="value">{{EQUIPMENT}}</div>
+          </div>
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <div class="field">
+            <div class="label">Cliente / Empresa</div>
+            <div class="value">{{CLIENTE}}</div>
+          </div>
+        </td>
+        <td>
+          <div class="field">
+            <div class="label">Nombre del técnico</div>
+            <div class="value">{{TECNICO}}</div>
+          </div>
+        </td>
+      </tr>
+    </table>
 
-      <div class="field">
-        <div class="label">CLIENTE / EMPRESA</div>
-        <div class="value">{{CLIENTE}}</div>
-      </div>
-      <div class="field">
-        <div class="label">TÉCNICO</div>
-        <div class="value">{{TECNICO}}</div>
-      </div>
-    </div>
+    <table class="table3">
+      <tr>
+        <td>
+          <div class="field tight">
+            <div class="label">Fecha</div>
+            <div class="value">{{FECHA}}</div>
+          </div>
+        </td>
+        <td>
+          <div class="field tight">
+            <div class="label">Hora inicio</div>
+            <div class="value">{{HORA_INICIO}}</div>
+          </div>
+        </td>
+        <td>
+          <div class="field tight">
+            <div class="label">Hora fin</div>
+            <div class="value">{{HORA_FIN}}</div>
+          </div>
+        </td>
+      </tr>
+    </table>
 
-    <div style="margin-top:10px;" class="grid3">
-      <div class="field">
-        <div class="label">FECHA</div>
-        <div class="value">{{FECHA}}</div>
-      </div>
-      <div class="field">
-        <div class="label">HORA INICIO</div>
-        <div class="value">{{HORA_INICIO}}</div>
-      </div>
-      <div class="field">
-        <div class="label">HORA FIN</div>
-        <div class="value">{{HORA_FIN}}</div>
-      </div>
-    </div>
-
-    <div style="margin-top:10px;" class="field">
-      <div class="label">TIEMPO TOTAL</div>
+    <div class="field tight" style="margin-top: 4px;">
+      <div class="label">Tiempo total</div>
       <div class="value">{{TIEMPO_TOTAL}}</div>
     </div>
 
-    <div class="sectionTitle">OPERACIONES REALIZADAS</div>
+    <div class="sectionTitle">Operaciones realizadas</div>
     <div class="box">
       {{OPERACIONES_HTML}}
     </div>
 
-    <div class="sectionTitle">COMENTARIOS</div>
+    <div class="sectionTitle">Comentarios</div>
     <div class="box">
-      <div class="label">COMENTARIO DEL CLIENTE</div>
-      <div class="value muted" style="white-space:pre-wrap;">{{AVISO_CLIENTE}}</div>
-      <div style="height:8px;"></div>
-      <div class="label">ACTIVIDADES / DESCRIPCIÓN DEL TÉCNICO</div>
-      <div class="value muted" style="white-space:pre-wrap;">{{NOTA_TECNICO}}</div>
+      <div class="label">Comentario del cliente</div>
+      <div class="value muted commentBlock">{{AVISO_CLIENTE}}</div>
+
+      <div class="commentSpacer"></div>
+
+      <div class="label">Actividades / descripción del técnico</div>
+      <div class="value muted commentBlock">{{NOTA_TECNICO}}</div>
     </div>
 
-    <div class="sectionTitle">CONSUMIBLES</div>
+    <div class="sectionTitle">Consumibles</div>
     <div class="box consumiblesBox">
       {{CONSUMIBLES_HTML}}
     </div>
 
     <div class="firmaWrap">
-      <div class="firmaBox">
-        <div class="firmaLabel">FIRMA DEL CLIENTE</div>
-        {{FIRMA_CLIENTE_HTML}}
+      <div class="firmaCol left">
+        <div class="firmaBox">
+          <div class="firmaLabel">Firma del cliente</div>
+          {{FIRMA_CLIENTE_HTML}}
+        </div>
       </div>
-      <div class="firmaBox">
-        <div class="firmaLabel">NOMBRE / CARGO / CORREO</div>
-        <div class="value muted">Nombre: {{CLIENTE_NOMBRE}}</div>
-        <div class="value muted">Cargo: {{CLIENTE_CARGO}}</div>
-        <div class="value muted">Correo: {{CLIENTE_EMAIL}}</div>
+
+      <div class="firmaCol right">
+        <div class="firmaBox">
+          <div class="firmaLabel">Datos de conformidad</div>
+          <div class="firmaDataLine"><strong>Nombre:</strong> {{CLIENTE_NOMBRE}}</div>
+          <div class="firmaDataLine"><strong>Cargo:</strong> {{CLIENTE_CARGO}}</div>
+          <div class="firmaDataLine"><strong>Correo:</strong> {{CLIENTE_EMAIL}}</div>
+        </div>
       </div>
     </div>
 
     <div class="footerNote">Documento generado desde MitsuApp</div>
+  </div>
+
+  <div class="footerFixed">
+    Documento generado desde MitsuApp · Página <span class="pageNumber"></span> de <span class="pageCount"></span>
   </div>
 </body>
 </html>`;

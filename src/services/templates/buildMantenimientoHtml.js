@@ -1,10 +1,7 @@
-import { Asset } from "expo-asset";
+import { LOGO_DATA_URI } from "./logoBase64";
 import { HTML_ELEVADORES } from "./mantenimiento_elevadores.template";
 import { HTML_ESCALERAS } from "./mantenimiento_escaleras.template";
 import { renderOperacionesAgrupadasHtml } from "./renderOperacionesHtml";
-
-const TRANSPARENT_PX =
-  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=";
 
 const safeStr = (v) => String(v ?? "").trim();
 
@@ -31,27 +28,9 @@ function normalizeImgSrc(maybeDataUri) {
   return s;
 }
 
-async function getLogoDataUriFromAsset() {
-  try {
-    const asset = Asset.fromModule(require("../../../assets/imgDocs/logo.png"));
-    await asset.downloadAsync();
-    const localUri = asset.localUri || asset.uri;
-    if (!localUri) return TRANSPARENT_PX;
-
-    const FileSystem = await import("expo-file-system");
-    const base64 = await FileSystem.readAsStringAsync(localUri, {
-      encoding: FileSystem.EncodingType.Base64,
-    });
-
-    return `data:image/png;base64,${base64}`;
-  } catch (e) {
-    console.warn("[buildMantenimientoHtml] No se pudo cargar logo:", e?.message || e);
-    return TRANSPARENT_PX;
-  }
-}
-
 function formatDMY(dateOrSap) {
   if (!dateOrSap) return "—";
+
   // soporta "/Date(....)/"
   if (typeof dateOrSap === "string" && dateOrSap.startsWith("/Date(")) {
     const ms = parseInt(dateOrSap.replace("/Date(", "").replace(")/", ""), 10);
@@ -63,8 +42,10 @@ function formatDMY(dateOrSap) {
       return `${dd}/${mm}/${yy}`;
     }
   }
+
   const d = new Date(dateOrSap);
   if (Number.isNaN(d.getTime())) return "—";
+
   const dd = String(d.getDate()).padStart(2, "0");
   const mm = String(d.getMonth() + 1).padStart(2, "0");
   const yy = d.getFullYear();
@@ -75,6 +56,7 @@ function formatHM(ms) {
   if (!ms) return "—";
   const d = new Date(ms);
   if (Number.isNaN(d.getTime())) return "—";
+
   const hh = String(d.getHours()).padStart(2, "0");
   const mm = String(d.getMinutes()).padStart(2, "0");
   return `${hh}:${mm}`;
@@ -83,6 +65,7 @@ function formatHM(ms) {
 function formatElapsed(ms) {
   const n = Number(ms || 0);
   if (!n || n <= 0) return "—";
+
   const totalMin = Math.round(n / 60000);
   const h = Math.floor(totalMin / 60);
   const m = totalMin % 60;
@@ -93,14 +76,17 @@ function joinClienteNameFromAddress(addr) {
   const parts = [addr?.Name1, addr?.Name2, addr?.Name3, addr?.Name4]
     .map((x) => safeStr(x))
     .filter(Boolean);
+
   return parts.join(" ").replace(/\s+/g, " ").trim();
 }
 
 function buildFirmaHtml(signatureData) {
   const src = normalizeImgSrc(signatureData);
+
   if (!src) {
     return `<div class="firmaEmpty">Sin firma capturada</div>`;
   }
+
   return `<img class="firmaImg" src="${src}" alt="Firma del cliente" />`;
 }
 
@@ -113,10 +99,13 @@ function buildConsumiblesHtml(rows) {
 
   const tr = rows
     .map((r, idx) => {
-      const material = safe(r.material || r.Material || "");
-      const descripcion = safe(r.descripcion || r.Description || r.texto || "");
-      const cantidad = safe(r.cantidad ?? r.qty ?? "");
-      const unidad = safe(r.unidad || r.uom || "");
+      const material = safe(r.Material || r.material || "");
+      const descripcion = safe(
+        r.Descripcion || r.descripcion || r.Description || r.texto || ""
+      );
+      const cantidad = safe(r.Cantidad ?? r.cantidad ?? r.qty ?? "");
+      const unidad = safe(r.Unidad || r.unidad || r.uom || "");
+
       return `
         <tr>
           <td style="padding:6px;border:1px solid #DDE6F2;">${idx + 1}</td>
@@ -130,14 +119,14 @@ function buildConsumiblesHtml(rows) {
     .join("");
 
   return `
-    <table style="width:100%;border-collapse:collapse;font-size:11px;">
+    <table style="width:100%;border-collapse:collapse;font-size:11px;table-layout:fixed;">
       <thead>
         <tr>
-          <th style="padding:6px;border:1px solid #DDE6F2;background:#F5F7FA;">#</th>
-          <th style="padding:6px;border:1px solid #DDE6F2;background:#F5F7FA;">Material</th>
-          <th style="padding:6px;border:1px solid #DDE6F2;background:#F5F7FA;">Descripción</th>
-          <th style="padding:6px;border:1px solid #DDE6F2;background:#F5F7FA;">Cant.</th>
-          <th style="padding:6px;border:1px solid #DDE6F2;background:#F5F7FA;">U.M.</th>
+          <th style="width:7%;padding:6px;border:1px solid #DDE6F2;background:#F5F7FA;">#</th>
+          <th style="width:22%;padding:6px;border:1px solid #DDE6F2;background:#F5F7FA;">Material</th>
+          <th style="width:43%;padding:6px;border:1px solid #DDE6F2;background:#F5F7FA;">Descripción</th>
+          <th style="width:14%;padding:6px;border:1px solid #DDE6F2;background:#F5F7FA;">Cant.</th>
+          <th style="width:14%;padding:6px;border:1px solid #DDE6F2;background:#F5F7FA;">U.M.</th>
         </tr>
       </thead>
       <tbody>${tr}</tbody>
@@ -165,6 +154,9 @@ export async function buildMantenimientoHtml(args = {}) {
     clienteNombre = "",
     clienteCargo = "",
 
+    // datos técnico
+    tecnicoNombre = "",
+
     // textos
     avisoCliente = "",
     notaTecnico = "",
@@ -173,13 +165,16 @@ export async function buildMantenimientoHtml(args = {}) {
     coberturaTipo = "",
     consumibles = [],
 
-    // tiempos (ms)
+    // tiempos (ms) - soporta ambos nombres
     horaInicioMs = null,
     horaFinMs = null,
     tiempoTotalMs = null,
+    startMs = null,
+    finishMs = null,
+    elapsedMs = null,
   } = args;
 
-  const logoDataUri = await getLogoDataUriFromAsset();
+  const logoDataUri = LOGO_DATA_URI;
 
   const isEsc = String(tipo).toLowerCase().includes("escal");
   let html = isEsc ? HTML_ESCALERAS : HTML_ELEVADORES;
@@ -190,9 +185,18 @@ export async function buildMantenimientoHtml(args = {}) {
   const clienteFromAddr = address ? joinClienteNameFromAddress(address) : "";
   const cliente = safeStr(clienteFromAddr || orden?.cliente || "");
 
-  const tecnico = safeStr(orden?.tecnico || orden?.Tecnico || "");
+  const tecnico = safeStr(
+    tecnicoNombre ||
+      orden?.tecnico ||
+      orden?.Tecnico ||
+      orden?.tecnico_nombre ||
+      orden?.nombre_tecnico ||
+      ""
+  );
 
-  const fecha = formatDMY(orden?.start_date || orden?.fecha || orden?.Fecha);
+  const fecha = formatDMY(
+    orden?.start_date || orden?.fecha || orden?.Fecha || startMs || horaInicioMs
+  );
 
   const opsHtml = renderOperacionesAgrupadasHtml({
     orderid,
@@ -203,12 +207,16 @@ export async function buildMantenimientoHtml(args = {}) {
   const firmaHtml = buildFirmaHtml(signatureData);
   const consHtml = buildConsumiblesHtml(Array.isArray(consumibles) ? consumibles : []);
 
-  const hIni = formatHM(horaInicioMs);
-  const hFin = formatHM(horaFinMs);
-  const elapsed = formatElapsed(tiempoTotalMs || (horaInicioMs && horaFinMs ? (horaFinMs - horaInicioMs) : 0));
+  const inicioReal = startMs ?? horaInicioMs ?? null;
+  const finReal = finishMs ?? horaFinMs ?? null;
+  const totalReal =
+    elapsedMs ?? tiempoTotalMs ?? (inicioReal && finReal ? finReal - inicioReal : 0);
 
-  // reemplazos
-  html = html.replaceAll("{{LOGO_DATA_URI}}", normalizeImgSrc(logoDataUri) || TRANSPARENT_PX);
+  const hIni = formatHM(inicioReal);
+  const hFin = formatHM(finReal);
+  const elapsed = formatElapsed(totalReal);
+
+  html = html.replaceAll("{{LOGO_DATA_URI}}", logoDataUri);
   html = html.replaceAll("{{COBERTURA_TIPO}}", escapeHtml(coberturaTipo || "—"));
 
   html = html.replaceAll("{{ORDERID}}", escapeHtml(orderid || "—"));
