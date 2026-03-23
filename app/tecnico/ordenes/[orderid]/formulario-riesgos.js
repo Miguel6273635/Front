@@ -1,4 +1,3 @@
-// app/tecnico/ordenes/[orderid]/formulario-riesgos.js
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   View,
@@ -37,13 +36,15 @@ import { AREAS_TRABAJO, RIESGOS_POSIBLES } from "../../../../src/constants/catal
 import { subirPdfOrden } from "../../../../src/services/riesgosSap";
 import { buildTbmkyHtml } from "../../../../src/services/templates/tbmkyPdfTemplate";
 
-// ✅ OFFLINE helpers (YA LOS TIENES EN TU PROYECTO)
+// ✅ OFFLINE helpers
 import { isOnline } from "../../../../src/offline/net";
 import { upsertSapQueueItem } from "../../../../src/offline/sapQueue";
 import {
   setLocalStatusPatch,
   patchCacheOrdenesTecnicoList,
+  patchCacheOrdenTecnicoDetail,
 } from "../../../../src/offline/ordenesTecnicoLocalPatch";
+import { loadOrdenTecnicoDetail } from "../../../../src/offline/ordenesTecnicoCache";
 
 // ===== Paleta Fiori / Horizon =====
 const FIORI = {
@@ -62,9 +63,9 @@ const FIORI = {
   success: "#16A34A",
 };
 
-// ✅ IMPORTANTE: ajusta a tu endpoint real si es diferente
-const TBMKY_PDF_ENDPOINT = "/api/riesgos/tbmky/pdf";
-const TBMKY_STATUS_ENDPOINT = "/api/ordenes/status";
+// ✅ RUTA REAL EXISTENTE EN TU BACKEND
+const TBMKY_SUBMIT_ENDPOINT = "/api/formulario-riesgos/submit";
+const TBMKY_JSON_KEY = (orderId) => `tbmky_json_${String(orderId || "").trim()}`;
 
 // ===== Listas locales (síntomas y EPP) =====
 const sintomasIniciales = [
@@ -160,7 +161,7 @@ function normalizeNomina(raw) {
   return String(raw || "").trim();
 }
 
-/* ✅ Helpers fecha SAP (MISMA LÓGICA QUE INDEX/DETALLE) */
+/* ✅ Helpers fecha SAP */
 function parseSapDate(value) {
   if (!value) return null;
 
@@ -185,17 +186,64 @@ function formatSapDateDMY(value) {
   return `${dd}/${mm}/${yyyy}`;
 }
 
+/* ✅ Helpers offline */
+function safeStr(v) {
+  return String(v ?? "").trim();
+}
+
+function mapCachedOrSapTipoEquipo(ord) {
+  const raw = [
+    ord?.tipo_equipo,
+    ord?.EquipmentType,
+    ord?.equipment_type,
+    ord?.equipo_tipo,
+    ord?.tipo,
+    ord?.Type,
+    ord?.DescripcionEquipo,
+    ord?.description,
+    ord?.short_text,
+  ]
+    .map((x) => safeStr(x))
+    .filter(Boolean)
+    .join(" | ")
+    .toLowerCase();
+
+  if (raw.includes("escal")) {
+    return { tipo: "escaleras", label: "ESCALERAS" };
+  }
+  return { tipo: "elevadores", label: "ELEVADORES" };
+}
+
+function getCachedNominasFromPartners(partners = []) {
+  const z1 = normalizeNomina(pickPartnerOldByRole(partners, "Z1"));
+  const z2 = normalizeNomina(pickPartnerOldByRole(partners, "Z2"));
+  return { z1, z2 };
+}
+
+async function saveTbmkyJsonOffline(orderId, payload) {
+  try {
+    await AsyncStorage.setItem(TBMKY_JSON_KEY(orderId), JSON.stringify(payload));
+    return true;
+  } catch (e) {
+    console.log("[TBMKY] error guardando JSON offline:", e);
+    return false;
+  }
+}
+
 export default function FormularioRiesgosScreen() {
   const params = useLocalSearchParams();
   const orderid = String(params.orderid ?? params.id ?? "");
 
   const { user, ensureValidToken } = useAuth();
 
-  const userKey = useMemo(() => {
-    return user?.email || user?.User || user?.username || user?.sub || user?.id || "unknown";
+  // ✅ MISMA KEY QUE LA LISTA DE ÓRDENES
+  const userEmail = useMemo(() => {
+    return user?.correo || user?.email || user?.username || null;
   }, [user]);
 
   const scrollRef = useRef(null);
+  const signatureRef = useRef(null);
+
   const scrollToTop = () => {
     requestAnimationFrame(() => {
       scrollRef.current?.scrollTo?.({ y: 0, animated: true });
@@ -290,7 +338,7 @@ export default function FormularioRiesgosScreen() {
   const toBase64 = (data) => (data || "").replace(/^data:image\/\w+;base64,/, "");
   const toDataUrl = (b64) => `data:image/png;base64,${b64}`;
   const sanitize = (s) => (s || "").replace(/\s/g, "");
-  const EQUIPO_TIPO_URL_BASE = "https://my-node-api-qas-01.cfapps.us10-001.hana.ondemand.com";
+  const EQUIPO_TIPO_URL_BASE = "https://my-node-api-pro-01.cfapps.us10-001.hana.ondemand.com";
 
   function mapEqartToTipo(eqartRaw) {
     const v = String(eqartRaw || "").toUpperCase().trim();
@@ -317,12 +365,26 @@ export default function FormularioRiesgosScreen() {
   }
 
   const [modalFirma, setModalFirma] = useState({ open: false, tipo: null });
+
   const signatureCss = `
-    .m-signature-pad { box-shadow: none; border: 0; }
-    .m-signature-pad--body { border: 1px solid #e5e7eb; }
-    .m-signature-pad--footer { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
-    .m-signature-pad--footer .button { background: ${FIORI.accent}; color: #fff; border: 0; border-radius: 8px; padding: 8px 12px; }
-    .m-signature-pad--footer .button.clear { background: #6b7280; }
+    .m-signature-pad {
+      box-shadow: none;
+      border: none;
+    }
+    .m-signature-pad--body {
+      border: none;
+    }
+    .m-signature-pad--footer {
+      display: none;
+    }
+    body, html {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      background: #fff;
+    }
   `;
 
   const areaOptions = useMemo(() => AREAS_TRABAJO.map((a) => ({ label: a.label, value: a.id })), []);
@@ -507,12 +569,12 @@ export default function FormularioRiesgosScreen() {
   }, [DRAFT_KEY, orderid]);
 
   // ==========================
-  // ✅ 2) Cargar SAP + ToAddresses + ToPartners
+  // ✅ 2) Cargar offline primero, luego SAP si hay red
   // ==========================
   useEffect(() => {
     let alive = true;
 
-    const loadSap = async () => {
+    const loadData = async () => {
       try {
         setLoading(true);
 
@@ -521,15 +583,69 @@ export default function FormularioRiesgosScreen() {
           return;
         }
 
+        // ==========================
+        // OFFLINE primero
+        // ==========================
+        const cached = await loadOrdenTecnicoDetail(orderid);
+        const cachedData = cached?.data || null;
+
+        if (alive && cachedData?.Orderid) {
+          setOrden(cachedData);
+          setCentroTrabajo("TLP1");
+
+          const fechaCached = formatSapDateDMY(cachedData?.start_date || cachedData?.StartDate || new Date());
+          if (!fecha) setFecha(fechaCached);
+
+          const otCached = String(cachedData?.order_type || cachedData?.OrderType || cachedData?.orderType || "").trim();
+          setRutinaria(esRutinaria(otCached));
+
+          setTrabajadores((prev) => {
+            const copia = [...prev];
+            const existing = copia[0]?.nombre?.trim?.();
+            if (existing) return copia;
+
+            copia[0] = {
+              nombre: cachedData?.tecnico_nombre || cachedData?.nombre || user?.nombre || user?.name || "",
+              cargo: cachedData?.tecnico_cargo || user?.puesto || user?.rol || "Técnico",
+            };
+            return copia;
+          });
+
+          if (safeStr(cachedData?.cliente)) setRazonSocial(cachedData.cliente);
+          if (safeStr(cachedData?.direccion)) setDireccion(cachedData.direccion);
+
+          const { z1, z2 } = getCachedNominasFromPartners(cachedData?.partners || []);
+          setNominaTecnico((prev) => (safeStr(prev) ? prev : z1));
+          setNominaAuxiliar((prev) => (safeStr(prev) ? prev : z2));
+
+          const tipoLocal = mapCachedOrSapTipoEquipo(cachedData);
+          setEquipoSeleccionado(tipoLocal.tipo);
+          setEquipoLabel(tipoLocal.label);
+        }
+
+        // ==========================
+        // Si no hay internet, nos quedamos con offline
+        // ==========================
+        const onlineNow = await isOnline();
+
+        if (!onlineNow) {
+          if (!cachedData?.Orderid) {
+            Alert.alert("Error", "No se pudieron cargar los datos offline de la orden.");
+          }
+          return;
+        }
+
+        // ==========================
+        // ONLINE: refresca desde SAP
+        // ==========================
         const sapRes = await api.get(`/api/ordenes/sap/${orderid}`);
         const ord = sapRes?.data || null;
 
-        if (!alive) return;
+        if (!alive || !ord) return;
 
         setOrden(ord);
         setCentroTrabajo("TLP1");
 
-        // ✅ Determinar tipo de equipo
         try {
           const equipmentMx = ord?.Equipment || ord?.equipment || ord?.EQUIPMENT || "";
           if (equipmentMx) {
@@ -537,7 +653,7 @@ export default function FormularioRiesgosScreen() {
 
             const info = await fetchTipoEquipoFromEquipment(equipmentMx);
 
-            if (info?.tipo) {
+            if (info?.tipo && alive) {
               setEquipoSeleccionado(info.tipo);
               setEquipoLabel(info.label);
 
@@ -548,12 +664,21 @@ export default function FormularioRiesgosScreen() {
               });
             }
           } else {
-            console.log("[TBMKY] Orden sin Equipment (MX...) para consultar tipo.");
+            const tipoFallback = mapCachedOrSapTipoEquipo(ord);
+            if (alive) {
+              setEquipoSeleccionado(tipoFallback.tipo);
+              setEquipoLabel(tipoFallback.label);
+            }
           }
         } catch (e) {
+          const tipoFallback = mapCachedOrSapTipoEquipo(ord);
+          if (alive) {
+            setEquipoSeleccionado(tipoFallback.tipo);
+            setEquipoLabel(tipoFallback.label);
+          }
           console.log("[TBMKY] Error consultando tipo de equipo:", e?.message || e);
         } finally {
-          setLoadingEquipoTipo(false);
+          if (alive) setLoadingEquipoTipo(false);
         }
 
         const startIso = ord?.StartDate || ord?.start_date || ord?.Startdate || ord?.startDate;
@@ -575,7 +700,7 @@ export default function FormularioRiesgosScreen() {
           return copia;
         });
 
-        // ✅ ToAddresses (2do nodo)
+        // ✅ ToAddresses
         try {
           const addrRes = await api.get(
             `/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet('${orderid}')/ToAddresses?$format=json`
@@ -584,7 +709,7 @@ export default function FormularioRiesgosScreen() {
           const results = addrRes?.data?.d?.results || [];
           const node = results?.[1] || null;
 
-          if (node) {
+          if (node && alive) {
             const rs = buildRazonSocial(node);
             const dir = buildDireccion(node);
 
@@ -603,17 +728,24 @@ export default function FormularioRiesgosScreen() {
                 PostCode1: node?.PostCode1,
               });
             }
-          } else {
+          } else if (!node && alive) {
+            if (safeStr(cachedData?.cliente)) setRazonSocial(cachedData.cliente);
+            if (safeStr(cachedData?.direccion)) setDireccion(cachedData.direccion);
+
             if (!addrLogOnceRef.current) {
               addrLogOnceRef.current = true;
               console.log("[TBMKY] ToAddresses sin 2do nodo. results length =", results?.length || 0);
             }
           }
         } catch (e) {
+          if (alive) {
+            if (safeStr(cachedData?.cliente)) setRazonSocial(cachedData.cliente);
+            if (safeStr(cachedData?.direccion)) setDireccion(cachedData.direccion);
+          }
           console.log("[TBMKY] ToAddresses error:", e?.response?.data || e);
         }
 
-        // ✅ ToPartners (Z1 técnico, Z2 auxiliar)
+        // ✅ ToPartners
         try {
           const partRes = await api.get(
             `/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet('${orderid}')/ToPartners?$format=json`
@@ -624,22 +756,71 @@ export default function FormularioRiesgosScreen() {
           const z1 = normalizeNomina(pickPartnerOldByRole(results, "Z1"));
           const z2 = normalizeNomina(pickPartnerOldByRole(results, "Z2"));
 
-          setNominaTecnico((prev) => (String(prev || "").trim() ? prev : z1));
-          setNominaAuxiliar((prev) => (String(prev || "").trim() ? prev : z2));
+          if (alive) {
+            setNominaTecnico((prev) => (String(prev || "").trim() ? prev : z1));
+            setNominaAuxiliar((prev) => (String(prev || "").trim() ? prev : z2));
+          }
 
           console.log("[TBMKY] ToPartners nómina:", { z1, z2, len: results.length });
         } catch (e) {
+          if (alive) {
+            const { z1, z2 } = getCachedNominasFromPartners(cachedData?.partners || []);
+            setNominaTecnico((prev) => (String(prev || "").trim() ? prev : z1));
+            setNominaAuxiliar((prev) => (String(prev || "").trim() ? prev : z2));
+          }
           console.log("[TBMKY] ToPartners error:", e?.response?.data || e?.message || e);
         }
       } catch (err) {
-        console.error("Error cargando SAP:", err?.response?.data || err);
-        Alert.alert("Error", "No se pudieron cargar los datos de SAP.");
+        console.error("Error cargando datos TBMKY:", err?.response?.data || err);
+
+        try {
+          const cached = await loadOrdenTecnicoDetail(orderid);
+          const cachedData = cached?.data || null;
+
+          if (alive && cachedData?.Orderid) {
+            setOrden(cachedData);
+            setCentroTrabajo("TLP1");
+
+            const fechaCached = formatSapDateDMY(cachedData?.start_date || cachedData?.StartDate || new Date());
+            if (!fecha) setFecha(fechaCached);
+
+            const otCached = String(cachedData?.order_type || cachedData?.OrderType || cachedData?.orderType || "").trim();
+            setRutinaria(esRutinaria(otCached));
+
+            setTrabajadores((prev) => {
+              const copia = [...prev];
+              const existing = copia[0]?.nombre?.trim?.();
+              if (existing) return copia;
+
+              copia[0] = {
+                nombre: cachedData?.tecnico_nombre || cachedData?.nombre || user?.nombre || user?.name || "",
+                cargo: cachedData?.tecnico_cargo || user?.puesto || user?.rol || "Técnico",
+              };
+              return copia;
+            });
+
+            if (safeStr(cachedData?.cliente)) setRazonSocial(cachedData.cliente);
+            if (safeStr(cachedData?.direccion)) setDireccion(cachedData.direccion);
+
+            const { z1, z2 } = getCachedNominasFromPartners(cachedData?.partners || []);
+            setNominaTecnico((prev) => (safeStr(prev) ? prev : z1));
+            setNominaAuxiliar((prev) => (safeStr(prev) ? prev : z2));
+
+            const tipoLocal = mapCachedOrSapTipoEquipo(cachedData);
+            setEquipoSeleccionado(tipoLocal.tipo);
+            setEquipoLabel(tipoLocal.label);
+          } else {
+            Alert.alert("Error", "No se pudieron cargar los datos de la orden.");
+          }
+        } catch {
+          Alert.alert("Error", "No se pudieron cargar los datos de la orden.");
+        }
       } finally {
         if (alive) setLoading(false);
       }
     };
 
-    loadSap();
+    loadData();
     return () => {
       alive = false;
     };
@@ -1010,7 +1191,7 @@ export default function FormularioRiesgosScreen() {
         firmaTecnico,
 
         equipment: orden?.Equipment || orden?.equipment || "",
-        razon_social: razonSocial || orden?.razon_social || orden?.partner_name || "",
+        razon_social: razonSocial || orden?.razon_social || orden?.partner_name || orden?.cliente || "",
         direccion: direccion || orden?.direccion || orden?.partner_address || "",
         order_type: orden?.order_type || orden?.OrderType || "",
       };
@@ -1027,50 +1208,63 @@ export default function FormularioRiesgosScreen() {
       const online = await isOnline();
 
       if (!online) {
+        const newStatus = "0200";
+
+        // ✅ guardar JSON offline
+        await saveTbmkyJsonOffline(payload.orderid, payload);
+
+        // ✅ patch local lista + detalle
+        try {
+          await setLocalStatusPatch(userEmail, payload.orderid, newStatus);
+          await patchCacheOrdenesTecnicoList(userEmail, payload.orderid, newStatus);
+          await patchCacheOrdenTecnicoDetail(payload.orderid, newStatus);
+        } catch (e) {
+          console.log("[TBMKY] error patch local offline:", e);
+        }
+
+        // ✅ encolar UNA sola petición real al backend
         await upsertSapQueueItem({
-          type: "PDF",
+          type: "GENERIC",
           orderId: payload.orderid,
-          endpoint: TBMKY_PDF_ENDPOINT,
+          endpoint: TBMKY_SUBMIT_ENDPOINT,
           method: "POST",
           payload: {
             orderId: payload.orderid,
             pdfBase64: String(base64Pdf).trim(),
             fileName,
           },
-          key: `tbmky_pdf:${payload.orderid}`,
+          dedupeKey: `TBMKY_SUBMIT:${payload.orderid}`,
         });
-
-        try {
-          const newStatus = "0200";
-          await setLocalStatusPatch(userKey, payload.orderid, newStatus);
-          await patchCacheOrdenesTecnicoList(userKey, payload.orderid, newStatus);
-
-          await upsertSapQueueItem({
-            type: "STATUS",
-            orderId: payload.orderid,
-            endpoint: TBMKY_STATUS_ENDPOINT,
-            method: "POST",
-            payload: { orderId: payload.orderid, estatus: newStatus },
-            key: `status:${payload.orderid}`,
-          });
-        } catch {}
 
         try {
           await AsyncStorage.removeItem(DRAFT_KEY);
         } catch {}
 
-        Alert.alert("Guardado offline ✅", "Se generó el PDF y quedó en cola para enviarse cuando vuelva el internet.", [
-          { text: "Opciones de PDF", onPress: openPdfModal },
-        ]);
+        Alert.alert(
+          "Guardado offline ✅",
+          "Se guardó el TBM/KY, cambió a PROCESO y se enviará cuando vuelva el internet.",
+          [
+            {
+              text: "Opciones de PDF",
+              onPress: openPdfModal,
+            },
+            {
+              text: "Ir a órdenes",
+              onPress: () => router.replace("/tecnico/ordenes"),
+            },
+          ]
+        );
         return;
       }
 
-      // 3) ONLINE: enviar a SAP
+      // 3) ONLINE: enviar a SAP por la ruta real del backend
       let respSubmit;
       try {
         const ok = await ensureValidToken?.();
         if (ok === false) throw new Error("Token inválido");
 
+        // ✅ esto sigue funcionando como antes:
+        // backend cambia 0200 + adjunta PDF
         respSubmit = await subirPdfOrden({
           orderId: payload.orderid,
           pdfBase64: String(base64Pdf).trim(),
@@ -1095,12 +1289,26 @@ export default function FormularioRiesgosScreen() {
         return;
       }
 
+      // ✅ patch local también en online
+      try {
+        await saveTbmkyJsonOffline(payload.orderid, payload);
+        await setLocalStatusPatch(userEmail, payload.orderid, "0200");
+        await patchCacheOrdenesTecnicoList(userEmail, payload.orderid, "0200");
+        await patchCacheOrdenTecnicoDetail(payload.orderid, "0200");
+      } catch (e) {
+        console.log("[TBMKY] error patch online:", e);
+      }
+
       try {
         await AsyncStorage.removeItem(DRAFT_KEY);
       } catch {}
 
       Alert.alert("Listo", `TBM/KY enviado a SAP ✅\nOrden #${payload.orderid}.`, [
         { text: "Opciones de PDF", onPress: openPdfModal },
+        {
+          text: "Ir a órdenes",
+          onPress: () => router.replace("/tecnico/ordenes"),
+        },
       ]);
     } catch (e) {
       console.error("TBMKY error:", e?.response?.data || e);
@@ -1123,7 +1331,6 @@ export default function FormularioRiesgosScreen() {
     <View style={{ flex: 1, backgroundColor: FIORI.pageBg }}>
       <Header title="Predicción de riesgos (TBM/KY)" />
 
-      {/* Stepper */}
       <View style={styles.stepper}>
         {[1, 2, 3, 4].map((n) => {
           const active = paso === n;
@@ -1151,7 +1358,6 @@ export default function FormularioRiesgosScreen() {
         keyboardVerticalOffset={Platform.OS === "ios" ? 90 : 0}
       >
         <ScrollView ref={scrollRef} contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
-          {/* ✅ Encabezado SOLO en Paso 1 */}
           {paso === 1 && (
             <View style={styles.headerCard}>
               <View style={styles.headerRow}>
@@ -1171,7 +1377,7 @@ export default function FormularioRiesgosScreen() {
                 <HeaderRow label="Equipo SAP" value={orden?.Equipment || orden?.equipment || "—"} />
                 <HeaderRow
                   label="Razón social"
-                  value={razonSocial || orden?.razon_social || orden?.partner_name || "—"}
+                  value={razonSocial || orden?.razon_social || orden?.partner_name || orden?.cliente || "—"}
                   multiline
                 />
                 <HeaderRow
@@ -1210,7 +1416,6 @@ export default function FormularioRiesgosScreen() {
             </View>
           )}
 
-          {/* PASO 1 */}
           {paso === 1 && (
             <View>
               <SectionTitle title="1. Identificación del área de trabajo" />
@@ -1354,7 +1559,6 @@ export default function FormularioRiesgosScreen() {
             </View>
           )}
 
-          {/* PASO 2 */}
           {paso === 2 && (
             <View>
               <SectionTitle title="2. Chequeo individual de salud y EPP" />
@@ -1439,12 +1643,10 @@ export default function FormularioRiesgosScreen() {
             </View>
           )}
 
-          {/* PASO 3 */}
           {paso === 3 && (
             <View>
               <SectionTitle title="3. Análisis de riesgos (guiado)" />
 
-              {/* TAREA 1 */}
               <View style={styles.taskCard}>
                 <Text style={styles.taskTitle}>Tarea 1 — Marca riesgos presentes (mínimo 3)</Text>
                 <Text style={styles.taskHint}>
@@ -1470,7 +1672,6 @@ export default function FormularioRiesgosScreen() {
                 </View>
               </View>
 
-              {/* TAREA 2 */}
               {riesgosSeleccionadosIds.length >= 3 ? (
                 <View style={styles.taskCard}>
                   <Text style={styles.taskTitle}>Tarea 2 — Elige TOP 1 / TOP 2 / TOP 3 (sin repetir)</Text>
@@ -1539,7 +1740,6 @@ export default function FormularioRiesgosScreen() {
                 </Text>
               )}
 
-              {/* TAREA 3 + 4 */}
               {topAplicadoOk ? (
                 <>
                   <View style={styles.taskCard}>
@@ -1716,7 +1916,6 @@ export default function FormularioRiesgosScreen() {
             </View>
           )}
 
-          {/* PASO 4 */}
           {paso === 4 && (
             <View>
               <SectionTitle title="4. Firma del técnico" />
@@ -1761,7 +1960,6 @@ export default function FormularioRiesgosScreen() {
         </ScrollView>
       </KeyboardAvoidingView>
 
-      {/* Controles de paso */}
       <View style={styles.footerNav}>
         {paso > 1 && (
           <TouchableOpacity onPress={goPrev} style={[styles.navBtn, styles.navBtnSecondary]} disabled={lockedAfterPdf}>
@@ -1794,8 +1992,11 @@ export default function FormularioRiesgosScreen() {
         )}
       </View>
 
-      {/* Modal de firma */}
-      <Modal visible={modalFirma.open} animationType="slide" onRequestClose={() => setModalFirma({ open: false, tipo: null })}>
+      <Modal
+        visible={modalFirma.open}
+        animationType="slide"
+        onRequestClose={() => setModalFirma({ open: false, tipo: null })}
+      >
         <View style={{ flex: 1, backgroundColor: "#fff" }}>
           <View style={styles.modalHeader}>
             <Text style={styles.modalHeaderTitle}>Firma del técnico</Text>
@@ -1804,21 +2005,55 @@ export default function FormularioRiesgosScreen() {
             </TouchableOpacity>
           </View>
 
-          <View style={{ flex: 1 }}>
+          <View style={styles.signaturePadWrap}>
             <Signature
+              ref={signatureRef}
               onOK={(val) => {
                 const cleanB64 = sanitize(toBase64(val));
                 setFirmaTecnico(cleanB64);
                 setModalFirma({ open: false, tipo: null });
               }}
-              onEmpty={() => Alert.alert("Sin trazo", "Dibuja tu firma dentro del recuadro.")}
+              onEmpty={() => {
+                Alert.alert("Sin trazo", "Dibuja tu firma dentro del recuadro.");
+              }}
               descriptionText="Firme dentro del recuadro"
-              clearText="Limpiar"
-              confirmText="Guardar"
               autoClear={false}
               imageType="image/png"
               webStyle={signatureCss}
+              style={styles.signaturePad}
+              webviewProps={{
+                cacheEnabled: false,
+                androidLayerType: "software",
+                androidHardwareAccelerationDisabled: true,
+                scrollEnabled: false,
+                nestedScrollEnabled: false,
+                overScrollMode: "never",
+              }}
             />
+          </View>
+
+          <View
+            style={{
+              padding: 12,
+              borderTopWidth: 1,
+              borderColor: "#eee",
+              flexDirection: "row",
+              gap: 10,
+            }}
+          >
+            <TouchableOpacity
+              style={[styles.navBtn, styles.navBtnSecondary]}
+              onPress={() => signatureRef.current?.clearSignature()}
+            >
+              <Text style={styles.navBtnTextSecondary}>Limpiar</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.navBtn, styles.navBtnPrimary]}
+              onPress={() => signatureRef.current?.readSignature()}
+            >
+              <Text style={styles.navBtnTextPrimary}>Guardar firma</Text>
+            </TouchableOpacity>
           </View>
 
           <View style={styles.modalFooter}>
@@ -1829,7 +2064,6 @@ export default function FormularioRiesgosScreen() {
         </View>
       </Modal>
 
-      {/* Modal PDF */}
       <Modal visible={showPdfModal} animationType="fade" transparent onRequestClose={closePdfModal}>
         <View style={styles.pdfModalBackdrop}>
           <View style={styles.pdfModalCard}>
@@ -1868,10 +2102,7 @@ export default function FormularioRiesgosScreen() {
                   </Text>
                 </TouchableOpacity>
 
-                <TouchableOpacity
-                  style={[styles.bigActionBtn, { backgroundColor: "#F3F4F6" }]}
-                  onPress={closePdfModal}
-                >
+                <TouchableOpacity style={[styles.bigActionBtn, { backgroundColor: "#F3F4F6" }]} onPress={closePdfModal}>
                   <Ionicons name="close-circle-outline" size={18} color={FIORI.ink} />
                   <Text style={[styles.bigActionText, { color: FIORI.ink }]}>Cerrar</Text>
                 </TouchableOpacity>
@@ -1885,7 +2116,6 @@ export default function FormularioRiesgosScreen() {
         </View>
       </Modal>
 
-      {/* ✅ Recuadro flotante arriba del teclado */}
       {Platform.OS === "android" && !!activeField?.key && (
         <Animated.View style={[styles.kbBar, { bottom: keyboardBottom }]}>
           <View style={{ flex: 1 }}>
@@ -1918,7 +2148,6 @@ export default function FormularioRiesgosScreen() {
         </InputAccessoryView>
       )}
 
-      {/* ✅ BLOQUEO TOTAL mientras saving=true */}
       <Modal visible={saving} transparent animationType="fade">
         <View style={styles.blockerBackdrop}>
           <View style={styles.blockerCard}>
@@ -2279,4 +2508,17 @@ const styles = StyleSheet.create({
   },
   blockerTitle: { marginTop: 10, fontSize: 16, fontWeight: "900", color: FIORI.ink },
   blockerText: { marginTop: 6, fontSize: 12, color: FIORI.textMuted, textAlign: "center", lineHeight: 16 },
+  signaturePadWrap: {
+  height: 220, // aquí lo haces más pequeño
+  margin: 12,
+  borderWidth: 1,
+  borderColor: FIORI.border,
+  borderRadius: 12,
+  overflow: "hidden",
+  backgroundColor: "#fff",
+},
+
+signaturePad: {
+  flex: 1,
+},
 });

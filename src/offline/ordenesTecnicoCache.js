@@ -1,4 +1,3 @@
-// src/offline/ordenesTecnicoCache.js
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
 // Ventana requerida: 8 días antes y 8 después
@@ -172,10 +171,25 @@ function sanitizeDetailForCache(detail) {
     pause_motivo: op?.pause_motivo,
   }));
 
+  // ✅ NUEVO: conservar partners mínimos para pantallas offline como TBMK
+  const partnersSlim = Array.isArray(detail?.partners)
+    ? detail.partners.map((p) => ({
+        PartnRole: p?.PartnRole ?? null,
+        PartnRoleOld: p?.PartnRoleOld ?? null,
+        Partner: p?.Partner ?? null,
+        PartnerOld: p?.PartnerOld ?? null,
+        Name1: p?.Name1 ?? null,
+        Name2: p?.Name2 ?? null,
+        Mail1: p?.Mail1 ?? null,
+        Mail2: p?.Mail2 ?? null,
+      }))
+    : [];
+
   return {
     Orderid: String(detail?.Orderid ?? detail?.OrderId ?? "").trim(),
     order_type: detail?.order_type,
     equipment: detail?.equipment,
+    plant: detail?.plant ?? detail?.Plant ?? null,
     start_date: detail?.start_date,
     finish_date: detail?.finish_date,
     direccion: detail?.direccion,
@@ -187,8 +201,11 @@ function sanitizeDetailForCache(detail) {
     estatus_tipo: detail?.estatus_tipo,
     isFinal: detail?.isFinal,
     checkin_done: detail?.checkin_done,
-    componentes: Array.isArray(detail?.componentes) ? detail.componentes : [], // si es enorme, lo quitamos después
+    componentes: Array.isArray(detail?.componentes) ? detail.componentes : [],
     operaciones: opsSlim,
+
+    // ✅ NUEVO
+    partners: partnersSlim,
   };
 }
 

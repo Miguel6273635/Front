@@ -23,6 +23,8 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import {
   fetchReprogramacionesOrders,
   rescheduleWorkorders,
+  fetchSupervisorEmployees,
+  reassignWorkorderTechnician,
 } from "../../../../src/services/reprogramacionesSupervisor";
 
 /* ====================== Locale ES ====================== */
@@ -65,7 +67,7 @@ const pad2 = (n) => String(n).padStart(2, "0");
 // (local) para fechas que tú construyes (calendario/rangos)
 const toYMD = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 
-// ✅ (UTC) para timestamps que vienen de SAP OData: evita “-1 día” en MX (UTC-6)
+// ✅ (UTC) para timestamps que vienen de SAP OData: evita “-1 día” en MX
 const toYMD_UTC_FROM_MS = (ms) => {
   const d = new Date(ms);
   return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())}`;
@@ -79,7 +81,7 @@ function ymdToSAP(ymd) {
   return `${y}${m}${d}`;
 }
 
-// ✅ comparar rangos sin broncas de zona/DST: crea a mediodía local
+// ✅ comparar rangos sin broncas de zona/DST
 function ymdToDate(ymd) {
   const [y, m, d] = ymd.split("-").map(Number);
   return new Date(y, m - 1, d, 12, 0, 0, 0);
@@ -88,7 +90,7 @@ function ymdToDate(ymd) {
 // ✅ /Date(1768435200000)/ -> YYYY-MM-DD (sin “-1 día”)
 function odataDateToYMD(value) {
   const s = safeStr(value);
-  const match = s.match(/\/Date\((\d+)\)\//);
+  const match = s.match(/\/Date\((\-?\d+)\)\//);
   if (!match) return "";
   const ms = Number(match[1]);
   if (!Number.isFinite(ms)) return "";
@@ -150,20 +152,36 @@ function getSyncBadge(sync) {
   const state = sync?.state;
   if (!state) return null;
 
+  // ✅ solo mostrar cuando está pendiente de mandar
   if (state === "pending") {
-    return { label: "PENDIENTE DE ENVIAR", bg: COLORS.pendingBg, border: COLORS.pendingBorder, color: COLORS.warn };
+    return {
+      label: "PENDIENTE DE ENVIAR",
+      bg: COLORS.pendingBg,
+      border: COLORS.pendingBorder,
+      color: COLORS.warn,
+    };
   }
-  if (state === "sent") {
-    return { label: "ENVIADO", bg: COLORS.sentBg, border: COLORS.sentBorder, color: COLORS.ok };
-  }
+
+  // ✅ solo mostrar si hubo error
   if (state === "error") {
-    return { label: "ERROR", bg: COLORS.errBg, border: COLORS.errBorder, color: COLORS.danger };
+    return {
+      label: "ERROR",
+      bg: COLORS.errBg,
+      border: COLORS.errBorder,
+      color: COLORS.danger,
+    };
   }
+
+  // ✅ si ya se mandó, no mostrar nada
+  if (state === "sent") {
+    return null;
+  }
+
   return null;
 }
 
 export default function ReprogramarOrden() {
-  const { user } = useAuth(); // token lo toma el service de AsyncStorage
+  const { user } = useAuth();
 
   const supervisorEmail =
     safeStr(user?.email) ||
@@ -178,10 +196,10 @@ export default function ReprogramarOrden() {
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(false);
 
-  const [selectedDate, setSelectedDate] = useState(null); // filtro exacto por día
+  const [selectedDate, setSelectedDate] = useState(null);
   const [query, setQuery] = useState("");
 
-  // multiselect
+  // multiselect órdenes
   const [selectedIds, setSelectedIds] = useState(new Set());
   const selectedCount = selectedIds.size;
   const bulkMode = selectedCount > 0;
@@ -189,17 +207,26 @@ export default function ReprogramarOrden() {
   // Modal reprogramar UNA (rango)
   const [editOpen, setEditOpen] = useState(false);
   const [editing, setEditing] = useState(null);
-  const [pickStep, setPickStep] = useState("start"); // "start" | "end"
+  const [pickStep, setPickStep] = useState("start");
   const [tempStart, setTempStart] = useState("");
   const [tempEnd, setTempEnd] = useState("");
   const [saving, setSaving] = useState(false);
 
-  // Modal reprogramar VARIAS (rango igual para todas)
+  // Modal reprogramar VARIAS
   const [bulkOpen, setBulkOpen] = useState(false);
-  const [bulkStep, setBulkStep] = useState("start"); // "start" | "end"
-  const [bulkStart, setBulkStart] = useState(""); // YYYY-MM-DD
-  const [bulkEnd, setBulkEnd] = useState(""); // YYYY-MM-DD
+  const [bulkStep, setBulkStep] = useState("start");
+  const [bulkStart, setBulkStart] = useState("");
+  const [bulkEnd, setBulkEnd] = useState("");
   const [bulkSaving, setBulkSaving] = useState(false);
+
+  // Modal técnico
+  const [techOpen, setTechOpen] = useState(false);
+  const [techLoading, setTechLoading] = useState(false);
+  const [techSaving, setTechSaving] = useState(false);
+  const [techOrder, setTechOrder] = useState(null);
+  const [techQuery, setTechQuery] = useState("");
+  const [technicians, setTechnicians] = useState([]);
+  const [selectedTechnician, setSelectedTechnician] = useState(null);
 
   function toggleSelect(id) {
     setSelectedIds((prev) => {
@@ -214,7 +241,7 @@ export default function ReprogramarOrden() {
     setSelectedIds(new Set());
   }
 
-  // ✅ FETCH offline-friendly (cache first, network if available)
+  // ✅ FETCH offline-friendly
   const fetchOrders = useCallback(
     async ({ year, month, dayYmd }) => {
       try {
@@ -229,7 +256,6 @@ export default function ReprogramarOrden() {
 
         const list = Array.isArray(r.orders) ? r.orders : [];
 
-        // ✅ Normaliza fechas bien (OData /Date(ms)/ -> UTC YMD)
         const cleaned = list
           .map((x) => {
             const id = safeStr(x.id);
@@ -238,8 +264,13 @@ export default function ReprogramarOrden() {
             const startDateRaw = safeStr(x.startDate);
             const finishDateRaw = safeStr(x.finishDate);
 
-            const startDate = startDateRaw.includes("/Date(") ? odataDateToYMD(startDateRaw) : startDateRaw;
-            const finishDate = finishDateRaw.includes("/Date(") ? odataDateToYMD(finishDateRaw) : finishDateRaw;
+            const startDate = startDateRaw.includes("/Date(")
+              ? odataDateToYMD(startDateRaw)
+              : startDateRaw;
+
+            const finishDate = finishDateRaw.includes("/Date(")
+              ? odataDateToYMD(finishDateRaw)
+              : finishDateRaw;
 
             return {
               ...x,
@@ -279,7 +310,13 @@ export default function ReprogramarOrden() {
   const markedDates = useMemo(() => {
     const marks = {};
     orders.forEach((o) => {
-      if (o.startDate) marks[o.startDate] = { ...(marks[o.startDate] || {}), marked: true, dotColor: COLORS.accent };
+      if (o.startDate) {
+        marks[o.startDate] = {
+          ...(marks[o.startDate] || {}),
+          marked: true,
+          dotColor: COLORS.accent,
+        };
+      }
     });
 
     if (selectedDate) {
@@ -308,6 +345,17 @@ export default function ReprogramarOrden() {
     }
     return list;
   }, [orders, selectedDate, query]);
+
+  const filteredTechnicians = useMemo(() => {
+    const q = techQuery.trim().toLowerCase();
+    if (!q) return technicians;
+
+    return technicians.filter((t) =>
+      `${safeStr(t.Nombre)} ${safeStr(t.ID)} ${safeStr(t.Email)}`
+        .toLowerCase()
+        .includes(q)
+    );
+  }, [technicians, techQuery]);
 
   // ===== UNA orden (rango) =====
   function openEdit(order) {
@@ -385,7 +433,11 @@ export default function ReprogramarOrden() {
         items: [{ orderId: safeStr(editing.id), startYmd: tempStart, endYmd: tempEnd }],
       });
 
-      // ✅ UI optimista SIEMPRE
+      if (!r.ok) {
+        Alert.alert("Error", r.error || "No se pudo reprogramar.");
+        return;
+      }
+
       setOrders((prev) =>
         prev.map((o) =>
           o.id === editing.id
@@ -393,15 +445,18 @@ export default function ReprogramarOrden() {
                 ...o,
                 startDate: tempStart,
                 finishDate: tempEnd,
-                _sync: {
-                  ...(o._sync || {}),
-                  state: r.mode === "offline" ? "pending" : "sent",
-                  startYmd: tempStart,
-                  endYmd: tempEnd,
-                  updatedAt: Date.now(),
-                  outboxId: r.outboxId || o?._sync?.outboxId,
-                  lastError: "",
-                },
+                _sync:
+                  r.mode === "offline"
+                    ? {
+                        ...(o._sync || {}),
+                        state: "pending",
+                        startYmd: tempStart,
+                        endYmd: tempEnd,
+                        updatedAt: Date.now(),
+                        outboxId: r.outboxId || o?._sync?.outboxId,
+                        lastError: "",
+                      }
+                    : null,
               }
             : o
         )
@@ -414,10 +469,8 @@ export default function ReprogramarOrden() {
           "Guardado offline",
           `Orden #${editing.id}\nSe enviará cuando haya internet.\nInicio: ${tempStart}\nFin: ${tempEnd}`
         );
-      } else if (r.ok) {
-        Alert.alert("Reprogramación lista", `Orden #${editing.id}\nInicio: ${tempStart}\nFin: ${tempEnd}`);
       } else {
-        Alert.alert("Error", "No se pudo reprogramar.");
+        Alert.alert("Reprogramación lista", `Orden #${editing.id}\nInicio: ${tempStart}\nFin: ${tempEnd}`);
       }
     } catch (error) {
       console.error("[REPROGRAMACION ERROR]", error?.message || error);
@@ -427,7 +480,7 @@ export default function ReprogramarOrden() {
     }
   }
 
-  // ===== VARIAS órdenes (rango) =====
+  // ===== VARIAS órdenes =====
   function openBulk() {
     if (!bulkMode) return;
 
@@ -504,7 +557,11 @@ export default function ReprogramarOrden() {
         })),
       });
 
-      // ✅ UI optimista
+      if (!r.ok) {
+        Alert.alert("Error", r.error || "No se pudieron reprogramar las órdenes seleccionadas.");
+        return;
+      }
+
       setOrders((prev) =>
         prev.map((o) =>
           selectedIds.has(o.id)
@@ -512,15 +569,18 @@ export default function ReprogramarOrden() {
                 ...o,
                 startDate: bulkStart,
                 finishDate: bulkEnd,
-                _sync: {
-                  ...(o._sync || {}),
-                  state: r.mode === "offline" ? "pending" : "sent",
-                  startYmd: bulkStart,
-                  endYmd: bulkEnd,
-                  updatedAt: Date.now(),
-                  outboxId: r.outboxId || o?._sync?.outboxId,
-                  lastError: "",
-                },
+                _sync:
+                  r.mode === "offline"
+                    ? {
+                        ...(o._sync || {}),
+                        state: "pending",
+                        startYmd: bulkStart,
+                        endYmd: bulkEnd,
+                        updatedAt: Date.now(),
+                        outboxId: r.outboxId || o?._sync?.outboxId,
+                        lastError: "",
+                      }
+                    : null,
               }
             : o
         )
@@ -535,19 +595,145 @@ export default function ReprogramarOrden() {
           "Guardado offline",
           `Se guardaron ${count} órdenes.\nSe enviarán cuando haya internet.\nInicio: ${bulkStart}\nFin: ${bulkEnd}`
         );
-      } else if (r.ok) {
+      } else {
         Alert.alert(
           "Reprogramación lista",
           `Se reprogramaron ${count} órdenes.\nInicio: ${bulkStart}\nFin: ${bulkEnd}`
         );
-      } else {
-        Alert.alert("Error", "No se pudieron reprogramar las órdenes seleccionadas.");
       }
     } catch (error) {
       console.error("[REPROGRAMACION BULK ERROR]", error?.message || error);
       Alert.alert("Error", "No se pudieron reprogramar las órdenes seleccionadas.");
     } finally {
       setBulkSaving(false);
+    }
+  }
+
+  // ===== TÉCNICO =====
+  async function openTechModal(order) {
+    if (bulkMode) return;
+
+    setTechOrder(order);
+    setTechOpen(true);
+    setTechLoading(true);
+    setTechSaving(false);
+    setTechQuery("");
+    setSelectedTechnician(null);
+    setTechnicians([]);
+
+    try {
+      const r = await fetchSupervisorEmployees({ supervisorEmail });
+      const list = Array.isArray(r?.employees) ? r.employees : [];
+      setTechnicians(list);
+
+      if (!r.ok && list.length === 0) {
+        Alert.alert("Error", "No se pudo cargar la lista de técnicos.");
+      }
+    } catch (error) {
+      console.error("[TECH LIST ERROR]", error?.message || error);
+      Alert.alert("Error", "No se pudo cargar la lista de técnicos.");
+    } finally {
+      setTechLoading(false);
+    }
+  }
+
+  function closeTechModal() {
+    if (techSaving) return;
+    setTechOpen(false);
+    setTechOrder(null);
+    setTechQuery("");
+    setSelectedTechnician(null);
+    setTechnicians([]);
+  }
+
+  function canSaveTech() {
+    return !!techOrder && !!selectedTechnician?.ID && !techSaving;
+  }
+
+  async function saveTechAssign() {
+    if (!techOrder) return;
+
+    if (!selectedTechnician?.ID) {
+      Alert.alert("Falta técnico", "Selecciona un técnico para reasignar la orden.");
+      return;
+    }
+
+    try {
+      setTechSaving(true);
+
+      const payload = {
+        WorkOrderHeader: {
+          Supervisor: supervisorEmail,
+        },
+        WorkOrderItemsSet: [
+          {
+            OrderId: safeStr(techOrder.id),
+            OrderItem: "",
+            FechaIni: "",
+            FechaFin: "",
+            Mecanico: safeStr(selectedTechnician.ID),
+          },
+        ],
+        ReturnSet: [],
+      };
+
+      console.log("[REASIGNAR TECNICO] payload:", JSON.stringify(payload, null, 2));
+
+      const r = await reassignWorkorderTechnician({
+        supervisorEmail,
+        orderId: safeStr(techOrder.id),
+        mecanicoId: safeStr(selectedTechnician.ID),
+      });
+
+      if (!r.ok) {
+        Alert.alert("Error", r.error || r.message || "No se pudo reasignar el técnico.");
+        return;
+      }
+
+      setOrders((prev) =>
+        prev.map((o) =>
+          o.id === techOrder.id
+            ? {
+                ...o,
+                _sync:
+                  r.mode === "offline"
+                    ? {
+                        ...(o._sync || {}),
+                        state: "pending",
+                        updatedAt: Date.now(),
+                        outboxId: r.outboxId || o?._sync?.outboxId,
+                        mecanicoId: safeStr(selectedTechnician.ID),
+                        lastError: "",
+                      }
+                    : null,
+                tecnicoNombre: safeStr(selectedTechnician.Nombre),
+                tecnicoEmail: safeStr(selectedTechnician.Email),
+              }
+            : o
+        )
+      );
+
+      const nombre = safeStr(selectedTechnician.Nombre) || "Sin nombre";
+      const nomina = safeStr(selectedTechnician.ID) || "—";
+
+      closeTechModal();
+
+      if (r.mode === "offline") {
+        Alert.alert(
+          "Guardado offline",
+          `Orden #${safeStr(techOrder.id)}\nTécnico: ${nombre}\nNómina: ${nomina}\nSe enviará cuando haya internet.`
+        );
+      } else {
+        Alert.alert(
+          "Técnico reasignado",
+          `Orden #${safeStr(techOrder.id)}\nTécnico: ${nombre}\nNómina: ${nomina}`
+        );
+      }
+    } catch (error) {
+      console.error("[REASIGNAR TECNICO ERROR]", error?.message || error);
+      Alert.alert("Error", "No se pudo reasignar el técnico.");
+    } finally {
+      setTechSaving(false);
     }
   }
 
@@ -574,7 +760,6 @@ export default function ReprogramarOrden() {
         <Text style={styles.hint}>
           Mes visible: <Text style={styles.bold}>{monthLabel}</Text>
         </Text>
-
       </View>
 
       <View style={[styles.card, { marginTop: 12 }]}>
@@ -696,7 +881,7 @@ export default function ReprogramarOrden() {
               </Pressable>
 
               <View style={{ flex: 1 }}>
-                <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                   <Text style={styles.orderId}>Orden #{item.id}</Text>
 
                   {!!badge && (
@@ -725,6 +910,13 @@ export default function ReprogramarOrden() {
                   <Text style={styles.small}>Userstatus: {safeStr(item.userstatusCodes).trim() || "—"}</Text>
                 )}
 
+                {!!item.tecnicoNombre && (
+                  <Text style={styles.small}>
+                    Técnico asignado: <Text style={styles.bold}>{safeStr(item.tecnicoNombre)}</Text>
+                    {!!item.tecnicoEmail ? ` • ${safeStr(item.tecnicoEmail)}` : ""}
+                  </Text>
+                )}
+
                 {item._sync?.state === "error" && !!item._sync?.lastError && (
                   <Text style={[styles.small, { color: COLORS.danger }]}>
                     Error: {safeStr(item._sync.lastError)}
@@ -733,10 +925,17 @@ export default function ReprogramarOrden() {
               </View>
 
               {!bulkMode && (
-                <Pressable style={styles.editBtn} onPress={() => openEdit(item)}>
-                  <Ionicons name="calendar-outline" size={18} color="#fff" />
-                  <Text style={styles.editBtnText}>Reprogramar</Text>
-                </Pressable>
+                <View style={styles.actionsCol}>
+                  <Pressable style={styles.editBtn} onPress={() => openEdit(item)}>
+                    <Ionicons name="calendar-outline" size={18} color="#fff" />
+                    <Text style={styles.editBtnText}>Reprogramar</Text>
+                  </Pressable>
+
+                  <Pressable style={styles.techBtn} onPress={() => openTechModal(item)}>
+                    <Ionicons name="person-outline" size={18} color="#fff" />
+                    <Text style={styles.editBtnText}>Técnico</Text>
+                  </Pressable>
+                </View>
               )}
             </View>
           );
@@ -973,6 +1172,118 @@ export default function ReprogramarOrden() {
           </View>
         </View>
       </Modal>
+
+      {/* ===== Modal TÉCNICO ===== */}
+      <Modal visible={techOpen} transparent animationType="fade" onRequestClose={closeTechModal}>
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalCard, { maxHeight: "85%" }]}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>
+                {techOrder ? `Reasignar técnico • Orden #${techOrder.id}` : "Seleccionar técnico"}
+              </Text>
+              <Pressable onPress={closeTechModal} hitSlop={10}>
+                <Ionicons name="close" size={22} color={COLORS.textPrimary} />
+              </Pressable>
+            </View>
+
+            <Text style={styles.hint}>
+              Supervisor: <Text style={styles.bold}>{safeStr(supervisorEmail)}</Text>
+            </Text>
+
+            <View style={[styles.searchBox, { marginTop: 12 }]}>
+              <Ionicons name="search" size={18} color={COLORS.textSub} />
+              <TextInput
+                value={techQuery}
+                onChangeText={setTechQuery}
+                placeholder="Buscar por nombre, nómina o correo..."
+                placeholderTextColor="#9AA5B1"
+                style={styles.searchInput}
+                autoCapitalize="none"
+              />
+              {!!techQuery && (
+                <Pressable onPress={() => setTechQuery("")} hitSlop={10}>
+                  <Ionicons name="close-circle" size={18} color={COLORS.textSub} />
+                </Pressable>
+              )}
+            </View>
+
+            {techLoading ? (
+              <View style={styles.techLoadingWrap}>
+                <ActivityIndicator size="small" color={COLORS.accent} />
+                <Text style={styles.hint}>Cargando técnicos…</Text>
+              </View>
+            ) : (
+              <FlatList
+                data={filteredTechnicians}
+                keyExtractor={(item, index) => `${safeStr(item.ID)}-${safeStr(item.Email)}-${index}`}
+                style={{ marginTop: 12 }}
+                ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
+                ListEmptyComponent={
+                  <Text style={styles.empty}>No se encontraron técnicos asignados a este supervisor.</Text>
+                }
+                renderItem={({ item }) => {
+                  const selected = selectedTechnician?.ID === item?.ID;
+
+                  return (
+                    <Pressable
+                      onPress={() => setSelectedTechnician(item)}
+                      style={[styles.techRow, selected && styles.techRowSelected]}
+                    >
+                      <View style={styles.techRadio}>
+                        <Ionicons
+                          name={selected ? "radio-button-on" : "radio-button-off"}
+                          size={20}
+                          color={selected ? COLORS.accent : COLORS.textSub}
+                        />
+                      </View>
+
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.techName}>{safeStr(item.Nombre) || "Sin nombre"}</Text>
+                        <Text style={styles.techMeta}>Nómina: {safeStr(item.ID) || "—"}</Text>
+                        <Text style={styles.techMeta}>Correo: {safeStr(item.Email) || "—"}</Text>
+                      </View>
+                    </Pressable>
+                  );
+                }}
+              />
+            )}
+
+            {!!selectedTechnician?.ID && (
+              <View style={styles.selectedTechBox}>
+                <Text style={styles.selectedTechTitle}>Seleccionado</Text>
+                <Text style={styles.selectedTechText}>
+                  {safeStr(selectedTechnician.Nombre)} · {safeStr(selectedTechnician.ID)}
+                </Text>
+                <Text style={styles.selectedTechTextSmall}>{safeStr(selectedTechnician.Email)}</Text>
+              </View>
+            )}
+
+            <View style={styles.modalActions}>
+              <Pressable
+                onPress={closeTechModal}
+                style={[styles.ghostBtn, techSaving && { opacity: 0.6 }]}
+                disabled={techSaving}
+              >
+                <Text style={styles.ghostBtnText}>Cancelar</Text>
+              </Pressable>
+
+              <Pressable
+                onPress={saveTechAssign}
+                style={[styles.primaryBtn, !canSaveTech() && { opacity: 0.6 }]}
+                disabled={!canSaveTech()}
+              >
+                <Text style={styles.primaryBtnText}>
+                  {techSaving ? "Guardando…" : "Asignar técnico"}
+                </Text>
+              </Pressable>
+            </View>
+
+            <Text style={styles.modalFooter}>
+              *Se envía OrderId de la orden, Supervisor del usuario logeado y Mecanico con la nómina del técnico seleccionado.
+            </Text>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -1068,15 +1379,34 @@ const styles = StyleSheet.create({
     fontWeight: "900",
   },
 
+  actionsCol: {
+    alignSelf: "center",
+    gap: 8,
+  },
+
   editBtn: {
     alignSelf: "center",
     flexDirection: "row",
     alignItems: "center",
+    justifyContent: "center",
     gap: 6,
     paddingHorizontal: 12,
     paddingVertical: 10,
     borderRadius: 12,
     backgroundColor: COLORS.accent,
+    minWidth: 118,
+  },
+  techBtn: {
+    alignSelf: "center",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 12,
+    backgroundColor: COLORS.ok,
+    minWidth: 118,
   },
   editBtnText: { color: "#fff", fontWeight: "900", fontSize: 12.5 },
 
@@ -1185,8 +1515,70 @@ const styles = StyleSheet.create({
   },
   ghostBtnText: { fontSize: 13, fontWeight: "900", color: COLORS.textPrimary },
 
-  primaryBtn: { flex: 1, borderRadius: 14, paddingVertical: 12, alignItems: "center", backgroundColor: COLORS.accent },
+  primaryBtn: {
+    flex: 1,
+    borderRadius: 14,
+    paddingVertical: 12,
+    alignItems: "center",
+    backgroundColor: COLORS.accent,
+  },
   primaryBtnText: { fontSize: 13, fontWeight: "900", color: "#fff" },
 
   modalFooter: { marginTop: 10, fontSize: 11.5, color: COLORS.textSub },
+
+  techLoadingWrap: {
+    marginTop: 18,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  techRow: {
+    flexDirection: "row",
+    gap: 12,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderRadius: 14,
+    padding: 12,
+    backgroundColor: "#fff",
+  },
+  techRowSelected: {
+    borderColor: COLORS.accent,
+    backgroundColor: "#F3F9FF",
+  },
+  techRadio: {
+    alignSelf: "center",
+  },
+  techName: {
+    fontSize: 13.5,
+    fontWeight: "900",
+    color: COLORS.textPrimary,
+  },
+  techMeta: {
+    marginTop: 3,
+    fontSize: 12,
+    color: COLORS.textSub,
+  },
+  selectedTechBox: {
+    marginTop: 12,
+    borderWidth: 1,
+    borderColor: "#BFE7D5",
+    backgroundColor: "#ECFFF6",
+    borderRadius: 14,
+    padding: 12,
+  },
+  selectedTechTitle: {
+    fontSize: 12,
+    fontWeight: "900",
+    color: COLORS.ok,
+  },
+  selectedTechText: {
+    marginTop: 4,
+    fontSize: 13,
+    fontWeight: "900",
+    color: COLORS.textPrimary,
+  },
+  selectedTechTextSmall: {
+    marginTop: 2,
+    fontSize: 12,
+    color: COLORS.textSub,
+  },
 });

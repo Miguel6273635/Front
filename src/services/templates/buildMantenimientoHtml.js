@@ -134,6 +134,43 @@ function buildConsumiblesHtml(rows) {
   `;
 }
 
+function resolveCliente(orden = {}, address = null) {
+  const clienteFromAddr = address ? joinClienteNameFromAddress(address) : "";
+
+  return safeStr(
+    clienteFromAddr ||
+      orden?.cliente ||
+      orden?.razon_social ||
+      orden?.partner_name ||
+      orden?.PartnerName ||
+      [orden?.Name1, orden?.Name2].filter(Boolean).join(" ")
+  );
+}
+
+function resolveTecnico(orden = {}, tecnicoNombre = "") {
+  return safeStr(
+    tecnicoNombre ||
+      orden?.tecnico ||
+      orden?.Tecnico ||
+      orden?.tecnico_nombre ||
+      orden?.nombre_tecnico ||
+      orden?.nombre ||
+      orden?.name ||
+      ""
+  );
+}
+
+function resolveFecha(orden = {}, startMs = null, horaInicioMs = null) {
+  return formatDMY(
+    orden?.start_date ||
+      orden?.StartDate ||
+      orden?.fecha ||
+      orden?.Fecha ||
+      startMs ||
+      horaInicioMs
+  );
+}
+
 /**
  * buildMantenimientoHtml(args)
  * - orden: { Orderid, Equipment, start_date, finish_date, ... }
@@ -182,21 +219,9 @@ export async function buildMantenimientoHtml(args = {}) {
   const orderid = safeStr(orden?.Orderid || orden?.OrderId || orden?.orderid || "");
   const equipment = safeStr(orden?.Equipment || orden?.equipment || "");
 
-  const clienteFromAddr = address ? joinClienteNameFromAddress(address) : "";
-  const cliente = safeStr(clienteFromAddr || orden?.cliente || "");
-
-  const tecnico = safeStr(
-    tecnicoNombre ||
-      orden?.tecnico ||
-      orden?.Tecnico ||
-      orden?.tecnico_nombre ||
-      orden?.nombre_tecnico ||
-      ""
-  );
-
-  const fecha = formatDMY(
-    orden?.start_date || orden?.fecha || orden?.Fecha || startMs || horaInicioMs
-  );
+  const cliente = resolveCliente(orden, address);
+  const tecnico = resolveTecnico(orden, tecnicoNombre);
+  const fecha = resolveFecha(orden, startMs, horaInicioMs);
 
   const opsHtml = renderOperacionesAgrupadasHtml({
     orderid,

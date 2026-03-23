@@ -243,8 +243,8 @@ export function buildTbmkyHtml(payload) {
           1.Todo el personal que realice TBM-KY, debe ser previamente capacitado por el Departamento de Seguridad e Higiene respecto a su llenado.<br />
           2.Este documento es de carácter obligatorio para la identificación y prevención de riesgos, este deberá ser llenado ANTES de realizar cualquier actividad rutinaria y / o no rutinaria.<br />
           3.Cuando hay cambios en las condiciones de trabajo, rotación de personal u otro riesgo no identificado en la ejecución de la tarea, se debe suspender la actividad reevaluando los riesgos y definiendo las contramedidas adicionales a implementar.<br />
-          4. Es indispensable y obligatorio que la realización de este documento se haga directamente en el lugar de trabajo en el cual va a ejecutar sus funciones, evaluando, identificando y analizando las condiciones de su entorno cercano.<br />
-          5.Si en el lugar de trabajo usted encuentra RIESGOS INMINENTES, pare actividad y avise inmediatamente a su jefe inmediato o alsiguiente correo: AllSeguridad@melco.com.mx
+          4.Es indispensable y obligatorio que la realización de este documento se haga directamente en el lugar de trabajo en el cual va a ejecutar sus funciones, evaluando, identificando y analizando las condiciones de su entorno cercano.<br />
+          5.Si en el lugar de trabajo usted encuentra RIESGOS INMINENTES, pare actividad y avise inmediatamente a su jefe inmediato o al siguiente correo: AllSeguridad@melco.com.mx
         </th>
       </tr>
 
@@ -276,7 +276,7 @@ export function buildTbmkyHtml(payload) {
     </div>
 
     <div style="display: flex">
-      <!-- ✅ SIN NÓMINA -->
+      <!-- SIN NÓMINA -->
       <table style="margin: 5px; width: 60%">
         <tr>
           <th>NOMBRE COMPLETO DE QUIEN REALIZA TBM-KY</th>
@@ -323,7 +323,7 @@ export function buildTbmkyHtml(payload) {
     <table>
       <tr><th>ACTIVIDAD DEL DIA:</th><th style="width: 80%" class="left">${actividadDia}</th></tr>
       <tr><th></th></tr>
-      <tr><th colspan="2" class="left">NOTA: Si tu actividad cambiade RUTINARIA a NO RUTINARIA, avisa a tu jefe inmediato para evaluar las condiciones</th></tr>
+      <tr><th colspan="2" class="left">NOTA: Si tu actividad cambia de RUTINARIA a NO RUTINARIA, avisa a tu jefe inmediato para evaluar las condiciones</th></tr>
       <tr><th colspan="2"></th></tr>
       <tr><td colspan="2" style="background-color: black; color: white">CHEQUEO INDIVIDUAL DE SALUD</td></tr>
     </table>
@@ -442,7 +442,7 @@ export function buildTbmkyHtml(payload) {
       ${renderMedidasAcciones(medidas, acciones)}
     </table>
 
-    <!-- ✅ ROUND 4 + FIRMAS: SOLO TECNICO -->
+    <!-- ROUND 4 + FIRMAS: SOLO TECNICO -->
     <table>
       <tr>
         <td colspan="2" style="background-color: black; color: white; width: 50%">ROUND 4 (ACCIONES A REALIZAR, SEÑALAR Y LLAMAR)</td>

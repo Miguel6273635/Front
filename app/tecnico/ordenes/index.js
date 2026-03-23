@@ -31,7 +31,7 @@ import {
   filterOrdenesByWindow,
 } from "../../../src/offline/ordenesTecnicoCache";
 
-// ✅ Prefetch de detalles (para no entrar a cada orden)
+// Prefetch de detalles (para no entrar a cada orden)
 import { prefetchOrdenesTecnicoDetalles } from "../../../src/offline/prefetchOrdenesTecnico";
 
 import { useAuth } from "../../../src/context/AuthContext";
@@ -39,7 +39,7 @@ import Header from "../../../src/components/Header";
 import api from "../../../src/services/api";
 
 // ============================
-// ✅ Guarda EQUIPO activo para geolocalización
+// Guarda EQUIPO activo para geolocalización
 // UbicacionContext leerá esta key:
 //   activeEquipment:<correo> => equipment
 // ============================
@@ -138,7 +138,7 @@ const MONTHS = [
 ];
 
 /* =========================
-   ✅ Reglas de Userstatus
+   Reglas de Userstatus
    ========================= */
 function normalizeCode(code) {
   if (code === null || code === undefined) return "";
@@ -304,6 +304,9 @@ const matchesQuery = (item, q) => {
     item?.equipment ?? "",
     item?.partner_name ?? "",
     item?.partner_address ?? "",
+    //item?.nombre_mecanico ?? "",
+    //item?.id_mecanico ?? "",
+    //item?.nombre_cliente ?? "",
     item?.userstatus ?? "",
     item?.estatus_label ?? "",
     item?.estatus_code ?? "",
@@ -315,7 +318,7 @@ const matchesQuery = (item, q) => {
 };
 
 /* =========================
-   ✅ CHECKIN OFFLINE QUEUE
+   CHECKIN OFFLINE QUEUE
    ========================= */
 function makeQueueKey(userEmail) {
   const safe = String(userEmail || "anon").toLowerCase().trim() || "anon";
@@ -384,17 +387,17 @@ export default function ListaOrdenesTecnico() {
   const [yearOnly, setYearOnly] = useState(now.getFullYear());
   const [showYearModal, setShowYearModal] = useState(false);
 
-  // ✅ check-in modal + foto
+  // check-in modal + foto
   const [showCheckinModal, setShowCheckinModal] = useState(false);
   const [checkinOrderId, setCheckinOrderId] = useState(null);
   const [isSending, setIsSending] = useState(false);
   const [checkinPhotoBase64, setCheckinPhotoBase64] = useState(null);
   const [checkinPhotoUri, setCheckinPhotoUri] = useState(null);
 
-  // ✅ catálogo status
+  // catálogo status
   const [statusCatalogMap, setStatusCatalogMap] = useState({});
 
-  // ✅ estado red + cola
+  // estado red + cola
   const [isOnline, setIsOnline] = useState(true);
   const [checkinQueue, setCheckinQueue] = useState([]); // [{orderId, photoBase64, createdAt}]
   const syncingRef = useRef(false);
@@ -425,14 +428,14 @@ export default function ListaOrdenesTecnico() {
     if (dateMode === "year") {
       return { start: startOfYear(yearOnly), end: endOfYear(yearOnly) };
     }
-    // ✅ "all" = últimos 90 días
+    // "all" = últimos 90 días
     const e = new Date();
     const s = new Date();
     s.setDate(s.getDate() - 90);
     return { start: atStartOfDay(s), end: atEndOfDay(e) };
   }, [dateMode, dayRef, weekStart, weekEnd, monthYear, yearOnly]);
 
-  // ✅ define el rango REAL que le vas a pedir a SAP según el filtro (solo para UI ONLINE)
+  // define el rango REAL que le vas a pedir a SAP según el filtro (solo para UI ONLINE)
   const getSapRequestRange = useCallback(() => {
     if (dateMode === "all" || dateMode === "month" || dateMode === "year" || dateMode === "weekRange") {
       const s = atStartOfDay(start);
@@ -482,7 +485,7 @@ export default function ListaOrdenesTecnico() {
     refreshQueue();
   }, [refreshQueue]);
 
-  // ✅ escuchar red (para auto-sync)
+  // escuchar red (para auto-sync)
   useEffect(() => {
     const unsub = NetInfo.addEventListener((state) => {
       const onlineNow = !!(state?.isConnected && state?.isInternetReachable !== false);
@@ -492,7 +495,7 @@ export default function ListaOrdenesTecnico() {
   }, []);
 
   /**
-   * ✅ REGLA CLAVE:
+   * REGLA CLAVE:
    * - ONLINE: muestra TODO lo que regrese SAP (según filtros)
    * - OFFLINE CACHE: guarda SOLO ventana hoy±8 días
    */
@@ -550,20 +553,20 @@ export default function ListaOrdenesTecnico() {
         const res = await api.get(`/api/ordenes/sap/list?${params.toString()}`);
         const data = Array.isArray(res.data) ? res.data : [];
 
-        // ✅ 4) UI: muestra TODO lo de SAP (según filtros)
+        //  4) UI: muestra TODO lo de SAP (según filtros)
         setAllOrdenes(data);
 
-        // ✅ 5) OFFLINE CACHE: guarda SOLO ventana hoy±8 (SIEMPRE)
+        // 5) OFFLINE CACHE: guarda SOLO ventana hoy±8 (SIEMPRE)
         const offlineWin = buildOfflineWindow(new Date());
         const offlineOnly = filterOrdenesByWindow(data, offlineWin.start, offlineWin.end);
 
         await saveOrdenesTecnicoList(userEmail, offlineOnly, offlineWin);
 
-        // ✅ 6) Limpieza: conserva detalles solo de órdenes en ventana
+        // 6) Limpieza: conserva detalles solo de órdenes en ventana
         const keepIds = offlineOnly.map((x) => x?.Orderid).filter(Boolean);
         await pruneDetallesNoUsados(keepIds);
 
-        // ✅ 7) PREFETCH: SOLO ventana y poquitos
+        // 7) PREFETCH: SOLO ventana y poquitos
         const MAX_PREFETCH = 12;
 
         const today = new Date();
@@ -602,13 +605,13 @@ export default function ListaOrdenesTecnico() {
     [ensureValidToken, userEmail, dateMode, getSapRequestRange]
   );
 
-  // ✅ catálogo una vez
+  // catálogo una vez
   useEffect(() => {
     fetchStatusCatalog();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ✅ órdenes (cada vez que cambie filtro)
+  // órdenes (cada vez que cambie filtro)
   useEffect(() => {
     fetchOrdenes();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -620,7 +623,7 @@ export default function ListaOrdenesTecnico() {
     }, [fetchOrdenes])
   );
 
-  // ✅ filtrar en memoria
+  // filtrar en memoria
   useEffect(() => {
     const filtered = (allOrdenes || []).filter((item) => {
       const okQuery = matchesQuery(item, query);
@@ -636,7 +639,7 @@ export default function ListaOrdenesTecnico() {
   }, [allOrdenes, query, start, end]);
 
   // ===========================
-  // ✅ GUARDAR EQUIPO ACTIVO
+  // GUARDAR EQUIPO ACTIVO
   // ===========================
   const saveActiveEquipmentFromItem = useCallback(
     async (item) => {
@@ -679,7 +682,7 @@ export default function ListaOrdenesTecnico() {
   };
 
   const abrirModalCheckin = (item, orderId) => {
-    // ✅ guarda equipo también aquí (por si hacen check-in sin entrar al detalle)
+    // guarda equipo también aquí (por si hacen check-in sin entrar al detalle)
     if (item) saveActiveEquipmentFromItem(item);
 
     setCheckinOrderId(orderId);
@@ -688,7 +691,7 @@ export default function ListaOrdenesTecnico() {
     setShowCheckinModal(true);
   };
 
-  // ✅ cámara -> base64
+  // cámara -> base64
   const takeCheckinPhoto = async () => {
     try {
       const perm = await ImagePicker.requestCameraPermissionsAsync();
@@ -775,7 +778,7 @@ export default function ListaOrdenesTecnico() {
     });
   };
 
-  // ✅ Sync cola a SAP (foto + estatus)
+  // Sync cola a SAP (foto + estatus)
   const syncCheckinQueue = useCallback(async () => {
     if (!userEmail) return;
     if (syncingRef.current) return;
@@ -824,7 +827,7 @@ export default function ListaOrdenesTecnico() {
     }
   }, [ensureValidToken, fetchOrdenes, userEmail]);
 
-  // ✅ Auto-sync cuando regresa internet y hay cola
+  // Auto-sync cuando regresa internet y hay cola
   useEffect(() => {
     if (isOnline && checkinQueue.length > 0) {
       syncCheckinQueue().catch(() => {});
@@ -966,6 +969,9 @@ export default function ListaOrdenesTecnico() {
             </Text>
 
             <Text style={styles.label}>Equipo: {item.equipment}</Text>
+            {/*<Text style={styles.label}>Mecánico: {item.nombre_mecanico || "—"}</Text>
+            <Text style={styles.label}>Nómina: {item.id_mecanico || "—"}</Text>
+            <Text style={styles.label}>Cliente: {item.nombre_cliente || "—"}</Text>*/}
             <Text style={styles.label}>Inicio: {startLabel}</Text>
             <Text style={styles.label}>Fin: {finishLabel}</Text>
 
@@ -1032,7 +1038,7 @@ export default function ListaOrdenesTecnico() {
             </>
           ) : (
             <Text style={{ color: FIORI.textMuted, fontSize: 12, fontStyle: "italic" }}>
-              Acciones disponibles según flujo.
+              Se requiere la firma del cliente para finalizar.
             </Text>
           )}
         </View>
@@ -1112,7 +1118,7 @@ export default function ListaOrdenesTecnico() {
               setShowWeekStartPicker(true);
             }}
           >
-            <Text style={[styles.chipText, dateMode === "weekRange" && styles.chipTextActive]}>Semana (rango)</Text>
+            <Text style={[styles.chipText, dateMode === "weekRange" && styles.chipTextActive]}>Semana</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -1306,9 +1312,7 @@ export default function ListaOrdenesTecnico() {
             <Text style={styles.modalHeaderTitle}>Check-in #{checkinOrderId ?? ""}</Text>
 
             <Text style={{ color: FIORI.textMuted, marginBottom: 10 }}>
-              Toma una foto y al enviar:
-              {"\n"}• Online: sube evidencia + cambia estatus a 0100
-              {"\n"}• Offline: guarda en cola y se sincroniza al regresar internet
+              Toma una foto de evidencia:
             </Text>
 
             {checkinPhotoUri ? (

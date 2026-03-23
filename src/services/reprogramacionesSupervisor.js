@@ -15,30 +15,40 @@ const reprogKeys = {
   // mapa de estatus por orden (pendiente/sent/error) para pintar en UI
   statusMap: ({ userKey }) => `reprog:statusMap:${userKey}`,
 
-  // cola offline (outbox) simple basada en cache (si NO quieres tocar SQLite aún)
-  // Si ya tienes outbox en SQLite, abajo te doy cómo integrarlo (sección C).
+  // cola offline (outbox) simple basada en cache
   outbox: ({ userKey }) => `reprog:outbox:${userKey}`,
+
+  // cache de técnicos por supervisor
+  technicians: ({ supervisorEmail }) =>
+    `reprog:technicians:${String(supervisorEmail || "").trim().toLowerCase()}`,
 };
 
 /* ======================
    Helpers
    ====================== */
 const pad2 = (n) => String(n).padStart(2, "0");
+
+// Local: para fechas construidas por la app
 const toYMD = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+
+// UTC: para timestamps que vienen de SAP OData /Date(...)/
+const toYMD_UTC_FROM_MS = (ms) => {
+  const d = new Date(ms);
+  return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())}`;
+};
 
 function safeStr(v) {
   return v == null ? "" : String(v);
 }
 
-// /Date(1768435200000)/ -> YYYY-MM-DD
+// /Date(1768435200000)/ -> YYYY-MM-DD usando UTC
 function odataDateToYMD(value) {
   const s = safeStr(value);
-  const match = s.match(/\/Date\((\d+)\)\//);
+  const match = s.match(/\/Date\((\-?\d+)\)\//);
   if (!match) return "";
   const ms = Number(match[1]);
   if (!Number.isFinite(ms)) return "";
-  const d = new Date(ms);
-  return toYMD(d);
+  return toYMD_UTC_FROM_MS(ms);
 }
 
 function ymdToSAP(ymd) {
@@ -47,9 +57,10 @@ function ymdToSAP(ymd) {
   return `${y}${m}${d}`;
 }
 
+// Comparación segura sin broncas de zona horaria / DST
 function ymdToDate(ymd) {
   const [y, m, d] = ymd.split("-").map(Number);
-  return new Date(y, m - 1, d);
+  return new Date(y, m - 1, d, 12, 0, 0, 0);
 }
 
 /**
@@ -107,6 +118,34 @@ async function getToken() {
   return (await AsyncStorage.getItem("token")) || "";
 }
 
+function extractResults(payload) {
+  if (Array.isArray(payload)) return payload;
+  if (Array.isArray(payload?.d?.results)) return payload.d.results;
+  if (Array.isArray(payload?.results)) return payload.results;
+  return [];
+}
+
+function extractSapMessages(data) {
+  const ret =
+    data?.d?.ReturnSet?.results ||
+    data?.d?.Return?.results ||
+    data?.ReturnSet?.results ||
+    data?.Return?.results ||
+    [];
+
+  if (!Array.isArray(ret)) return [];
+
+  return ret.map((r) => ({
+    type: safeStr(r?.Type || r?.type),
+    message: safeStr(r?.Message || r?.message),
+    code: safeStr(r?.Code || r?.code),
+  }));
+}
+
+function hasSapError(messages = []) {
+  return messages.some((m) => safeStr(m?.type).toUpperCase() === "E");
+}
+
 /* ======================
    Estado local por orden
    ====================== */
@@ -130,7 +169,6 @@ function setOrderStatus(mapObj, orderId, patch) {
 
 /* ======================
    Outbox simple (en cache)
-   - Si ya usas outbox SQLite, salta a sección C
    ====================== */
 async function outboxRead(userKey) {
   const key = reprogKeys.outbox({ userKey });
@@ -227,24 +265,20 @@ export async function fetchReprogramacionesOrders({ year, month, dayYmd, supervi
     await cacheSet(cacheKey, withStatus);
     return { ok: true, from: "network", orders: withStatus };
   } catch (e) {
-    // fallback cache
     return { ok: false, from: "cache", orders: cachedArr || [], error: e?.message || String(e) };
   }
 }
 
 /* ======================
    API: Reprogramar (1 o varias)
-   - online: POST inmediato
-   - offline: enqueue + estatus local + UI optimista
    ====================== */
 export async function rescheduleWorkorders({
   supervisorEmail,
-  items, // [{orderId, startYmd, endYmd}]
+  items,
 }) {
   const userKey = await getUserKeyFromStorage();
   const online = await isOnline();
 
-  // Validaciones básicas
   if (!Array.isArray(items) || items.length === 0) {
     return { ok: false, reason: "no_items" };
   }
@@ -270,7 +304,6 @@ export async function rescheduleWorkorders({
 
   const endpoint = "/api/odata/ZCS_RESCHEDULE_WORKORDER_SRV/WorkOrderHeaderSet";
 
-  // ===== ONLINE =====
   if (online) {
     try {
       const token = await getToken();
@@ -283,7 +316,17 @@ export async function rescheduleWorkorders({
         },
       });
 
-      // marca como ENVIADO
+      const messages = extractSapMessages(res?.data);
+      if (hasSapError(messages)) {
+        return {
+          ok: false,
+          mode: "online",
+          error: messages.map((m) => m.message).filter(Boolean).join(" | ") || "SAP devolvió error",
+          sapMessages: messages,
+          response: res?.data || null,
+        };
+      }
+
       let mapObj = await readStatusMap(userKey);
       for (const it of items) {
         mapObj = setOrderStatus(mapObj, it.orderId, {
@@ -296,14 +339,17 @@ export async function rescheduleWorkorders({
       }
       await writeStatusMap(userKey, mapObj);
 
-      return { ok: true, mode: "online", response: res?.data || null };
+      return {
+        ok: true,
+        mode: "online",
+        response: res?.data || null,
+        sapMessages: messages,
+      };
     } catch (e) {
       return { ok: false, mode: "online", error: e?.message || String(e) };
     }
   }
 
-  // ===== OFFLINE =====
-  // Encolamos el request para mandarlo luego, SIN token guardado (se toma en sync).
   const outboxItem = {
     id: makeId(),
     type: "RESCHEDULE_WORKORDER",
@@ -317,7 +363,6 @@ export async function rescheduleWorkorders({
 
   const outboxId = await outboxEnqueue(userKey, outboxItem);
 
-  // marca como PENDIENTE
   let mapObj = await readStatusMap(userKey);
   for (const it of items) {
     mapObj = setOrderStatus(mapObj, it.orderId, {
@@ -335,9 +380,206 @@ export async function rescheduleWorkorders({
 }
 
 /* ======================
+   API: Traer técnicos del supervisor
+   ====================== */
+export async function fetchSupervisorEmployees({ supervisorEmail }) {
+  const email = safeStr(supervisorEmail).trim();
+  const cacheKey = reprogKeys.technicians({ supervisorEmail: email });
+
+  if (!email) {
+    return { ok: false, employees: [], reason: "missing_supervisor_email" };
+  }
+
+  const cached = await cacheGet(cacheKey);
+  const cachedArr = Array.isArray(cached?.value) ? cached.value : [];
+
+  const online = await isOnline();
+  if (!online) {
+    return { ok: true, from: "cache", employees: cachedArr };
+  }
+
+  try {
+    const token = await getToken();
+    const filter = `Email eq '${email}'`;
+
+    const res = await api.get("/api/odata/ZSD_CATALOGOS_SRV/EmployeSupervisorSet", {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/json",
+      },
+      params: {
+        $filter: filter,
+        $format: "json",
+      },
+    });
+
+    const rows = extractResults(res?.data);
+
+    const employees = rows
+      .map((row) => ({
+        Email: safeStr(row?.Email).trim(),
+        ID: safeStr(row?.ID).trim(),
+        Nombre: safeStr(row?.Nombre).trim(),
+      }))
+      .filter((x) => x.Email || x.ID || x.Nombre);
+
+    await cacheSet(cacheKey, employees);
+
+    return {
+      ok: true,
+      from: "network",
+      employees,
+      raw: res?.data || null,
+    };
+  } catch (e) {
+    return {
+      ok: false,
+      from: "cache",
+      employees: cachedArr,
+      error: e?.message || String(e),
+    };
+  }
+}
+
+/* ======================
+   API: Reasignar técnico a una orden
+   ====================== */
+export async function reassignWorkorderTechnician({
+  supervisorEmail,
+  orderId,
+  mecanicoId,
+}) {
+  const userKey = await getUserKeyFromStorage();
+  const online = await isOnline();
+
+  const supervisor = safeStr(supervisorEmail).trim();
+  const order = safeStr(orderId).trim();
+  const mecanico = safeStr(mecanicoId).trim();
+
+  if (!supervisor || !order || !mecanico) {
+    return {
+      ok: false,
+      reason: "missing_fields",
+      message: "Faltan datos para reasignar técnico",
+    };
+  }
+
+  const payload = {
+    WorkOrderHeader: {
+      Supervisor: supervisor,
+    },
+    WorkOrderItemsSet: [
+      {
+        OrderId: order,
+        OrderItem: "",
+        FechaIni: "",
+        FechaFin: "",
+        Mecanico: mecanico,
+      },
+    ],
+    ReturnSet: [],
+  };
+
+  const endpoint = "/api/odata/ZCS_RESCHEDULE_WORKORDER_SRV/WorkOrderHeaderSet";
+
+  if (online) {
+    try {
+      const token = await getToken();
+
+      const res = await api.post(endpoint, payload, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+      });
+
+      const messages = extractSapMessages(res?.data);
+      if (hasSapError(messages)) {
+        let mapObj = await readStatusMap(userKey);
+        mapObj = setOrderStatus(mapObj, order, {
+          state: "error",
+          updatedAt: Date.now(),
+          lastError: messages.map((m) => m.message).filter(Boolean).join(" | ") || "SAP devolvió error",
+        });
+        await writeStatusMap(userKey, mapObj);
+
+        return {
+          ok: false,
+          mode: "online",
+          error: messages.map((m) => m.message).filter(Boolean).join(" | ") || "SAP devolvió error",
+          sapMessages: messages,
+          response: res?.data || null,
+        };
+      }
+
+      let mapObj = await readStatusMap(userKey);
+      mapObj = setOrderStatus(mapObj, order, {
+        state: "sent",
+        updatedAt: Date.now(),
+        lastError: "",
+        mecanicoId: mecanico,
+      });
+      await writeStatusMap(userKey, mapObj);
+
+      return {
+        ok: true,
+        mode: "online",
+        response: res?.data || null,
+        sapMessages: messages,
+      };
+    } catch (e) {
+      let mapObj = await readStatusMap(userKey);
+      mapObj = setOrderStatus(mapObj, order, {
+        state: "error",
+        updatedAt: Date.now(),
+        lastError: e?.message || "assign_failed",
+        mecanicoId: mecanico,
+      });
+      await writeStatusMap(userKey, mapObj);
+
+      return {
+        ok: false,
+        mode: "online",
+        error: e?.message || String(e),
+      };
+    }
+  }
+
+  const outboxItem = {
+    id: makeId(),
+    type: "REASSIGN_TECHNICIAN",
+    method: "POST",
+    url: endpoint,
+    body: payload,
+    createdAt: Date.now(),
+    attempts: 0,
+    status: "queued",
+  };
+
+  const outboxId = await outboxEnqueue(userKey, outboxItem);
+
+  let mapObj = await readStatusMap(userKey);
+  mapObj = setOrderStatus(mapObj, order, {
+    state: "pending",
+    updatedAt: Date.now(),
+    outboxId,
+    lastError: "",
+    mecanicoId: mecanico,
+  });
+  await writeStatusMap(userKey, mapObj);
+
+  return {
+    ok: true,
+    mode: "offline",
+    queued: true,
+    outboxId,
+    payload,
+  };
+}
+
+/* ======================
    Sync manual de la outbox "cache"
-   - LLÁMALO cuando haya red (ej. en OfflineProvider)
-   - Si tú ya tienes runOutboxSync con SQLite, mira sección C (mejor)
    ====================== */
 export async function syncReprogramacionesOutboxCache() {
   const userKey = await getUserKeyFromStorage();
@@ -361,7 +603,7 @@ export async function syncReprogramacionesOutboxCache() {
     try {
       processed++;
 
-      await api.request({
+      const res = await api.request({
         url: item.url,
         method: item.method,
         data: item.body,
@@ -372,8 +614,30 @@ export async function syncReprogramacionesOutboxCache() {
         },
       });
 
-      // si fue OK, marca órdenes como sent
+      const messages = extractSapMessages(res?.data);
       const itemsSet = item?.body?.WorkOrderItemsSet || [];
+
+      if (hasSapError(messages)) {
+        const errMsg =
+          messages.map((m) => m.message).filter(Boolean).join(" | ") || "SAP devolvió error";
+
+        item.attempts = (item.attempts || 0) + 1;
+
+        for (const it of itemsSet) {
+          const orderId = safeStr(it?.OrderId);
+          if (!orderId) continue;
+
+          statusMap = setOrderStatus(statusMap, orderId, {
+            state: "error",
+            updatedAt: Date.now(),
+            lastError: errMsg,
+          });
+        }
+
+        remaining.push(item);
+        continue;
+      }
+
       for (const it of itemsSet) {
         const orderId = safeStr(it?.OrderId);
         if (!orderId) continue;
@@ -385,7 +649,6 @@ export async function syncReprogramacionesOutboxCache() {
         });
       }
     } catch (e) {
-      // deja en cola y marca error
       item.attempts = (item.attempts || 0) + 1;
 
       const errMsg = e?.message || "sync_failed";

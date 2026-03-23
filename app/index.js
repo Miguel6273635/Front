@@ -3,7 +3,7 @@ import React, { useEffect, useRef } from "react";
 import { ActivityIndicator, View } from "react-native";
 import { Redirect } from "expo-router";
 import { useAuth } from "../src/context/AuthContext";
-import { useOffline } from "../src/offline/OffilneProvider"; // tu provider
+import { useOffline } from "../src/offline/OfflineProvider"; // tu provider
 import { bootstrapPrefetchOrdenesSupervisor } from "../src/offline/bootstrapSync";
 
 function pickHomeByRole(rol_id) {

@@ -81,6 +81,10 @@ function mapOrdenToUi(o) {
         : sapDateToMs(o.finishdate ?? o.FinishDate);
 
     const userstatus = o.userstatus ?? o.Userstatus ?? "";
+    //se declaran los campos que se agregaron al json
+    const id_mecanico = o.id_mecanico ?? o.IdMecanico ?? "";
+    const nombre_mecanico = o.nombre_mecanico ?? o.NombreMec ?? "";
+    const nombre_cliente = o.nombre_cliente ?? o.NombreCliente ?? "";
 
     return {
       ...o,
@@ -90,6 +94,11 @@ function mapOrdenToUi(o) {
       startdate: startMs,
       finishdate: finishMs,
       userstatus: String(userstatus || ""),
+
+      // Se agregaron estos campos al json
+      id_mecanico: String(id_mecanico || ""),
+      nombre_mecanico: String(nombre_mecanico || ""),
+      nombre_cliente: String(nombre_cliente || ""),
     };
   }
 
@@ -101,6 +110,10 @@ function mapOrdenToUi(o) {
     startdate: sapDateToMs(o?.StartDate),
     finishdate: sapDateToMs(o?.FinishDate),
     userstatus: String(o?.Userstatus ?? ""),
+    // Se agregaron estos campos al json
+    id_mecanico: String(o?.IdMecanico ?? ""),
+    nombre_mecanico: String(o?.NombreMec ?? ""),
+    nombre_cliente: String(o?.NombreCliente ?? ""),
     _raw: o,
   };
 }

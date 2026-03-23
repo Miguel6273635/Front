@@ -247,7 +247,7 @@ export default function ModalesDetalleOrden({
             {/* Body */}
             <View style={signStyles.body}>
               {/* ✅ correo */}
-              <Text style={signStyles.label}>Correo del cliente (obligatorio)</Text>
+              <Text style={signStyles.label}>Correo del cliente (opcional)</Text>
               <TextInput
                 value={String(clienteEmail || "")}
                 onChangeText={setClienteEmail}

@@ -1,4 +1,3 @@
-// src/offline/sapQueue.js
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import NetInfo from "@react-native-community/netinfo";
 
@@ -6,8 +5,12 @@ import NetInfo from "@react-native-community/netinfo";
  * ✅ Cola SAP con "dedupeKey" para pisar estatus:
  * - Estatus (0400 / 0300 / etc) deben usar dedupeKey = `STATUS:<orderId>`
  * - Confirmaciones NO deben pisarse normalmente (dedupeKey opcional)
+ * - PENDIENTE_FIRMA_0300 guarda:
+ *    1) attachment
+ *    2) status 0300
+ *   y al procesarse los envía en ese orden
  *
- * Uso recomendado desde tu index:
+ * Uso recomendado:
  *   upsertSapQueueItem({
  *     type: "STATUS",
  *     orderId,
@@ -51,8 +54,14 @@ function normalizeMethod(method) {
 
 function normalizeType(type) {
   const t = String(type || "GENERIC").toUpperCase();
-  // puedes agregar más tipos si quieres
-  const allowed = ["STATUS", "CONFIRMATIONS", "SIGNATURE", "PDF", "GENERIC"];
+  const allowed = [
+    "STATUS",
+    "CONFIRMATIONS",
+    "SIGNATURE",
+    "PDF",
+    "GENERIC",
+    "PENDIENTE_FIRMA_0300",
+  ];
   return allowed.includes(t) ? t : "GENERIC";
 }
 
@@ -82,12 +91,10 @@ export async function upsertSapQueueItem({
   key,
 }) {
   const orderIdNorm = safeStr(orderId);
-
   const finalKey = safeStr(dedupeKey) || safeStr(key) || undefined;
 
   const item = {
     id: uid(),
-    // guardamos en ambos por compat
     dedupeKey: finalKey,
     key: finalKey,
 
@@ -120,10 +127,9 @@ export async function upsertSapQueueItem({
       q[idx] = {
         ...prev,
         ...item,
-        id: prev.id, // mantiene identidad
+        id: prev.id,
         createdAt: prev.createdAt,
-        tries: Number(prev.tries || 0), // mantiene tries
-        // lastError se limpia porque es "nuevo intento lógico"
+        tries: Number(prev.tries || 0),
         lastError: null,
       };
 
@@ -132,7 +138,6 @@ export async function upsertSapQueueItem({
     }
   }
 
-  // append
   q.push(item);
   await saveQueue(q);
   return item;
@@ -173,8 +178,7 @@ export async function processSapQueue({ ensureValidToken, apiInstance } = {}) {
   let q = await loadQueue();
   if (!q.length) return { ok: true, processed: 0, remaining: 0 };
 
-  // Normaliza por si hay basura
-  q = q.filter((x) => x && safeStr(x.endpoint));
+  q = q.filter((x) => x && (safeStr(x.endpoint) || x.type === "PENDIENTE_FIRMA_0300"));
 
   const keep = [];
   let processed = 0;
@@ -188,13 +192,40 @@ export async function processSapQueue({ ensureValidToken, apiInstance } = {}) {
     const tries = Number(item?.tries || 0);
 
     if (tries >= MAX_TRIES) {
-      // lo dejamos tal cual (o podrías moverlo a "dead letter")
       keep.push(item);
       skippedMaxTries++;
       continue;
     }
 
     try {
+      // =========================
+      // ✅ Caso especial:
+      // Pendiente de firma offline
+      // - primero attachment
+      // - luego status 0300
+      // =========================
+      if (item.type === "PENDIENTE_FIRMA_0300") {
+        const attachmentEndpoint = safeStr(item?.payload?.attachmentEndpoint);
+        const statusEndpoint = safeStr(item?.payload?.statusEndpoint);
+
+        const attachmentPayload = item?.payload?.attachmentPayload;
+        const statusPayload = item?.payload?.statusPayload;
+
+        if (!attachmentEndpoint || !attachmentPayload) {
+          throw new Error("Queue item PENDIENTE_FIRMA_0300 sin attachment válido");
+        }
+
+        if (!statusEndpoint || !statusPayload) {
+          throw new Error("Queue item PENDIENTE_FIRMA_0300 sin status válido");
+        }
+
+        await apiInstance.post(attachmentEndpoint, attachmentPayload);
+        await apiInstance.post(statusEndpoint, statusPayload);
+
+        processed++;
+        continue;
+      }
+
       const method = normalizeMethod(item.method).toLowerCase();
       const endpoint = safeStr(item.endpoint);
 
@@ -211,7 +242,6 @@ export async function processSapQueue({ ensureValidToken, apiInstance } = {}) {
       }
 
       processed++;
-      // ✅ éxito => NO se conserva
     } catch (e) {
       keep.push({
         ...item,

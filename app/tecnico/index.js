@@ -14,7 +14,7 @@ import { Ionicons } from "@expo/vector-icons";
 import Header from "../../src/components/Header";
 
 import { useAuth } from "../../src/context/AuthContext";
-import { useOffline } from "../../src/offline/OffilneProvider";
+import { useOffline } from "../../src/offline/OfflineProvider";
 import { bootstrapPrefetchOrdenesTecnico } from "../../src/offline/bootstrapSyncTecnico";
 
 // ====== Datos del menú (tiles) ======
@@ -49,12 +49,12 @@ const TILES = [
     icon: "navigate-outline",
     onPress: () => router.push("/tecnico/rutas"),
   },
-  {
+  /*{
     key: "documentos",
     title: "Documentos de mantenimiento",
     icon: "documents-outline",
     onPress: () => router.push("/tecnico/documentos"),
-  },
+  },*/
 ];
 
 // ====== Tile estilo Fiori ======

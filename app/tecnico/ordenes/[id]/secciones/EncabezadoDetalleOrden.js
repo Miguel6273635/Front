@@ -1,4 +1,3 @@
-// app/ordenes/[id]/secciones/EncabezadoDetalleOrden.js
 import React from "react";
 import { View, Text, TouchableOpacity } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
@@ -29,42 +28,33 @@ const Row = ({ label, value, styles, formatValueForRow }) => {
 export default function EncabezadoDetalleOrden({
   orden,
   id,
-
-  // UI / estilos
   styles,
   FIORI,
-
-  // derivados
   estatusColor,
   isNoMant,
   checkinDone,
-  isOrderFinished, // acá le pasamos isOrderFinishedReal desde el padre
-
-  // valores listos
+  isOrderFinished,
   direccionValor,
   allMaterialsLen,
-
-  // helpers
   fmtDMY,
   formatValueForRow,
-
-  // callbacks
   onAbrirPdfNoMant,
   onVerMaterialesOrden,
-  orderStartedAtMs, // (opcional, por si lo quieres mostrar aquí)
-  orderFinishedAtMs, // (opcional, por si lo quieres mostrar aquí)
+  orderStartedAtMs,
+  orderFinishedAtMs,
+  orderElapsedMs,
+  fmtDateTimeLocal,
+  msToHMS,
+  statusCode: statusCodeProp,
+  statusLabel: statusLabelProp,
 }) {
-  const statusCode = String(orden?.estatus_code || orden?.userstatus || "").trim();
+  const statusCode = String(statusCodeProp || orden?.estatus_code || orden?.userstatus || "").trim();
+  const statusLabel = String(statusLabelProp || orden?.estatus_label || orden?.estatus_code || "—").trim();
   const isPendingFirma0400 = statusCode === "0400";
 
-  // ✅ correo ya guardado por el padre en orden.cliente_email
   const correoCliente =
     String(
-      orden?.cliente_email ||
-        orden?.email_cliente ||
-        orden?.mail_cliente ||
-        orden?.Mail1 ||
-        ""
+      orden?.cliente_email || orden?.email_cliente || orden?.mail_cliente || orden?.Mail1 || ""
     ).trim() || null;
 
   return (
@@ -77,9 +67,7 @@ export default function EncabezadoDetalleOrden({
         </View>
 
         <View style={[styles.statusBadge, { backgroundColor: estatusColor }]}>
-          <Text style={styles.statusBadgeText}>
-            {orden?.estatus_label || orden?.estatus_code || "—"}
-          </Text>
+          <Text style={styles.statusBadgeText}>{statusLabel}</Text>
         </View>
       </View>
 
@@ -97,7 +85,6 @@ export default function EncabezadoDetalleOrden({
               Las operaciones se muestran solo para referencia y no se pueden iniciar.
             </Text>
 
-            {/* Si tuvieras botón para PDF no mantenimiento en header */}
             {typeof onAbrirPdfNoMant === "function" && (
               <TouchableOpacity
                 style={[styles.btnNoMantBanner, { marginTop: 10 }]}
@@ -111,7 +98,6 @@ export default function EncabezadoDetalleOrden({
         </View>
       )}
 
-      {/* ✅ Pendiente de firma (0400) NO es finalizada real */}
       {!isNoMant && isPendingFirma0400 && (
         <View style={styles.noMantBanner}>
           <Ionicons
@@ -123,7 +109,7 @@ export default function EncabezadoDetalleOrden({
           <View style={{ flex: 1 }}>
             <Text style={styles.noMantTitle}>Orden pendiente de firma</Text>
             <Text style={styles.noMantText}>
-              Esta orden quedó en estatus 0400 (pendiente de firma). Puedes continuar el proceso
+              Esta orden quedó en estatus (pendiente de firma). Puedes continuar el proceso
               para capturar firma y finalizar.
             </Text>
           </View>
@@ -164,18 +150,6 @@ export default function EncabezadoDetalleOrden({
         </View>
       )}
 
-      {orden?.partners?.length > 0 && (
-        <View style={styles.panel}>
-          <Text style={styles.panelTitle}>Datos del solicitante</Text>
-          {orden.partners.map((p, idx) => (
-            <Text key={idx} style={styles.value}>
-              <Text style={styles.labelInline}>Rol: </Text>
-              {p.role} <Text style={styles.labelInline}>· Partner: </Text>
-              {p.partner}
-            </Text>
-          ))}
-        </View>
-      )}
 
       <View style={styles.panel}>
         <Text style={styles.panelTitle}>Datos de la orden</Text>
@@ -187,7 +161,6 @@ export default function EncabezadoDetalleOrden({
           formatValueForRow={formatValueForRow}
         />
 
-        {/* ✅ NUEVO: Correo del cliente */}
         <Row
           label="Correo"
           value={correoCliente}
@@ -216,24 +189,32 @@ export default function EncabezadoDetalleOrden({
           formatValueForRow={formatValueForRow}
         />
 
-        {/* (Opcional) Si quieres mostrar inicio/fin LOCAL del cronómetro:
-        {orderStartedAtMs ? (
+        {Number.isFinite(orderStartedAtMs) ? (
           <Row
-            label="Inicio (local)"
-            value={new Date(orderStartedAtMs).toLocaleString()}
+            label="Inicio local"
+            value={typeof fmtDateTimeLocal === "function" ? fmtDateTimeLocal(orderStartedAtMs) : "—"}
             styles={styles}
             formatValueForRow={formatValueForRow}
           />
         ) : null}
-        {orderFinishedAtMs ? (
+
+        {Number.isFinite(orderFinishedAtMs) ? (
           <Row
-            label="Fin (local)"
-            value={new Date(orderFinishedAtMs).toLocaleString()}
+            label="Fin local"
+            value={typeof fmtDateTimeLocal === "function" ? fmtDateTimeLocal(orderFinishedAtMs) : "—"}
             styles={styles}
             formatValueForRow={formatValueForRow}
           />
         ) : null}
-        */}
+
+        {Number.isFinite(orderElapsedMs) ? (
+          <Row
+            label="Tiempo transcurrido"
+            value={typeof msToHMS === "function" ? msToHMS(orderElapsedMs) : "—"}
+            styles={styles}
+            formatValueForRow={formatValueForRow}
+          />
+        ) : null}
 
         {allMaterialsLen > 0 && (
           <TouchableOpacity

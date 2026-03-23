@@ -8,7 +8,7 @@ import { AuthProvider } from "../src/context/AuthContext";
 import { UbicacionProvider } from "../src/context/UbicacionContext";
 import { DrawerProvider } from "../src/context/DrawerContext";
 import SideDrawer from "../src/components/SideDrawer";
-import { OfflineProvider } from "../src/offline/OffilneProvider";
+import { OfflineProvider } from "../src/offline/OfflineProvider";
 
 export default function RootLayout() {
   return (

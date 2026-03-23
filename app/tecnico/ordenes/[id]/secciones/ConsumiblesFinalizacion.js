@@ -5,7 +5,6 @@ import {
   TextInput,
   TouchableOpacity,
   ActivityIndicator,
-  FlatList,
   StyleSheet,
   Modal,
   Pressable,
@@ -110,11 +109,30 @@ const pairLabel = (p) =>
     .trim()
     .toUpperCase()}`;
 
+function stableRowsString(rows) {
+  try {
+    return JSON.stringify(
+      (Array.isArray(rows) ? rows : []).map((r) => ({
+        Material: String(r?.Material || "").trim(),
+        Descripcion: String(r?.Descripcion || "").trim(),
+        Agrupador1: String(r?.Agrupador1 || "").trim().toUpperCase(),
+        Agrupador2: String(r?.Agrupador2 || "").trim().toUpperCase(),
+        Cantidad: String(r?.Cantidad || "").trim(),
+        Unidad: String(r?.Unidad || "").trim().toUpperCase(),
+        Centro: String(r?.Centro || "").trim(),
+      }))
+    );
+  } catch {
+    return "[]";
+  }
+}
+
 export default function ConsumiblesFinalizacion({
   plant,
   coberturaTipo,
   stylesGlobal,
   FIORI,
+  initialRows = [],
   onChange,
 }) {
   const s = stylesGlobal || localStyles;
@@ -148,7 +166,35 @@ export default function ConsumiblesFinalizacion({
 
   const loadIdRef = useRef(0);
 
+  // ✅ banderas para evitar ciclo infinito padre <-> hijo
+  const skipNextOnChangeRef = useRef(false);
+  const lastHydratedRef = useRef("");
+  const lastEmittedRef = useRef("");
+
+  // ✅ hidrata SOLO cuando initialRows cambió de verdad
   useEffect(() => {
+    const incomingKey = stableRowsString(initialRows);
+
+    if (incomingKey !== lastHydratedRef.current) {
+      lastHydratedRef.current = incomingKey;
+      skipNextOnChangeRef.current = true;
+      setSelected(Array.isArray(initialRows) ? initialRows : []);
+    }
+  }, [initialRows]);
+
+  // ✅ emite al padre solo cuando el cambio fue del usuario, no de la hidratación
+  useEffect(() => {
+    const selectedKey = stableRowsString(selected);
+
+    if (skipNextOnChangeRef.current) {
+      skipNextOnChangeRef.current = false;
+      lastEmittedRef.current = selectedKey;
+      return;
+    }
+
+    if (selectedKey === lastEmittedRef.current) return;
+
+    lastEmittedRef.current = selectedKey;
     onChange?.(selected);
   }, [selected, onChange]);
 
@@ -327,57 +373,53 @@ export default function ConsumiblesFinalizacion({
   };
 
   return (
-    <View style={[localStyles.card, { borderColor: P.border || "#DDE6F2" }]}>
-      <View style={localStyles.headerRow}>
+    <View style={[s.card, { borderColor: P.border || "#DDE6F2" }]}>
+      <View style={s.headerRow}>
         <View style={{ flex: 1 }}>
-          <Text style={[localStyles.title, { color: P.text || "#0B1F3B" }]}>Consumibles</Text>
-          <Text style={localStyles.helperText}>
-            Agrega uno por uno.
-          </Text>
+          <Text style={[s.title, { color: P.text || "#0B1F3B" }]}>Consumibles</Text>
+          <Text style={s.helperText}>Agrega uno por uno.</Text>
         </View>
 
         <TouchableOpacity
-          style={[localStyles.addBtn, { backgroundColor: P.brand || "#0A6ED1" }]}
+          style={[s.addBtn, { backgroundColor: P.brand || "#0A6ED1" }]}
           onPress={openAddModal}
           activeOpacity={0.9}
         >
           <Ionicons name="add" size={18} color="#fff" />
-          <Text style={localStyles.addBtnText}>Agregar</Text>
+          <Text style={s.addBtnText}>Agregar</Text>
         </TouchableOpacity>
       </View>
 
-      <View style={localStyles.metaRow}>
-        <Text style={localStyles.metaLabel}>Cobertura:</Text>
-        <Text style={localStyles.metaValue}>{coverageKey || "—"}</Text>
-        <Text style={[localStyles.metaLabel, { marginLeft: 12 }]}>Centro:</Text>
-        <Text style={localStyles.metaValue}>{plant || "—"}</Text>
+      <View style={s.metaRow}>
+        <Text style={s.metaLabel}>Cobertura:</Text>
+        <Text style={s.metaValue}>{coverageKey || "—"}</Text>
+        {/*<Text style={[s.metaLabel, { marginLeft: 12 }]}>Centro:</Text>
+        <Text style={s.metaValue}>{plant || "—"}</Text>*/}
       </View>
 
       {!selected.length ? (
-        <View style={localStyles.emptyBox}>
+        <View style={s.emptyBox}>
           <Ionicons name="cube-outline" size={22} color="#63718B" />
-          <Text style={localStyles.emptyText}>
-            No has agregado consumibles todavía.
-          </Text>
+          <Text style={s.emptyText}>No has agregado consumibles todavía.</Text>
         </View>
       ) : (
         <View style={{ marginTop: 12, gap: 10 }}>
           {selected.map((item, idx) => (
-            <View key={`${buildSelectedKey(item)}-${idx}`} style={localStyles.selectedCard}>
+            <View key={`${buildSelectedKey(item)}-${idx}`} style={s.selectedCard}>
               <View style={{ flex: 1 }}>
-                <Text style={localStyles.selectedCode}>{item.Material}</Text>
-                <Text style={localStyles.selectedDesc}>{item.Descripcion || "Sin descripción"}</Text>
-                <Text style={localStyles.selectedMeta}>
+                <Text style={s.selectedCode}>{item.Material}</Text>
+                <Text style={s.selectedDesc}>{item.Descripcion || "Sin descripción"}</Text>
+                <Text style={s.selectedMeta}>
                   Categoría: {item.Agrupador1} · {item.Agrupador2}
                 </Text>
-                <Text style={localStyles.selectedMeta}>
+                <Text style={s.selectedMeta}>
                   Cantidad: {item.Cantidad} {item.Unidad}
                 </Text>
               </View>
 
-              <View style={localStyles.actionsCol}>
+              <View style={s.actionsCol}>
                 <TouchableOpacity
-                  style={localStyles.iconBtn}
+                  style={s.iconBtn}
                   onPress={() => handleEditItem(item)}
                   activeOpacity={0.9}
                 >
@@ -385,7 +427,7 @@ export default function ConsumiblesFinalizacion({
                 </TouchableOpacity>
 
                 <TouchableOpacity
-                  style={localStyles.iconBtn}
+                  style={s.iconBtn}
                   onPress={() => handleDeleteItem(item)}
                   activeOpacity={0.9}
                 >
@@ -397,48 +439,35 @@ export default function ConsumiblesFinalizacion({
         </View>
       )}
 
-      <Modal
-        visible={modalOpen}
-        transparent
-        animationType="fade"
-        onRequestClose={closeAddModal}
-      >
-        <Pressable style={localStyles.modalBackdrop} onPress={closeAddModal}>
+      <Modal visible={modalOpen} transparent animationType="fade" onRequestClose={closeAddModal}>
+        <Pressable style={s.modalBackdrop} onPress={closeAddModal}>
           <KeyboardAvoidingView
             behavior={Platform.OS === "ios" ? "padding" : undefined}
-            style={localStyles.modalCenter}
+            style={s.modalCenter}
           >
             <Pressable
-              style={[localStyles.modalCard, { borderColor: P.border || "#DDE6F2" }]}
+              style={[s.modalCard, { borderColor: P.border || "#DDE6F2" }]}
               onPress={() => {}}
             >
-              <View style={localStyles.modalHeader}>
-                <Text style={[localStyles.modalTitle, { color: P.text || "#0B1F3B" }]}>
+              <View style={s.modalHeader}>
+                <Text style={[s.modalTitle, { color: P.text || "#0B1F3B" }]}>
                   {editingKey ? "Editar consumible" : "Agregar consumible"}
                 </Text>
 
-                <TouchableOpacity onPress={closeAddModal} style={localStyles.modalCloseBtn}>
+                <TouchableOpacity onPress={closeAddModal} style={s.modalCloseBtn}>
                   <Ionicons name="close" size={18} color="#0B1F3B" />
                 </TouchableOpacity>
               </View>
 
-              <ScrollView
-                keyboardShouldPersistTaps="handled"
-                showsVerticalScrollIndicator={false}
-              >
-                <Text style={localStyles.fieldLabel}>Categoría</Text>
+              <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+                <Text style={s.fieldLabel}>Categoría</Text>
 
                 <TouchableOpacity
-                  style={localStyles.selector}
+                  style={s.selector}
                   onPress={() => setPairPickerOpen((v) => !v)}
                   activeOpacity={0.9}
                 >
-                  <Text
-                    style={[
-                      localStyles.selectorText,
-                      !selectedPair ? localStyles.placeholderText : null,
-                    ]}
-                  >
+                  <Text style={[s.selectorText, !selectedPair ? s.placeholderText : null]}>
                     {selectedPair ? pairLabel(selectedPair) : "Selecciona una categoría"}
                   </Text>
                   <Ionicons
@@ -449,7 +478,7 @@ export default function ConsumiblesFinalizacion({
                 </TouchableOpacity>
 
                 {pairPickerOpen ? (
-                  <View style={localStyles.dropdownBox}>
+                  <View style={s.dropdownBox}>
                     <ScrollView nestedScrollEnabled style={{ maxHeight: 220 }}>
                       {pairsForCoverage.map((p) => {
                         const id = pairId(p);
@@ -458,7 +487,7 @@ export default function ConsumiblesFinalizacion({
                         return (
                           <TouchableOpacity
                             key={id}
-                            style={[localStyles.dropdownItem, active && localStyles.dropdownItemActive]}
+                            style={[s.dropdownItem, active && s.dropdownItemActive]}
                             onPress={() => {
                               setSelectedPairId(id);
                               setPairPickerOpen(false);
@@ -468,10 +497,7 @@ export default function ConsumiblesFinalizacion({
                             activeOpacity={0.9}
                           >
                             <Text
-                              style={[
-                                localStyles.dropdownItemText,
-                                active && localStyles.dropdownItemTextActive,
-                              ]}
+                              style={[s.dropdownItemText, active && s.dropdownItemTextActive]}
                             >
                               {pairLabel(p)}
                             </Text>
@@ -482,13 +508,10 @@ export default function ConsumiblesFinalizacion({
                   </View>
                 ) : null}
 
-                <Text style={[localStyles.fieldLabel, { marginTop: 12 }]}>Material</Text>
+                <Text style={[s.fieldLabel, { marginTop: 12 }]}>Material</Text>
 
                 <TouchableOpacity
-                  style={[
-                    localStyles.selector,
-                    !selectedPair && { opacity: 0.55 },
-                  ]}
+                  style={[s.selector, !selectedPair && { opacity: 0.55 }]}
                   onPress={() => {
                     if (!selectedPair) return;
                     setMaterialPickerOpen((v) => !v);
@@ -496,14 +519,13 @@ export default function ConsumiblesFinalizacion({
                   activeOpacity={0.9}
                 >
                   <Text
-                    style={[
-                      localStyles.selectorText,
-                      !selectedMaterial ? localStyles.placeholderText : null,
-                    ]}
+                    style={[s.selectorText, !selectedMaterial ? s.placeholderText : null]}
                     numberOfLines={2}
                   >
                     {selectedMaterial
-                      ? `${selectedMaterial.Material} · ${selectedMaterial.Descripcion || "Sin descripción"}`
+                      ? `${selectedMaterial.Material} · ${
+                          selectedMaterial.Descripcion || "Sin descripción"
+                        }`
                       : "Selecciona un material"}
                   </Text>
                   <Ionicons
@@ -514,28 +536,26 @@ export default function ConsumiblesFinalizacion({
                 </TouchableOpacity>
 
                 {!selectedPair ? (
-                  <Text style={localStyles.helperMini}>
-                    Primero selecciona una categoría.
-                  </Text>
+                  <Text style={s.helperMini}>Primero selecciona una categoría.</Text>
                 ) : null}
 
                 {selectedPair && materialPickerOpen ? (
-                  <View style={localStyles.dropdownBox}>
+                  <View style={s.dropdownBox}>
                     <TextInput
                       value={materialSearch}
                       onChangeText={setMaterialSearch}
                       placeholder="Buscar material..."
                       placeholderTextColor="#63718B"
-                      style={localStyles.searchInput}
+                      style={s.searchInput}
                     />
 
                     {loadingMaterials ? (
                       <View style={{ paddingVertical: 16, alignItems: "center" }}>
                         <ActivityIndicator />
-                        <Text style={localStyles.helperMini}>Cargando materiales…</Text>
+                        <Text style={s.helperMini}>Cargando materiales…</Text>
                       </View>
                     ) : filteredMaterials.length === 0 ? (
-                      <Text style={[localStyles.helperMini, { padding: 12 }]}>
+                      <Text style={[s.helperMini, { padding: 12 }]}>
                         No se encontraron materiales para esta categoría.
                       </Text>
                     ) : (
@@ -551,10 +571,7 @@ export default function ConsumiblesFinalizacion({
                           return (
                             <TouchableOpacity
                               key={`${item.Material}-${item.Agrupador1}-${item.Agrupador2}-${idx}`}
-                              style={[
-                                localStyles.dropdownItem,
-                                active && localStyles.dropdownItemActive,
-                              ]}
+                              style={[s.dropdownItem, active && s.dropdownItemActive]}
                               onPress={() => {
                                 setSelectedMaterial(item);
                                 setMaterialPickerOpen(false);
@@ -562,18 +579,12 @@ export default function ConsumiblesFinalizacion({
                               activeOpacity={0.9}
                             >
                               <Text
-                                style={[
-                                  localStyles.dropdownItemText,
-                                  active && localStyles.dropdownItemTextActive,
-                                ]}
+                                style={[s.dropdownItemText, active && s.dropdownItemTextActive]}
                               >
                                 {item.Material}
                               </Text>
                               <Text
-                                style={[
-                                  localStyles.dropdownItemSub,
-                                  active && { color: "#fff" },
-                                ]}
+                                style={[s.dropdownItemSub, active && { color: "#fff" }]}
                               >
                                 {item.Descripcion || "Sin descripción"}
                               </Text>
@@ -585,53 +596,53 @@ export default function ConsumiblesFinalizacion({
                   </View>
                 ) : null}
 
-                <View style={localStyles.formRow}>
+                <View style={s.formRow}>
                   <View style={{ flex: 1 }}>
-                    <Text style={localStyles.fieldLabel}>Cantidad</Text>
+                    <Text style={s.fieldLabel}>Cantidad</Text>
                     <TextInput
                       value={qtyDraft}
                       onChangeText={setQtyDraft}
                       keyboardType="numeric"
                       placeholder="1"
                       placeholderTextColor="#63718B"
-                      style={localStyles.textInput}
+                      style={s.textInput}
                     />
                   </View>
 
                   <View style={{ width: 12 }} />
 
                   <View style={{ flex: 1 }}>
-                    <Text style={localStyles.fieldLabel}>Unidad</Text>
+                    <Text style={s.fieldLabel}>Unidad</Text>
                     <TextInput
                       value={unitDraft}
                       onChangeText={setUnitDraft}
                       placeholder="PZA"
                       placeholderTextColor="#63718B"
                       autoCapitalize="characters"
-                      style={localStyles.textInput}
+                      style={s.textInput}
                     />
                   </View>
                 </View>
 
-                <View style={localStyles.modalActions}>
+                <View style={s.modalActions}>
                   <TouchableOpacity
                     onPress={closeAddModal}
-                    style={localStyles.btnGhost}
+                    style={s.btnGhost}
                     activeOpacity={0.9}
                   >
-                    <Text style={localStyles.btnGhostTxt}>Cancelar</Text>
+                    <Text style={s.btnGhostTxt}>Cancelar</Text>
                   </TouchableOpacity>
 
                   <TouchableOpacity
                     onPress={handleSaveItem}
                     style={[
-                      localStyles.btnPrimary,
+                      s.btnPrimary,
                       (!selectedPair || !selectedMaterial) && { opacity: 0.55 },
                     ]}
                     activeOpacity={0.9}
                     disabled={!selectedPair || !selectedMaterial}
                   >
-                    <Text style={localStyles.btnPrimaryTxt}>
+                    <Text style={s.btnPrimaryTxt}>
                       {editingKey ? "Guardar cambios" : "Agregar"}
                     </Text>
                   </TouchableOpacity>

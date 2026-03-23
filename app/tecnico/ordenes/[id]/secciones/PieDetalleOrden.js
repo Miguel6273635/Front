@@ -65,7 +65,7 @@ export default function PieDetalleOrden({
           {/* Guardar pendiente (0400) */}
           <ActionButton
             icon="save-outline"
-            label="Guardar pendiente de firma (0400)"
+            label="Guardar pendiente de firma"
             onPress={onGuardarPendiente}
             disabled={disabledBySelection}
             style={[

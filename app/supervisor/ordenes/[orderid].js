@@ -15,7 +15,6 @@ import Header from "../../../src/components/Header";
 import {
   fetchOrdenDetalleSupervisor,
   fetchOperacionesSupervisor,
-  fetchComponentesPorOperacion,
 } from "../../../src/services/operacionesSupervisor";
 
 const COLORS = {
@@ -27,6 +26,27 @@ const COLORS = {
   muted: "#9AA5B1",
   accent: "#0A6ED1",
   danger: "#E76565",
+
+  pendienteBg: "#FDECEC",
+  pendienteBorder: "#F5B7B1",
+
+  procesoBg: "#FFF7E6",
+  procesoBorder: "#F5C16C",
+
+  finalBg: "#EAF7EF",
+  finalBorder: "#8FD19E",
+
+  firmaBg: "#EAF4FF",
+  firmaBorder: "#8EC5FF",
+
+  finalPendBg: "#EAF4FF",
+  finalPendBorder: "#7FB3FF",
+
+  noMantBg: "#F1F3F5",
+  noMantBorder: "#C9CED6",
+
+  unknownBg: "#F4F6F9",
+  unknownBorder: "#D6DEE8",
 };
 
 /* ======================
@@ -39,11 +59,10 @@ const sapDateToMs = (value) => {
 
   const s = String(value);
 
-  // /Date(1768176000000)/  o  /Date(1768176000000-0600)/
   const m = s.match(/\/Date\((\-?\d+)([+-]\d{4})?\)\//);
   if (m) {
     const ms = Number(m[1]);
-    const off = m[2]; // ej "-0600"
+    const off = m[2];
     if (!off) return ms;
 
     const sign = off.startsWith("-") ? -1 : 1;
@@ -51,16 +70,13 @@ const sapDateToMs = (value) => {
     const mm = parseInt(off.slice(3, 5), 10);
     const offsetMinutes = sign * (hh * 60 + mm);
 
-    // Ajusta a UTC real
     return ms - offsetMinutes * 60 * 1000;
   }
 
-  // por si llega ISO string
   const d = new Date(s);
   return Number.isNaN(d.getTime()) ? null : d.getTime();
 };
 
-// ✅ Formato estable (NO depende de timezone del dispositivo)
 const formatDateUTC = (value) => {
   const ms = sapDateToMs(value);
   if (ms === null) return "—";
@@ -75,7 +91,7 @@ const formatDateUTC = (value) => {
 };
 
 /* =========================
-   ✅ Reglas Userstatus (igual que técnicos)
+   ✅ Reglas Userstatus
    ========================= */
 function normalizeCode(code) {
   if (code === null || code === undefined) return "";
@@ -96,30 +112,107 @@ const PRIORITY = ["0500", "0400", "0300", "0200", "0100"];
 function resolveUserstatus(rawUserstatus, catalogMap = {}, itemFromApi = null) {
   const code = normalizeCode(rawUserstatus || itemFromApi?.estatus_code);
 
-  if (!code) return { code: "", label: "Sin empezar", type: "start", color: "#6A7381" };
+  if (!code) {
+    return {
+      code: "",
+      label: "Sin empezar",
+      type: "start",
+      color: "#6A7381",
+      bgColor: COLORS.unknownBg,
+      borderColor: COLORS.unknownBorder,
+    };
+  }
 
   for (const p of PRIORITY) {
     if (code === p) {
-      if (p === "0100") return { code: p, label: "PENDIENTE", type: "pendiente", color: "#D64545" };
-      if (p === "0200") return { code: p, label: "PROCESO", type: "proceso", color: "#D49C00" };
-      if (p === "0300") return { code: p, label: "FINALIZADA", type: "final", color: "#27AE60" };
-      if (p === "0400") return { code: p, label: "PENDIENTE DE FIRMA", type: "firma", color: "#2D9CDB" };
-      if (p === "0500") return { code: p, label: "FINALIZADA C/PENDIENTES", type: "final_pend", color: "#2D9CDB" };
+      if (p === "0100") {
+        return {
+          code: p,
+          label: "PENDIENTE",
+          type: "pendiente",
+          color: "#D64545",
+          bgColor: COLORS.pendienteBg,
+          borderColor: COLORS.pendienteBorder,
+        };
+      }
+      if (p === "0200") {
+        return {
+          code: p,
+          label: "PROCESO",
+          type: "proceso",
+          color: "#D49C00",
+          bgColor: COLORS.procesoBg,
+          borderColor: COLORS.procesoBorder,
+        };
+      }
+      if (p === "0300") {
+        return {
+          code: p,
+          label: "FINALIZADA",
+          type: "final",
+          color: "#27AE60",
+          bgColor: COLORS.finalBg,
+          borderColor: COLORS.finalBorder,
+        };
+      }
+      if (p === "0400") {
+        return {
+          code: p,
+          label: "PENDIENTE DE FIRMA",
+          type: "firma",
+          color: "#2D9CDB",
+          bgColor: COLORS.firmaBg,
+          borderColor: COLORS.firmaBorder,
+        };
+      }
+      if (p === "0500") {
+        return {
+          code: p,
+          label: "FINALIZADA C/PENDIENTES",
+          type: "final_pend",
+          color: "#2D9CDB",
+          bgColor: COLORS.finalPendBg,
+          borderColor: COLORS.finalPendBorder,
+        };
+      }
     }
   }
 
-  if (code === "0012") return { code, label: catalogMap?.["0012"] || "Sin empezar", type: "start", color: "#6A7381" };
+  if (code === "0012") {
+    return {
+      code,
+      label: catalogMap?.["0012"] || "Sin empezar",
+      type: "start",
+      color: "#6A7381",
+      bgColor: COLORS.unknownBg,
+      borderColor: COLORS.unknownBorder,
+    };
+  }
 
   if (isNoManttoCode(code)) {
     const cause = catalogMap?.[code] || `No mantenimiento (${code})`;
-    return { code, label: cause, type: "no_mantto", color: "#9E9E9E" };
+    return {
+      code,
+      label: cause,
+      type: "no_mantto",
+      color: "#7A869A",
+      bgColor: COLORS.noMantBg,
+      borderColor: COLORS.noMantBorder,
+    };
   }
 
-  return { code, label: catalogMap?.[code] || `Estatus ${code}`, type: "unknown", color: "#6A7381" };
+  return {
+    code,
+    label: catalogMap?.[code] || `Estatus ${code}`,
+    type: "unknown",
+    color: "#6A7381",
+    bgColor: COLORS.unknownBg,
+    borderColor: COLORS.unknownBorder,
+  };
 }
 
 /* ======================
-   ✅ Normaliza detalle (SAP vs normalizado)
+   ✅ Normaliza detalle
    ====================== */
 function normalizeDetalle(det) {
   if (!det) return null;
@@ -154,8 +247,6 @@ function normalizeDetalle(det) {
     equipment: String(equipment),
     nombre_orden: String(nombre_orden || "—"),
     userstatus: String(userstatus || ""),
-
-    // ✅ guardar ya normalizado a ms (UTC-safe)
     start_date: sapDateToMs(startRaw),
     finish_date: sapDateToMs(finishRaw),
   };
@@ -168,10 +259,6 @@ export default function DetalleOrdenSupervisor() {
   const [operaciones, setOperaciones] = useState([]);
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState(null);
-
-  const [openOps, setOpenOps] = useState({});
-  const [componentsByAct, setComponentsByAct] = useState({});
-  const [loadingComponents, setLoadingComponents] = useState({});
 
   const goBack = () => router.back();
 
@@ -199,29 +286,6 @@ export default function DetalleOrdenSupervisor() {
     if (orderid) cargarDetalle();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [orderid]);
-
-  const toggleOp = async (op, idx) => {
-    const activity = String(op?.Activity || "").padStart(4, "0");
-    const sub = String(op?.SubActivity || "");
-    const opId = `${activity}-${sub}-${idx}`;
-
-    const willOpen = !openOps[opId];
-    setOpenOps((prev) => ({ ...prev, [opId]: willOpen }));
-
-    if (componentsByAct[activity]) return;
-    if (!willOpen) return;
-
-    try {
-      setLoadingComponents((p) => ({ ...p, [activity]: true }));
-      const comps = await fetchComponentesPorOperacion(orderid, activity);
-      setComponentsByAct((p) => ({ ...p, [activity]: Array.isArray(comps) ? comps : [] }));
-    } catch (e) {
-      console.error("Error componentes:", e?.response?.data || e);
-      setComponentsByAct((p) => ({ ...p, [activity]: [] }));
-    } finally {
-      setLoadingComponents((p) => ({ ...p, [activity]: false }));
-    }
-  };
 
   const headerStatus = useMemo(() => {
     return resolveUserstatus(data?.userstatus ?? "", {}, data);
@@ -293,7 +357,6 @@ export default function DetalleOrdenSupervisor() {
             <Text style={styles.rowValue}>{data.equipment || "—"}</Text>
           </View>
 
-          {/* ✅ FECHAS (UTC estable) */}
           <View style={styles.row}>
             <Ionicons name="calendar-outline" size={16} color={COLORS.muted} />
             <Text style={styles.rowLabel}>Inicio:</Text>
@@ -318,75 +381,54 @@ export default function DetalleOrdenSupervisor() {
               const activity = String(op?.Activity || "").padStart(4, "0");
               const sub = String(op?.SubActivity || "");
               const opId = `${activity}-${sub}-${idx}`;
-              const isOpen = !!openOps[opId];
 
-              const opRawStatus = op?.userstatus ?? op?.Userstatus ?? op?.estatus ?? "0100";
+              const opRawStatus =
+                op?.userstatus ??
+                op?.Userstatus ??
+                op?.estatus_code ??
+                op?.estatus ??
+                "0100";
+
               const opStatus = resolveUserstatus(opRawStatus, {}, op);
 
-              const comps = componentsByAct[activity];
-              const compsLoading = !!loadingComponents[activity];
-
               return (
-                <View key={opId} style={styles.operationCard}>
-                  <TouchableOpacity
-                    style={styles.operationHeader}
-                    onPress={() => toggleOp(op, idx)}
-                    activeOpacity={0.85}
-                  >
+                <View
+                  key={opId}
+                  style={[
+                    styles.operationCard,
+                    {
+                      backgroundColor: opStatus.bgColor,
+                      borderColor: opStatus.borderColor,
+                    },
+                  ]}
+                >
+                  <View style={styles.operationHeaderStatic}>
                     <View style={{ flex: 1 }}>
                       <Text style={styles.operationTitle}>
                         {activity}
                         {sub ? `.${sub}` : ""} — {op?.Description || "Sin descripción"}
                       </Text>
 
-                      <View style={{ flexDirection: "row", alignItems: "center", marginTop: 4, gap: 8 }}>
+                      <View style={{ marginTop: 6, flexDirection: "row", alignItems: "center" }}>
                         <View
                           style={[
                             styles.opBadge,
-                            { borderColor: opStatus.color, backgroundColor: opStatus.color + "22" },
+                            {
+                              borderColor: opStatus.color,
+                              backgroundColor: "#FFFFFFAA",
+                            },
                           ]}
                         >
-                          <Text style={styles.opBadgeText}>
+                          <Text style={[styles.opBadgeText, { color: opStatus.color }]}>
                             {opStatus.label}
                             {opStatus.code ? ` (${opStatus.code})` : ""}
                           </Text>
                         </View>
-
-                        <Text style={styles.operationSub}>
-                          Duración: {op?.DurationNormal ?? "—"} {op?.DurationNormalUnit || ""}
-                        </Text>
                       </View>
                     </View>
 
-                    <Ionicons name={isOpen ? "chevron-up" : "chevron-down"} size={18} color={COLORS.muted} />
-                  </TouchableOpacity>
-
-                  {isOpen && (
-                    <View style={styles.operationBody}>
-                      {compsLoading ? (
-                        <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-                          <ActivityIndicator size="small" color={COLORS.accent} />
-                          <Text style={styles.emptyText}>Cargando componentes…</Text>
-                        </View>
-                      ) : !Array.isArray(comps) || comps.length === 0 ? (
-                        <Text style={styles.emptyText}>Sin componentes asociados a esta operación.</Text>
-                      ) : (
-                        comps.map((c, i) => (
-                          <View key={`${c.ResItem || i}`} style={styles.componentRow}>
-                            <View style={{ flex: 1 }}>
-                              <Text style={styles.componentTitle}>
-                                {c.Material || "—"} {c.MatlDesc ? `- ${c.MatlDesc}` : ""}
-                              </Text>
-                              <Text style={styles.componentMeta}>
-                                ResItem: {c.ResItem || "—"} · Req: {c.RequirementQuantity ?? 0}{" "}
-                                {c.RequirementQuantityUnit || ""} · Ret: {c.WithdQuan ?? 0}
-                              </Text>
-                            </View>
-                          </View>
-                        ))
-                      )}
-                    </View>
-                  )}
+                    <Ionicons name="construct-outline" size={20} color={opStatus.color} />
+                  </View>
                 </View>
               );
             })
@@ -412,7 +454,12 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.border,
     ...Platform.select({
-      ios: { shadowColor: "#000", shadowOpacity: 0.03, shadowRadius: 5, shadowOffset: { width: 0, height: 2 } },
+      ios: {
+        shadowColor: "#000",
+        shadowOpacity: 0.03,
+        shadowRadius: 5,
+        shadowOffset: { width: 0, height: 2 },
+      },
       android: { elevation: 1 },
     }),
   },
@@ -421,7 +468,14 @@ const styles = StyleSheet.create({
   orderIdText: { fontSize: 18, fontWeight: "700", color: COLORS.title },
   orderTypeText: { fontSize: 14, color: COLORS.text, marginTop: 2 },
 
-  statusPill: { flexDirection: "row", alignItems: "center", borderRadius: 20, borderWidth: 1, paddingHorizontal: 10, paddingVertical: 4 },
+  statusPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderRadius: 20,
+    borderWidth: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
   statusDot: { width: 10, height: 10, borderRadius: 5, marginRight: 6 },
   statusPillText: { fontSize: 12, fontWeight: "600", color: COLORS.title },
 
@@ -431,25 +485,52 @@ const styles = StyleSheet.create({
 
   sectionTitle: { fontSize: 15, fontWeight: "700", color: COLORS.title, marginBottom: 6 },
 
-  operationCard: { borderWidth: 1, borderColor: COLORS.border, borderRadius: 10, marginTop: 8, overflow: "hidden" },
-  operationHeader: { flexDirection: "row", alignItems: "center", paddingHorizontal: 10, paddingVertical: 10, backgroundColor: "#F5F7FA" },
-  operationTitle: { fontSize: 14, fontWeight: "600", color: COLORS.title },
-  operationSub: { fontSize: 12, color: COLORS.muted },
+  operationCard: {
+    borderWidth: 1,
+    borderRadius: 12,
+    marginTop: 10,
+    overflow: "hidden",
+  },
 
-  opBadge: { borderWidth: 1, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2 },
-  opBadgeText: { fontSize: 11, fontWeight: "700", color: COLORS.title },
+  operationHeaderStatic: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    gap: 10,
+  },
 
-  operationBody: { paddingHorizontal: 10, paddingVertical: 10, backgroundColor: "#FFFFFF" },
+  operationTitle: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: COLORS.title,
+  },
 
-  componentRow: { paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: COLORS.border },
-  componentTitle: { fontSize: 13, fontWeight: "600", color: COLORS.title },
-  componentMeta: { fontSize: 12, color: COLORS.muted, marginTop: 2 },
+  opBadge: {
+    alignSelf: "flex-start",
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+
+  opBadgeText: {
+    fontSize: 11,
+    fontWeight: "800",
+  },
 
   emptyText: { fontSize: 13, color: COLORS.muted, marginTop: 4, fontStyle: "italic" },
 
   errorWrap: { flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 24 },
   errorText: { textAlign: "center", fontSize: 14, color: COLORS.danger, marginBottom: 12 },
-  backBtn: { flexDirection: "row", alignItems: "center", backgroundColor: COLORS.accent, paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20 },
+  backBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: COLORS.accent,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 20,
+  },
   backBtnText: { color: "#fff", marginLeft: 6, fontWeight: "600" },
 
   centerBody: { flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 16 },

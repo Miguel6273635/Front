@@ -1,4 +1,3 @@
-// app/tecnico/pendiente_firma/index.js
 import React, { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import {
   View,
@@ -25,8 +24,20 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Print from "expo-print";
 import * as FileSystem from "expo-file-system/legacy";
 
-// ✅ cache detalle (para intentar usarlo antes de volver a pegar a SAP)
-import { loadOrdenTecnicoDetail } from "../../../src/offline/ordenesTecnicoCache";
+// cache detalle (para intentar usarlo antes de volver a pegar a SAP)
+import {
+  loadOrdenTecnicoDetail,
+  loadOrdenesTecnicoList,
+  saveOrdenesTecnicoList,
+  buildOfflineWindow,
+} from "../../../src/offline/ordenesTecnicoCache";
+
+import {
+  getLocalStatusPatch,
+  applyStatusPatchToOrdenes,
+} from "../../../src/offline/ordenesTecnicoLocalPatch";
+
+import { upsertSapQueueItem } from "../../../src/offline/sapQueue";
 
 // ✅ HTML/PDF mantenimiento (plantillas + operaciones)
 import { buildMantenimientoHtml } from "../../../src/services/templates/buildMantenimientoHtml";
@@ -151,9 +162,23 @@ const PENDING_SIGN_KEY = (orderId) => `pendingSign:${orderId}`;
 async function loadPendingSign(orderId) {
   try {
     const raw = await AsyncStorage.getItem(PENDING_SIGN_KEY(orderId));
-    return raw ? JSON.parse(raw) : null; // { checkedMap, savedAt }
+    return raw ? JSON.parse(raw) : null;
   } catch {
     return null;
+  }
+}
+
+async function loadPending0400FromOffline(userEmail) {
+  try {
+    const cached = await loadOrdenesTecnicoList(userEmail);
+    let data = Array.isArray(cached?.data) ? cached.data : [];
+
+    const patchMap = await getLocalStatusPatch(userEmail);
+    data = applyStatusPatchToOrdenes(data, patchMap);
+
+    return data.filter((it) => isPending0400(it));
+  } catch {
+    return [];
   }
 }
 
@@ -161,6 +186,7 @@ async function loadPendingSign(orderId) {
    ✅ Detección tipo (igual que detalle)
 ========================= */
 const safeTrim = (v) => String(v ?? "").trim();
+
 function detectTipoMantenimiento(orden) {
   const raw = [
     orden?.tipo_equipo,
@@ -207,15 +233,51 @@ function normalizeOpsForPdf(ops = []) {
 }
 
 /* =========================
+   ✅ Helpers para cliente/dirección
+========================= */
+function mapDireccionLikeBackend(addr) {
+  if (!addr) return { cliente: "", direccion: "" };
+
+  const Name1 = addr.Name1 ?? "";
+  const Name2 = addr.Name2 ?? "";
+  const Street = addr.Street ?? addr.StreetName ?? "";
+  const HouseNum1 = addr.HouseNum1 ?? "";
+  const StrSuppl3 = addr.StrSuppl3 ?? "";
+  const Location = addr.Location ?? "";
+  const City1 = addr.City1 ?? "";
+  const Region = addr.Region ?? "";
+  const PostCode1 = addr.PostCode1 ?? "";
+  const Country = addr.Country ?? "";
+
+  const cliente = [Name1, Name2].filter(Boolean).join(" ").trim();
+
+  const direccion = [
+    `${Street} ${HouseNum1}`.trim(),
+    StrSuppl3,
+    Location,
+    City1,
+    Region,
+    PostCode1,
+    Country,
+  ]
+    .filter((x) => x && String(x).trim().length > 0)
+    .join(", ");
+
+  return { cliente, direccion };
+}
+
+function pickSecondAddress(results = []) {
+  if (!Array.isArray(results) || results.length === 0) return null;
+  return results.length >= 2 ? results[1] : results[0];
+}
+
+/* =========================
    ✅ Fetch detalle (cache → API)
-   - Necesitamos orden + operaciones para generar PDF
 ========================= */
 async function fetchOrdenFullForPdf({ apiClient, token, orderId }) {
-  // 1) intenta cache detalle primero
   try {
     const cached = await loadOrdenTecnicoDetail(orderId);
     if (cached?.data?.Orderid) {
-      // por si venían ops ya mezcladas en cache:
       const ops = normalizeOpsForPdf(cached?.data?.operaciones || []);
       return { ...cached.data, operaciones: ops };
     }
@@ -242,7 +304,32 @@ async function fetchOrdenFullForPdf({ apiClient, token, orderId }) {
 
   ops = normalizeOpsForPdf(ops);
 
-  return { ...baseOrden, operaciones: ops };
+  let direccionSap = "";
+  let clienteSap = "";
+  try {
+    const resAddr = await apiClient.get(`/api/ordenes/sap/${orderId}/addresses`, { headers });
+    const results = resAddr?.data?.results || resAddr?.data?.d?.results || [];
+    const chosen = pickSecondAddress(results);
+    const mapped = mapDireccionLikeBackend(chosen);
+    direccionSap = mapped.direccion || "";
+    clienteSap = mapped.cliente || "";
+  } catch {}
+
+  return {
+    ...baseOrden,
+    cliente:
+      clienteSap ||
+      baseOrden?.cliente ||
+      baseOrden?.partner_name ||
+      `${baseOrden?.Name1 ?? ""} ${baseOrden?.Name2 ?? ""}`.trim(),
+    direccion:
+      direccionSap ||
+      baseOrden?.direccion ||
+      baseOrden?.address ||
+      baseOrden?.partner_address ||
+      "",
+    operaciones: ops,
+  };
 }
 
 /** Helper: recorta console.log del PDF para no reventar consola */
@@ -284,24 +371,22 @@ export default function PendienteFirmaIndex() {
   const [rows, setRows] = useState([]);
   const [query, setQuery] = useState("");
 
-  // ✅ selección
   const [selectMode, setSelectMode] = useState(false);
-  const [selectedMap, setSelectedMap] = useState({}); // { [orderId]: true }
+  const [selectedMap, setSelectedMap] = useState({});
 
-  // ✅ firma (una firma para N órdenes)
   const [showFirmaModal, setShowFirmaModal] = useState(false);
-  const [firmaDataUrl, setFirmaDataUrl] = useState(null); // data:image/png;base64,...
-  const [firmaForOrderIds, setFirmaForOrderIds] = useState([]); // ids al abrir modal
+  const [firmaDataUrl, setFirmaDataUrl] = useState(null);
+  const [firmaForOrderIds, setFirmaForOrderIds] = useState([]);
 
-  // ✅ correo del cliente (se manda en WorkOrderHeader.FunctLoc)
   const [clienteEmail, setClienteEmail] = useState("");
+  const [clienteNombre, setClienteNombre] = useState("");
+  const [clienteCargo, setClienteCargo] = useState("");
+  const [comentarioCliente, setComentarioCliente] = useState("");
 
-  // ✅ envío
   const [sending, setSending] = useState(false);
   const [sendProgress, setSendProgress] = useState({ done: 0, total: 0, current: "" });
-  const [sendResults, setSendResults] = useState([]); // { orderId, ok, msg }
+  const [sendResults, setSendResults] = useState([]);
 
-  // ✅ firma: ref para disparar "Guardar" y "Limpiar" con botones RN
   const signatureRef = useRef(null);
 
   const selectedIds = useMemo(
@@ -311,24 +396,37 @@ export default function PendienteFirmaIndex() {
 
   const fetchOrdenes0400 = useCallback(
     async ({ isRefresh = false } = {}) => {
-      const userEmail = safeStr(user?.correo || user?.email || user?.upn || user?.username).trim();
+      const userEmail = safeStr(
+        user?.correo || user?.email || user?.upn || user?.username
+      ).trim();
 
       try {
         if (isRefresh) setRefreshing(true);
         else setLoading(true);
 
-        const net = await NetInfo.fetch();
-        const isOnline = !!(net?.isConnected && net?.isInternetReachable !== false);
-
-        if (!isOnline) {
-          Alert.alert("Sin conexión", "Para esta vista (0400) se requiere internet para consultar SAP.");
+        if (!userEmail) {
+          Alert.alert("Sin usuario", "No se detectó el correo/usuario del técnico.");
           setAllOrdenes([]);
           return;
         }
 
-        if (!userEmail) {
-          Alert.alert("Sin usuario", "No se detectó el correo/usuario del técnico.");
+        const offlineRows = await loadPending0400FromOffline(userEmail);
+        if (offlineRows.length) {
+          setAllOrdenes(offlineRows);
+        } else if (!isRefresh) {
           setAllOrdenes([]);
+        }
+
+        const net = await NetInfo.fetch();
+        const isOnline = !!(net?.isConnected && net?.isInternetReachable !== false);
+
+        if (!isOnline) {
+          if (!offlineRows.length) {
+            Alert.alert(
+              "Sin conexión",
+              "No hay internet y no se encontró una lista offline de órdenes pendientes de firma."
+            );
+          }
           return;
         }
 
@@ -346,11 +444,13 @@ export default function PendienteFirmaIndex() {
 
         const res = await api.get(`/api/ordenes/sap/list?${params.toString()}`);
         const data = Array.isArray(res.data) ? res.data : [];
-        const only0400 = data.filter((it) => isPending0400(it));
 
+        const offlineWin = buildOfflineWindow(new Date());
+        await saveOrdenesTecnicoList(userEmail, data, offlineWin);
+
+        const only0400 = data.filter((it) => isPending0400(it));
         setAllOrdenes(only0400);
 
-        // limpia selección si ya no existen
         setSelectedMap((prev) => {
           const valid = new Set(only0400.map((x) => String(x?.Orderid)));
           const next = {};
@@ -359,10 +459,26 @@ export default function PendienteFirmaIndex() {
         });
       } catch (e) {
         console.error("fetchOrdenes0400 ERROR:", e?.response?.data || e?.message || e);
-        const serverMsg =
-          e?.response?.data?.detail || e?.response?.data?.error || "No se pudieron cargar las órdenes 0400.";
-        Alert.alert("Error", serverMsg);
-        setAllOrdenes([]);
+
+        const userEmail2 = safeStr(
+          user?.correo || user?.email || user?.upn || user?.username
+        ).trim();
+
+        const offlineRows = await loadPending0400FromOffline(userEmail2);
+        if (offlineRows.length) {
+          setAllOrdenes(offlineRows);
+          Alert.alert(
+            "Modo offline",
+            "No se pudo actualizar desde SAP, se muestran las órdenes guardadas localmente."
+          );
+        } else {
+          const serverMsg =
+            e?.response?.data?.detail ||
+            e?.response?.data?.error ||
+            "No se pudieron cargar las órdenes 0400.";
+          Alert.alert("Error", serverMsg);
+          setAllOrdenes([]);
+        }
       } finally {
         setLoading(false);
         setRefreshing(false);
@@ -401,18 +517,30 @@ export default function PendienteFirmaIndex() {
     setSelectedMap(next);
   };
 
+  const resetFirmaFields = () => {
+    setFirmaDataUrl(null);
+    setFirmaForOrderIds([]);
+    setClienteEmail("");
+    setClienteNombre("");
+    setClienteCargo("");
+    setComentarioCliente("");
+  };
+
   const startFirmaFlow = () => {
     if (selectedIds.length === 0) {
       Alert.alert("Selecciona órdenes", "Selecciona al menos una orden para firmar.");
       return;
     }
+
     setFirmaDataUrl(null);
     setFirmaForOrderIds(selectedIds);
-    setClienteEmail(""); // ✅ reset correo
+    setClienteEmail("");
+    setClienteNombre("");
+    setClienteCargo("");
+    setComentarioCliente("");
     setShowFirmaModal(true);
   };
 
-  // react-native-signature-canvas
   const onSignatureOK = (sig) => {
     setFirmaDataUrl(sig);
     setShowFirmaModal(false);
@@ -429,6 +557,7 @@ export default function PendienteFirmaIndex() {
 
   /* =========================
      ✅ Enviar órdenes a SAP (PDF + estatus)
+     ✅ Si no hay internet, encolar
   ========================= */
   const sendSelectedOrders = async () => {
     if (!firmaDataUrl) {
@@ -437,12 +566,28 @@ export default function PendienteFirmaIndex() {
     }
 
     const email = String(clienteEmail || "").trim();
+    const nombre = String(clienteNombre || "").trim();
+    const cargo = String(clienteCargo || "").trim();
+    const comentario = String(comentarioCliente || "").trim();
+
     if (!email) {
       Alert.alert("Falta correo", "Primero captura el correo del cliente.");
       return;
     }
     if (!isValidEmail(email)) {
       Alert.alert("Correo inválido", "Escribe un correo válido (ej: nombre@dominio.com).");
+      return;
+    }
+    if (!nombre) {
+      Alert.alert("Falta nombre", "Escribe el nombre del cliente.");
+      return;
+    }
+    if (!cargo) {
+      Alert.alert("Falta cargo", "Escribe el cargo del cliente.");
+      return;
+    }
+    if (!comentario) {
+      Alert.alert("Falta comentario", "Escribe el comentario del cliente.");
       return;
     }
 
@@ -453,21 +598,21 @@ export default function PendienteFirmaIndex() {
 
     const net = await NetInfo.fetch();
     const isOnline = !!(net?.isConnected && net?.isInternetReachable !== false);
-    if (!isOnline) {
-      Alert.alert("Sin conexión", "Para enviar a SAP necesitas internet.");
-      return;
-    }
 
-    const ok = await ensureValidToken();
-    if (!ok) return;
+    if (isOnline) {
+      const ok = await ensureValidToken();
+      if (!ok) return;
+    }
 
     Alert.alert(
       "Confirmar envío",
-      `Se enviarán ${selectedIds.length} orden(es) a SAP:\n- PDF de mantenimiento\n- Cambio de estatus 0400 → 0300\n\n¿Deseas continuar?`,
+      isOnline
+        ? `Se enviarán ${selectedIds.length} orden(es) a SAP:\n- PDF de mantenimiento\n- Cambio de estatus a FINALIZADA\n\n¿Deseas continuar?`
+        : `No hay internet.\n\nSe guardarán ${selectedIds.length} orden(es) localmente con:\n- PDF de mantenimiento\n- Cambio de estatus a FINALIZADA\n\nY se enviarán automáticamente cuando vuelva la red.\n\n¿Deseas continuar?`,
       [
         { text: "Cancelar", style: "cancel" },
         {
-          text: "Sí, enviar",
+          text: "Sí, continuar",
           style: "default",
           onPress: async () => {
             setSending(true);
@@ -482,7 +627,6 @@ export default function PendienteFirmaIndex() {
                 setSendProgress({ done: i, total: selectedIds.length, current: orderId });
 
                 try {
-                  // 1) leer checks guardados (operaciones seleccionadas)
                   const pending = await loadPendingSign(orderId);
                   const checkedMap = pending?.checkedMap || null;
 
@@ -492,7 +636,6 @@ export default function PendienteFirmaIndex() {
                     );
                   }
 
-                  // 2) obtener detalle completo para PDF
                   const ordenFull = await fetchOrdenFullForPdf({
                     apiClient: api,
                     token,
@@ -501,7 +644,36 @@ export default function PendienteFirmaIndex() {
 
                   const tipo = detectTipoMantenimiento(ordenFull);
 
-                  // 3) construir HTML (✅ OJO: buildMantenimientoHtml es async)
+                  const consumibles = Array.isArray(pending?.consumibles) ? pending.consumibles : [];
+                  const notaTecnico = String(pending?.notaTecnico || "").trim();
+
+                  const startedMs = Number.isFinite(pending?.orderStartedAtMs)
+                    ? pending.orderStartedAtMs
+                    : null;
+
+                  const finishedMs = Number.isFinite(pending?.orderFinishedAtMs)
+                    ? pending.orderFinishedAtMs
+                    : null;
+
+                  const elapsedMs = Number.isFinite(pending?.orderElapsedMs)
+                    ? pending.orderElapsedMs
+                    : Number.isFinite(startedMs) && Number.isFinite(finishedMs)
+                    ? Math.max(0, finishedMs - startedMs)
+                    : null;
+
+                  const tecnicoNombreFinal = String(
+                    user?.nombre ||
+                      user?.name ||
+                      user?.fullName ||
+                      user?.displayName ||
+                      user?.username ||
+                      ""
+                  ).trim();
+
+                  const coberturaTipoFinal = String(
+                    ordenFull?.cobertura_tipo || ordenFull?.coberturaTipo || ""
+                  ).trim();
+
                   const html = await buildMantenimientoHtml({
                     tipo,
                     orden: ordenFull,
@@ -509,19 +681,32 @@ export default function PendienteFirmaIndex() {
                     checkedMap,
                     signatureData: firmaDataUrl,
 
-                    // ✅ recomendado para que el PDF muestre el correo si tu plantilla lo usa
                     clienteEmail: email,
+                    clienteNombre: nombre,
+                    clienteCargo: cargo,
+
+                    avisoCliente: comentario,
+                    notaTecnico,
+
+                    tecnicoNombre: tecnicoNombreFinal,
+
+                    coberturaTipo: coberturaTipoFinal,
+                    consumibles,
+
+                    startMs: startedMs,
+                    finishMs: finishedMs,
+                    elapsedMs,
                   });
 
-                  // 4) generar PDF + base64
                   const { uri } = await Print.printToFileAsync({ html });
                   const pdfBase64 = await FileSystem.readAsStringAsync(uri, {
                     encoding: FileSystem.EncodingType.Base64,
                   });
 
-                  // 5) payload attachment (TU JSON)
                   const fileName =
-                    tipo === "escalera" ? "mantenimiento_escaleras.pdf" : "mantenimiento_elevadores.pdf";
+                    tipo === "escalera"
+                      ? "mantenimiento_escaleras.pdf"
+                      : "mantenimiento_elevadores.pdf";
 
                   const payloadAttachment = {
                     WorkOrderHeader: { Orderid: orderId },
@@ -536,12 +721,11 @@ export default function PendienteFirmaIndex() {
                     Return: [],
                   };
 
-                  // 6) ✅ payload status (TU JSON) + correo en FunctLoc
                   const payloadStatus0300 = {
                     OrderId: orderId,
                     WorkOrderHeader: {
                       Orderid: orderId,
-                      FunctLoc: email, // ✅ correo del cliente
+                      FunctLoc: email,
                     },
                     WorkOrderUserStatusSet: [
                       { UserStText: "0300", Langu: "ES", Inactive: " " },
@@ -550,21 +734,44 @@ export default function PendienteFirmaIndex() {
                     Return: [],
                   };
 
-                  // ✅ logs (sin tirar el base64 completo)
-                  logSapPayload("=== SAP PAYLOAD (ATTACHMENT) ===", payloadAttachment, { stripBase64: true });
+                  logSapPayload("=== SAP PAYLOAD (ATTACHMENT) ===", payloadAttachment, {
+                    stripBase64: true,
+                  });
                   logSapPayload("=== SAP PAYLOAD (STATUS 0300 / remove 0400) ===", payloadStatus0300);
 
-                  // 7) enviar a SAP (1) attachment
-                  await api.post(`/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet`, payloadAttachment, {
-                    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-                  });
+                  const workOrderEndpoint = `/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet`;
 
-                  // 8) enviar a SAP (2) status
-                  await api.post(`/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet`, payloadStatus0300, {
-                    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-                  });
+                  if (!isOnline) {
+                    await upsertSapQueueItem({
+                      type: "PENDIENTE_FIRMA_0300",
+                      orderId,
+                      endpoint: workOrderEndpoint,
+                      method: "POST",
+                      dedupeKey: `PENDIENTE_FIRMA_0300:${orderId}`,
+                      payload: {
+                        attachmentEndpoint: workOrderEndpoint,
+                        attachmentPayload: payloadAttachment,
+                        statusEndpoint: workOrderEndpoint,
+                        statusPayload: payloadStatus0300,
+                      },
+                    });
 
-                  results.push({ orderId, ok: true, msg: "Enviado OK (PDF + 0300)." });
+                    results.push({
+                      orderId,
+                      ok: true,
+                      msg: "Guardado offline. Se enviará cuando vuelva la red.",
+                    });
+                  } else {
+                    await api.post(workOrderEndpoint, payloadAttachment, {
+                      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+                    });
+
+                    await api.post(workOrderEndpoint, payloadStatus0300, {
+                      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+                    });
+
+                    results.push({ orderId, ok: true, msg: "Enviado OK (PDF + 0300)." });
+                  }
                 } catch (err) {
                   const msg =
                     err?.response?.data?.detail ||
@@ -579,7 +786,6 @@ export default function PendienteFirmaIndex() {
                 setSendProgress({ done: i + 1, total: selectedIds.length, current: orderId });
               }
 
-              // ✅ UI: quitar de la lista las que salieron OK
               const okSet = new Set(results.filter((r) => r.ok).map((r) => r.orderId));
               if (okSet.size) {
                 setAllOrdenes((prev) => (prev || []).filter((it) => !okSet.has(String(it?.Orderid))));
@@ -595,15 +801,15 @@ export default function PendienteFirmaIndex() {
 
               Alert.alert(
                 "Envío terminado",
-                `Correctas: ${okCount}\nCon error: ${failCount}\n\nRevisa la consola para ver los JSON enviados.`
+                isOnline
+                  ? `Correctas: ${okCount}\nCon error: ${failCount}\n\nRevisa la consola para ver los JSON enviados.`
+                  : `Guardadas/encoladas: ${okCount}\nCon error: ${failCount}\n\nSe enviarán automáticamente cuando vuelva la red.`
               );
 
               if (failCount === 0) {
                 setSelectMode(false);
                 clearSelection();
-                setFirmaDataUrl(null);
-                setFirmaForOrderIds([]);
-                setClienteEmail("");
+                resetFirmaFields();
               }
             } finally {
               setSending(false);
@@ -661,7 +867,6 @@ export default function PendienteFirmaIndex() {
     <View style={styles.container}>
       <Header title="Pendiente de firma" />
 
-      {/* ===== Toolbar superior ===== */}
       <View style={styles.filtersWrap}>
         <View style={styles.searchRow}>
           <TextInput
@@ -679,22 +884,29 @@ export default function PendienteFirmaIndex() {
               if (selectMode) {
                 setSelectMode(false);
                 clearSelection();
-                setFirmaDataUrl(null);
-                setFirmaForOrderIds([]);
-                setClienteEmail("");
+                resetFirmaFields();
               } else {
                 setSelectMode(true);
               }
             }}
             activeOpacity={0.85}
           >
-            <Ionicons name={selectMode ? "close" : "checkbox-outline"} size={18} color="#fff" style={{ marginRight: 6 }} />
+            <Ionicons
+              name={selectMode ? "close" : "checkbox-outline"}
+              size={18}
+              color="#fff"
+              style={{ marginRight: 6 }}
+            />
             <Text style={styles.actionBtnText}>{selectMode ? "Cancelar" : "Seleccionar"}</Text>
           </TouchableOpacity>
         </View>
 
         <View style={{ flexDirection: "row", gap: 10, marginTop: 10 }}>
-          <TouchableOpacity style={styles.refreshBtn} onPress={() => fetchOrdenes0400({ isRefresh: true })} activeOpacity={0.85}>
+          <TouchableOpacity
+            style={styles.refreshBtn}
+            onPress={() => fetchOrdenes0400({ isRefresh: true })}
+            activeOpacity={0.85}
+          >
             <Text style={styles.refreshBtnText}>Recargar</Text>
           </TouchableOpacity>
 
@@ -704,7 +916,7 @@ export default function PendienteFirmaIndex() {
         </View>
 
         <Text style={styles.hint}>
-          Mostrando solo órdenes con estatus <Text style={{ fontWeight: "900" }}>0400</Text>.
+          Mostrando solo órdenes con estatus <Text style={{ fontWeight: "900" }}>Pendiente de firma</Text>.
           {selectMode ? (
             <>
               {" "}
@@ -726,7 +938,6 @@ export default function PendienteFirmaIndex() {
         </Text>
       </View>
 
-      {/* ===== Lista ===== */}
       {loading ? (
         <View style={{ paddingTop: 28, alignItems: "center" }}>
           <ActivityIndicator size="large" color={FIORI.accent} />
@@ -740,7 +951,7 @@ export default function PendienteFirmaIndex() {
           contentContainerStyle={{
             padding: 20,
             paddingTop: 10,
-            paddingBottom: selectMode ? 170 : 90,
+            paddingBottom: selectMode ? 190 : 90,
           }}
           refreshing={refreshing}
           onRefresh={() => fetchOrdenes0400({ isRefresh: true })}
@@ -752,10 +963,16 @@ export default function PendienteFirmaIndex() {
         />
       )}
 
-      {/* ===== Barra inferior (solo si selectMode) ===== */}
       {selectMode ? (
         <View style={styles.bottomBar}>
-          <View style={{ flexDirection: "row", gap: 10, flexWrap: "wrap", justifyContent: "flex-end" }}>
+          <View
+            style={{
+              flexDirection: "row",
+              gap: 10,
+              flexWrap: "wrap",
+              justifyContent: "flex-end",
+            }}
+          >
             <TouchableOpacity
               style={[
                 styles.bottomBtn,
@@ -784,17 +1001,33 @@ export default function PendienteFirmaIndex() {
                 styles.bottomBtn,
                 {
                   backgroundColor:
-                    selectedIds.length && firmaDataUrl && isValidEmail(clienteEmail) && !sending
+                    selectedIds.length &&
+                    firmaDataUrl &&
+                    isValidEmail(clienteEmail) &&
+                    clienteNombre.trim() &&
+                    clienteCargo.trim() &&
+                    comentarioCliente.trim() &&
+                    !sending
                       ? "#0B8457"
                       : "#9AA5B1",
                 },
               ]}
               onPress={sendSelectedOrders}
               activeOpacity={0.85}
-              disabled={!selectedIds.length || !firmaDataUrl || !isValidEmail(clienteEmail) || sending}
+              disabled={
+                !selectedIds.length ||
+                !firmaDataUrl ||
+                !isValidEmail(clienteEmail) ||
+                !clienteNombre.trim() ||
+                !clienteCargo.trim() ||
+                !comentarioCliente.trim() ||
+                sending
+              }
             >
               <Ionicons name="cloud-upload-outline" size={18} color="#fff" style={{ marginRight: 6 }} />
-              <Text style={[styles.bottomBtnText, { color: "#fff" }]}>{sending ? "Enviando…" : "Enviar órdenes"}</Text>
+              <Text style={[styles.bottomBtnText, { color: "#fff" }]}>
+                {sending ? "Enviando…" : "Enviar órdenes"}
+              </Text>
             </TouchableOpacity>
           </View>
 
@@ -810,7 +1043,12 @@ export default function PendienteFirmaIndex() {
               <>
                 {" "}
                 · Correo:{" "}
-                <Text style={{ fontWeight: "900", color: isValidEmail(clienteEmail) ? FIORI.ink : FIORI.danger }}>
+                <Text
+                  style={{
+                    fontWeight: "900",
+                    color: isValidEmail(clienteEmail) ? FIORI.ink : FIORI.danger,
+                  }}
+                >
                   {clienteEmail}
                 </Text>
               </>
@@ -824,8 +1062,12 @@ export default function PendienteFirmaIndex() {
         </View>
       ) : null}
 
-      {/* ===== Modal Firma ===== */}
-      <Modal visible={showFirmaModal} transparent animationType="slide" onRequestClose={() => setShowFirmaModal(false)}>
+      <Modal
+        visible={showFirmaModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowFirmaModal(false)}
+      >
         <View style={styles.modalBackdrop}>
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>Firma del cliente</Text>
@@ -833,7 +1075,6 @@ export default function PendienteFirmaIndex() {
               Órdenes a firmar: <Text style={{ fontWeight: "900" }}>{firmaForOrderIds.length}</Text>
             </Text>
 
-            {/* ✅ correo del cliente */}
             <View style={{ marginTop: 12 }}>
               <Text style={{ color: FIORI.textMuted, marginBottom: 6, fontWeight: "700" }}>
                 Correo del cliente (obligatorio)
@@ -849,10 +1090,68 @@ export default function PendienteFirmaIndex() {
                 style={styles.emailInput}
               />
               {!!clienteEmail && !isValidEmail(clienteEmail) ? (
-                <Text style={{ marginTop: 6, color: FIORI.danger, fontSize: 12, fontWeight: "800" }}>
+                <Text
+                  style={{
+                    marginTop: 6,
+                    color: FIORI.danger,
+                    fontSize: 12,
+                    fontWeight: "800",
+                  }}
+                >
                   Escribe un correo válido.
                 </Text>
               ) : null}
+            </View>
+
+            <View style={{ marginTop: 12 }}>
+              <Text style={{ color: FIORI.textMuted, marginBottom: 6, fontWeight: "700" }}>
+                Nombre del cliente (obligatorio)
+              </Text>
+              <TextInput
+                value={clienteNombre}
+                onChangeText={setClienteNombre}
+                placeholder="Nombre y apellidos"
+                placeholderTextColor={FIORI.textMuted}
+                autoCapitalize="words"
+                autoCorrect={false}
+                style={styles.emailInput}
+              />
+            </View>
+
+            <View style={{ marginTop: 12 }}>
+              <Text style={{ color: FIORI.textMuted, marginBottom: 6, fontWeight: "700" }}>
+                Cargo del cliente (obligatorio)
+              </Text>
+              <TextInput
+                value={clienteCargo}
+                onChangeText={setClienteCargo}
+                placeholder="Ej. Administrador / Seguridad / Mantenimiento"
+                placeholderTextColor={FIORI.textMuted}
+                autoCapitalize="words"
+                autoCorrect={false}
+                style={styles.emailInput}
+              />
+            </View>
+
+            <View style={{ marginTop: 12 }}>
+              <Text style={{ color: FIORI.textMuted, marginBottom: 6, fontWeight: "700" }}>
+                Comentarios del cliente (obligatorio)
+              </Text>
+              <TextInput
+                value={comentarioCliente}
+                onChangeText={setComentarioCliente}
+                placeholder="Comentario del cliente para insertar en todos los PDFs"
+                placeholderTextColor={FIORI.textMuted}
+                multiline
+                style={[
+                  styles.emailInput,
+                  {
+                    minHeight: 90,
+                    textAlignVertical: "top",
+                    paddingTop: 10,
+                  },
+                ]}
+              />
             </View>
 
             <View style={styles.signatureWrap}>
@@ -871,7 +1170,6 @@ export default function PendienteFirmaIndex() {
               />
             </View>
 
-            {/* ✅ Botones nativos: Limpiar / Guardar / Cancelar */}
             <View style={{ flexDirection: "row", justifyContent: "flex-end", gap: 10, flexWrap: "wrap" }}>
               <TouchableOpacity
                 style={[
@@ -888,6 +1186,10 @@ export default function PendienteFirmaIndex() {
                 style={[styles.smallBtn, { backgroundColor: FIORI.accent }]}
                 onPress={() => {
                   const email = String(clienteEmail || "").trim();
+                  const nombre = String(clienteNombre || "").trim();
+                  const cargo = String(clienteCargo || "").trim();
+                  const comentario = String(comentarioCliente || "").trim();
+
                   if (!email) {
                     Alert.alert("Falta correo", "Escribe el correo del cliente antes de guardar la firma.");
                     return;
@@ -896,10 +1198,28 @@ export default function PendienteFirmaIndex() {
                     Alert.alert("Correo inválido", "Escribe un correo válido (ej: nombre@dominio.com).");
                     return;
                   }
+                  if (!nombre) {
+                    Alert.alert("Falta nombre", "Escribe el nombre del cliente.");
+                    return;
+                  }
+                  if (!cargo) {
+                    Alert.alert("Falta cargo", "Escribe el cargo del cliente.");
+                    return;
+                  }
+                  if (!comentario) {
+                    Alert.alert("Falta comentario", "Escribe el comentario del cliente.");
+                    return;
+                  }
+
                   signatureRef.current?.readSignature?.();
                 }}
               >
-                <Ionicons name="checkmark-done-outline" size={18} color="#fff" style={{ marginRight: 6 }} />
+                <Ionicons
+                  name="checkmark-done-outline"
+                  size={18}
+                  color="#fff"
+                  style={{ marginRight: 6 }}
+                />
                 <Text style={[styles.smallBtnText, { color: "#fff" }]}>Guardar firma</Text>
               </TouchableOpacity>
 
@@ -918,7 +1238,6 @@ export default function PendienteFirmaIndex() {
         </View>
       </Modal>
 
-      {/* ===== Modal Progreso envío ===== */}
       <Modal visible={sending} transparent animationType="fade" statusBarTranslucent>
         <View style={styles.blockBackdrop}>
           <View style={styles.blockCard}>
@@ -960,7 +1279,12 @@ const styles = StyleSheet.create({
     borderBottomColor: FIORI.border,
     borderBottomWidth: 1,
     ...Platform.select({
-      ios: { shadowColor: "#000", shadowOpacity: 0.03, shadowRadius: 6, shadowOffset: { width: 0, height: 2 } },
+      ios: {
+        shadowColor: "#000",
+        shadowOpacity: 0.03,
+        shadowRadius: 6,
+        shadowOffset: { width: 0, height: 2 },
+      },
       android: { elevation: 1 },
     }),
   },
@@ -989,7 +1313,12 @@ const styles = StyleSheet.create({
   actionBtnDanger: { backgroundColor: FIORI.danger },
   actionBtnText: { color: "#fff", fontWeight: "900" },
 
-  refreshBtn: { backgroundColor: FIORI.accent, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 10 },
+  refreshBtn: {
+    backgroundColor: FIORI.accent,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 10,
+  },
   refreshBtnText: { color: "#fff", fontWeight: "900" },
 
   clearBtn: {
@@ -1057,7 +1386,13 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: FIORI.border,
   },
-  bottomBtn: { paddingHorizontal: 12, paddingVertical: 10, borderRadius: 10, flexDirection: "row", alignItems: "center" },
+  bottomBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 10,
+    flexDirection: "row",
+    alignItems: "center",
+  },
   bottomBtnText: { fontWeight: "900" },
 
   emailInput: {
@@ -1098,7 +1433,14 @@ const styles = StyleSheet.create({
     backgroundColor: "#fff",
   },
 
-  smallBtn: { marginTop: 12, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 10, flexDirection: "row", alignItems: "center" },
+  smallBtn: {
+    marginTop: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 10,
+    flexDirection: "row",
+    alignItems: "center",
+  },
   smallBtnText: { fontWeight: "900" },
 
   blockBackdrop: {

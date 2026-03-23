@@ -160,6 +160,28 @@ export async function prefetchOrdenesTecnicoDetalles({
         }
 
         // 5) shape final (similar a tu DetalleOrden)
+        const userstatusRaw = String(
+          baseOrden?.Userstatus ??
+            baseOrden?.userstatus ??
+            baseOrden?.UserSt ??
+            baseOrden?.userSt ??
+            ""
+        ).trim();
+
+        const estatusCodeRaw = String(
+          baseOrden?.estatus_code ??
+            baseOrden?.EstatusCode ??
+            baseOrden?.StatusCode ??
+            ""
+        ).trim();
+
+        const estatusLabelRaw = String(
+          baseOrden?.estatus_label ??
+            baseOrden?.EstatusLabel ??
+            baseOrden?.StatusText ??
+            ""
+        ).trim();
+
         const detail = {
           // mapeo OData -> tu app
           Orderid: orderIdReal,
@@ -173,14 +195,19 @@ export async function prefetchOrdenesTecnicoDetalles({
 
           short_text: baseOrden?.ShortText ?? null,
 
+          // ✅ guardar estatus también en el detalle prefetched
+          userstatus: userstatusRaw || null,
+          estatus_code: estatusCodeRaw || userstatusRaw || null,
+          estatus_label: estatusLabelRaw || null,
+          estatus_tipo: baseOrden?.estatus_tipo ?? null,
+          checkin_done: !!baseOrden?.checkin_done,
+
           cliente: clienteSap || "",
           direccion: direccionSap || "",
 
           partners,
           operaciones: ops,
 
-          // si quieres conservar el resto del header por si tu UI lo usa:
-          // (no suele pesar mucho)
           _raw: baseOrden,
         };
 
