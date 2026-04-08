@@ -100,12 +100,16 @@ const uniqBy = (arr, keyFn) => {
 };
 
 const pairId = (p) =>
-  `${String(p?.Agr1 || "").trim().toUpperCase()}__${String(p?.Agr2 || "")
+  `${String(p?.Agr1 || "")
+    .trim()
+    .toUpperCase()}__${String(p?.Agr2 || "")
     .trim()
     .toUpperCase()}`;
 
 const pairLabel = (p) =>
-  `${String(p?.Agr1 || "").trim().toUpperCase()} · ${String(p?.Agr2 || "")
+  `${String(p?.Agr1 || "")
+    .trim()
+    .toUpperCase()} · ${String(p?.Agr2 || "")
     .trim()
     .toUpperCase()}`;
 
@@ -115,12 +119,18 @@ function stableRowsString(rows) {
       (Array.isArray(rows) ? rows : []).map((r) => ({
         Material: String(r?.Material || "").trim(),
         Descripcion: String(r?.Descripcion || "").trim(),
-        Agrupador1: String(r?.Agrupador1 || "").trim().toUpperCase(),
-        Agrupador2: String(r?.Agrupador2 || "").trim().toUpperCase(),
+        Agrupador1: String(r?.Agrupador1 || "")
+          .trim()
+          .toUpperCase(),
+        Agrupador2: String(r?.Agrupador2 || "")
+          .trim()
+          .toUpperCase(),
         Cantidad: String(r?.Cantidad || "").trim(),
-        Unidad: String(r?.Unidad || "").trim().toUpperCase(),
+        Unidad: String(r?.Unidad || "")
+          .trim()
+          .toUpperCase(),
         Centro: String(r?.Centro || "").trim(),
-      }))
+      })),
     );
   } catch {
     return "[]";
@@ -138,7 +148,9 @@ export default function ConsumiblesFinalizacion({
   const s = stylesGlobal || localStyles;
   const P = FIORI || {};
 
-  const coverageKey = String(coberturaTipo || "").trim().toUpperCase();
+  const coverageKey = String(coberturaTipo || "")
+    .trim()
+    .toUpperCase();
 
   const pairsForCoverage = useMemo(() => {
     if (coverageKey === "MEDIA") return COVERAGE_PAIRS.MEDIA;
@@ -204,7 +216,7 @@ export default function ConsumiblesFinalizacion({
     setSelectedMaterial(null);
     setMaterialSearch("");
     setQtyDraft("1");
-    setUnitDraft("PZA");
+    setUnitDraft("");
     setPairPickerOpen(false);
     setMaterialPickerOpen(false);
   }, [coverageKey]);
@@ -225,8 +237,12 @@ export default function ConsumiblesFinalizacion({
 
       setLoadingMaterials(true);
       try {
-        const a1 = String(selectedPair.Agr1 || "").trim().toUpperCase();
-        const a2 = String(selectedPair.Agr2 || "").trim().toUpperCase();
+        const a1 = String(selectedPair.Agr1 || "")
+          .trim()
+          .toUpperCase();
+        const a2 = String(selectedPair.Agr2 || "")
+          .trim()
+          .toUpperCase();
 
         const url =
           `/api/odata/ZSD_CATALOGOS_SRV/MaterialesCoberturaSet` +
@@ -244,11 +260,15 @@ export default function ConsumiblesFinalizacion({
           Agrupador1: a1,
           Agrupador2: a2,
           Descripcion: String(r?.Descripcion || r?.Description || "").trim(),
+          Unidad: String(r?.Unidad || "")
+            .trim()
+            .toUpperCase(),
         }));
 
         const deduped = uniqBy(
           all.filter((x) => x.Material),
-          (x) => `${x.Material}__${x.Descripcion}__${x.Agrupador1}__${x.Agrupador2}`
+          (x) =>
+            `${x.Material}__${x.Descripcion}__${x.Agrupador1}__${x.Agrupador2}__${x.Unidad}`,
         );
 
         if (mounted && myLoadId === loadIdRef.current) {
@@ -271,11 +291,14 @@ export default function ConsumiblesFinalizacion({
   }, [selectedPair]);
 
   const filteredMaterials = useMemo(() => {
-    const qq = String(materialSearch || "").toUpperCase().trim();
+    const qq = String(materialSearch || "")
+      .toUpperCase()
+      .trim();
     if (!qq) return materials;
 
     return materials.filter((m) => {
-      const hay = `${m.Material} ${m.Descripcion} ${m.Agrupador1} ${m.Agrupador2}`.toUpperCase();
+      const hay =
+        `${m.Material} ${m.Descripcion} ${m.Agrupador1} ${m.Agrupador2}`.toUpperCase();
       return hay.includes(qq);
     });
   }, [materials, materialSearch]);
@@ -286,7 +309,7 @@ export default function ConsumiblesFinalizacion({
     setSelectedMaterial(null);
     setMaterialSearch("");
     setQtyDraft("1");
-    setUnitDraft("PZA");
+    setUnitDraft("");
     setEditingKey(null);
     setPairPickerOpen(false);
     setMaterialPickerOpen(false);
@@ -305,7 +328,9 @@ export default function ConsumiblesFinalizacion({
   const buildSelectedKey = (item) =>
     `${String(item?.Material || "").trim()}__${String(item?.Agrupador1 || "")
       .trim()
-      .toUpperCase()}__${String(item?.Agrupador2 || "").trim().toUpperCase()}`;
+      .toUpperCase()}__${String(item?.Agrupador2 || "")
+      .trim()
+      .toUpperCase()}`;
 
   const handleEditItem = (item) => {
     setEditingKey(buildSelectedKey(item));
@@ -313,16 +338,27 @@ export default function ConsumiblesFinalizacion({
       pairId({
         Agr1: item?.Agrupador1,
         Agr2: item?.Agrupador2,
-      })
+      }),
     );
     setSelectedMaterial({
       Material: String(item?.Material || "").trim(),
       Descripcion: String(item?.Descripcion || "").trim(),
-      Agrupador1: String(item?.Agrupador1 || "").trim().toUpperCase(),
-      Agrupador2: String(item?.Agrupador2 || "").trim().toUpperCase(),
+      Agrupador1: String(item?.Agrupador1 || "")
+        .trim()
+        .toUpperCase(),
+      Agrupador2: String(item?.Agrupador2 || "")
+        .trim()
+        .toUpperCase(),
+      Unidad: String(item?.Unidad || "")
+        .trim()
+        .toUpperCase(),
     });
     setQtyDraft(String(item?.Cantidad || "1"));
-    setUnitDraft(String(item?.Unidad || "PZA"));
+    setUnitDraft(
+      String(item?.Unidad || "PZA")
+        .trim()
+        .toUpperCase(),
+    );
     setModalOpen(true);
   };
 
@@ -340,13 +376,20 @@ export default function ConsumiblesFinalizacion({
       .replace(/[^0-9.]/g, "")
       .trim();
 
-    const uClean = String(unitDraft || "").trim().toUpperCase() || "PZA";
+    const uClean =
+      String(unitDraft || selectedMaterial?.Unidad || "")
+        .trim()
+        .toUpperCase() || "PZA";
 
     const row = {
       Material: String(selectedMaterial.Material || "").trim(),
       Descripcion: String(selectedMaterial.Descripcion || "").trim(),
-      Agrupador1: String(selectedMaterial.Agrupador1 || "").trim().toUpperCase(),
-      Agrupador2: String(selectedMaterial.Agrupador2 || "").trim().toUpperCase(),
+      Agrupador1: String(selectedMaterial.Agrupador1 || "")
+        .trim()
+        .toUpperCase(),
+      Agrupador2: String(selectedMaterial.Agrupador2 || "")
+        .trim()
+        .toUpperCase(),
       Cantidad: qClean || "1",
       Unidad: uClean,
       Centro: plant || "",
@@ -376,8 +419,10 @@ export default function ConsumiblesFinalizacion({
     <View style={[s.card, { borderColor: P.border || "#DDE6F2" }]}>
       <View style={s.headerRow}>
         <View style={{ flex: 1 }}>
-          <Text style={[s.title, { color: P.text || "#0B1F3B" }]}>Consumibles</Text>
-          <Text style={s.helperText}>Agrega uno por uno.</Text>
+          <Text style={[s.title, { color: P.text || "#0B1F3B" }]}>
+            Consumibles (obligatorios)
+          </Text>
+          <Text style={s.helperText}>Seleccionalos uno por uno.</Text>
         </View>
 
         <TouchableOpacity
@@ -405,10 +450,15 @@ export default function ConsumiblesFinalizacion({
       ) : (
         <View style={{ marginTop: 12, gap: 10 }}>
           {selected.map((item, idx) => (
-            <View key={`${buildSelectedKey(item)}-${idx}`} style={s.selectedCard}>
+            <View
+              key={`${buildSelectedKey(item)}-${idx}`}
+              style={s.selectedCard}
+            >
               <View style={{ flex: 1 }}>
                 <Text style={s.selectedCode}>{item.Material}</Text>
-                <Text style={s.selectedDesc}>{item.Descripcion || "Sin descripción"}</Text>
+                <Text style={s.selectedDesc}>
+                  {item.Descripcion || "Sin descripción"}
+                </Text>
                 <Text style={s.selectedMeta}>
                   Categoría: {item.Agrupador1} · {item.Agrupador2}
                 </Text>
@@ -439,7 +489,12 @@ export default function ConsumiblesFinalizacion({
         </View>
       )}
 
-      <Modal visible={modalOpen} transparent animationType="fade" onRequestClose={closeAddModal}>
+      <Modal
+        visible={modalOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={closeAddModal}
+      >
         <Pressable style={s.modalBackdrop} onPress={closeAddModal}>
           <KeyboardAvoidingView
             behavior={Platform.OS === "ios" ? "padding" : undefined}
@@ -454,12 +509,18 @@ export default function ConsumiblesFinalizacion({
                   {editingKey ? "Editar consumible" : "Agregar consumible"}
                 </Text>
 
-                <TouchableOpacity onPress={closeAddModal} style={s.modalCloseBtn}>
+                <TouchableOpacity
+                  onPress={closeAddModal}
+                  style={s.modalCloseBtn}
+                >
                   <Ionicons name="close" size={18} color="#0B1F3B" />
                 </TouchableOpacity>
               </View>
 
-              <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+              <ScrollView
+                keyboardShouldPersistTaps="handled"
+                showsVerticalScrollIndicator={false}
+              >
                 <Text style={s.fieldLabel}>Categoría</Text>
 
                 <TouchableOpacity
@@ -467,11 +528,22 @@ export default function ConsumiblesFinalizacion({
                   onPress={() => setPairPickerOpen((v) => !v)}
                   activeOpacity={0.9}
                 >
-                  <Text style={[s.selectorText, !selectedPair ? s.placeholderText : null]}>
-                    {selectedPair ? pairLabel(selectedPair) : "Selecciona una categoría"}
+                  <Text
+                    style={[
+                      s.selectorText,
+                      !selectedPair ? s.placeholderText : null,
+                    ]}
+                  >
+                    {selectedPair
+                      ? pairLabel(selectedPair)
+                      : "Selecciona una categoría"}
                   </Text>
                   <Ionicons
-                    name={pairPickerOpen ? "chevron-up-outline" : "chevron-down-outline"}
+                    name={
+                      pairPickerOpen
+                        ? "chevron-up-outline"
+                        : "chevron-down-outline"
+                    }
                     size={18}
                     color="#63718B"
                   />
@@ -487,7 +559,10 @@ export default function ConsumiblesFinalizacion({
                         return (
                           <TouchableOpacity
                             key={id}
-                            style={[s.dropdownItem, active && s.dropdownItemActive]}
+                            style={[
+                              s.dropdownItem,
+                              active && s.dropdownItemActive,
+                            ]}
                             onPress={() => {
                               setSelectedPairId(id);
                               setPairPickerOpen(false);
@@ -497,7 +572,10 @@ export default function ConsumiblesFinalizacion({
                             activeOpacity={0.9}
                           >
                             <Text
-                              style={[s.dropdownItemText, active && s.dropdownItemTextActive]}
+                              style={[
+                                s.dropdownItemText,
+                                active && s.dropdownItemTextActive,
+                              ]}
                             >
                               {pairLabel(p)}
                             </Text>
@@ -519,7 +597,10 @@ export default function ConsumiblesFinalizacion({
                   activeOpacity={0.9}
                 >
                   <Text
-                    style={[s.selectorText, !selectedMaterial ? s.placeholderText : null]}
+                    style={[
+                      s.selectorText,
+                      !selectedMaterial ? s.placeholderText : null,
+                    ]}
                     numberOfLines={2}
                   >
                     {selectedMaterial
@@ -529,14 +610,20 @@ export default function ConsumiblesFinalizacion({
                       : "Selecciona un material"}
                   </Text>
                   <Ionicons
-                    name={materialPickerOpen ? "chevron-up-outline" : "chevron-down-outline"}
+                    name={
+                      materialPickerOpen
+                        ? "chevron-up-outline"
+                        : "chevron-down-outline"
+                    }
                     size={18}
                     color="#63718B"
                   />
                 </TouchableOpacity>
 
                 {!selectedPair ? (
-                  <Text style={s.helperMini}>Primero selecciona una categoría.</Text>
+                  <Text style={s.helperMini}>
+                    Primero selecciona una categoría.
+                  </Text>
                 ) : null}
 
                 {selectedPair && materialPickerOpen ? (
@@ -550,7 +637,9 @@ export default function ConsumiblesFinalizacion({
                     />
 
                     {loadingMaterials ? (
-                      <View style={{ paddingVertical: 16, alignItems: "center" }}>
+                      <View
+                        style={{ paddingVertical: 16, alignItems: "center" }}
+                      >
                         <ActivityIndicator />
                         <Text style={s.helperMini}>Cargando materiales…</Text>
                       </View>
@@ -559,32 +648,53 @@ export default function ConsumiblesFinalizacion({
                         No se encontraron materiales para esta categoría.
                       </Text>
                     ) : (
-                      <ScrollView nestedScrollEnabled style={{ maxHeight: 240 }}>
+                      <ScrollView
+                        nestedScrollEnabled
+                        style={{ maxHeight: 240 }}
+                      >
                         {filteredMaterials.map((item, idx) => {
                           const active =
                             selectedMaterial?.Material === item.Material &&
-                            String(selectedMaterial?.Agrupador1 || "").toUpperCase() ===
+                            String(
+                              selectedMaterial?.Agrupador1 || "",
+                            ).toUpperCase() ===
                               String(item.Agrupador1 || "").toUpperCase() &&
-                            String(selectedMaterial?.Agrupador2 || "").toUpperCase() ===
+                            String(
+                              selectedMaterial?.Agrupador2 || "",
+                            ).toUpperCase() ===
                               String(item.Agrupador2 || "").toUpperCase();
 
                           return (
                             <TouchableOpacity
                               key={`${item.Material}-${item.Agrupador1}-${item.Agrupador2}-${idx}`}
-                              style={[s.dropdownItem, active && s.dropdownItemActive]}
+                              style={[
+                                s.dropdownItem,
+                                active && s.dropdownItemActive,
+                              ]}
                               onPress={() => {
                                 setSelectedMaterial(item);
+                                setUnitDraft(
+                                  String(item?.Unidad || "")
+                                    .trim()
+                                    .toUpperCase() || "PZA",
+                                );
                                 setMaterialPickerOpen(false);
                               }}
                               activeOpacity={0.9}
                             >
                               <Text
-                                style={[s.dropdownItemText, active && s.dropdownItemTextActive]}
+                                style={[
+                                  s.dropdownItemText,
+                                  active && s.dropdownItemTextActive,
+                                ]}
                               >
                                 {item.Material}
                               </Text>
                               <Text
-                                style={[s.dropdownItemSub, active && { color: "#fff" }]}
+                                style={[
+                                  s.dropdownItemSub,
+                                  active && { color: "#fff" },
+                                ]}
                               >
                                 {item.Descripcion || "Sin descripción"}
                               </Text>
@@ -613,14 +723,16 @@ export default function ConsumiblesFinalizacion({
 
                   <View style={{ flex: 1 }}>
                     <Text style={s.fieldLabel}>Unidad</Text>
-                    <TextInput
-                      value={unitDraft}
-                      onChangeText={setUnitDraft}
-                      placeholder="PZA"
-                      placeholderTextColor="#63718B"
-                      autoCapitalize="characters"
-                      style={s.textInput}
-                    />
+                    <View style={[s.textInput, { justifyContent: "center" }]}>
+                      <Text
+                        style={{
+                          color: unitDraft ? "#0B1F3B" : "#63718B",
+                          fontWeight: "800",
+                        }}
+                      >
+                        {unitDraft || "Selecciona un material"}
+                      </Text>
+                    </View>
                   </View>
                 </View>
 

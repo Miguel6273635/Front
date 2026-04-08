@@ -162,7 +162,7 @@ export default function EncabezadoDetalleOrden({
         />
 
         <Row
-          label="Correo"
+          label="Correo del cliente"
           value={correoCliente}
           styles={styles}
           formatValueForRow={formatValueForRow}

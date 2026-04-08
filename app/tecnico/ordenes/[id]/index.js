@@ -26,7 +26,10 @@ import {
   shouldCacheDetailByOrder,
 } from "../../../../src/offline/ordenesTecnicoCache";
 
-import { processSapQueue, upsertSapQueueItem } from "../../../../src/offline/sapQueue";
+import {
+  processSapQueue,
+  upsertSapQueueItem,
+} from "../../../../src/offline/sapQueue";
 import {
   setLocalStatusPatch,
   patchCacheOrdenesTecnicoList,
@@ -170,7 +173,10 @@ async function loadPendingSign(orderId) {
 }
 async function savePendingSign(orderId, payload) {
   try {
-    await AsyncStorage.setItem(PENDING_SIGN_KEY(orderId), JSON.stringify(payload));
+    await AsyncStorage.setItem(
+      PENDING_SIGN_KEY(orderId),
+      JSON.stringify(payload),
+    );
   } catch {}
 }
 async function clearPendingSign(orderId) {
@@ -189,7 +195,10 @@ async function loadOpState(orderId) {
 }
 async function saveOpState(orderId, state) {
   try {
-    await AsyncStorage.setItem(OPSTATE_KEY(orderId), JSON.stringify(state || {}));
+    await AsyncStorage.setItem(
+      OPSTATE_KEY(orderId),
+      JSON.stringify(state || {}),
+    );
   } catch {}
 }
 
@@ -220,7 +229,9 @@ function fmtDMY(val) {
 
 const opKey = (orderId, op) =>
   `${orderId}-${op.activity || op.Activity || ""}${
-    op.subactivity || op.SubActivity ? `-${op.subactivity || op.SubActivity}` : ""
+    op.subactivity || op.SubActivity
+      ? `-${op.subactivity || op.SubActivity}`
+      : ""
   }`;
 
 /* ====== SAP helpers para fechas/horas y prorrateo ====== */
@@ -230,7 +241,11 @@ function msToMinutesRounded(ms) {
 }
 function sapDateFromMs(ms) {
   const d = new Date(ms);
-  const midnight = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const midnight = new Date(
+    d.getFullYear(),
+    d.getMonth(),
+    d.getDate(),
+  ).getTime();
   return `/Date(${midnight})/`;
 }
 function sapTimePTFromMs(ms) {
@@ -268,18 +283,24 @@ function normalizeConsumiblesToMaterialSet(consumiblesRows, plantFallback) {
 
   for (const r of rows) {
     const Material = String(
-      r?.Material ?? r?.material ?? r?.codigo ?? r?.Codigo ?? r?.matnr ?? ""
+      r?.Material ?? r?.material ?? r?.codigo ?? r?.Codigo ?? r?.matnr ?? "",
     ).trim();
 
-    const CantidadRaw = r?.Cantidad ?? r?.cantidad ?? r?.qty ?? r?.Qty ?? r?.quantity ?? "0";
-    const Unidad = String(r?.Unidad ?? r?.unidad ?? r?.uom ?? r?.Uom ?? "").trim();
-    const Centro = "TLP1";
+    const CantidadRaw =
+      r?.Cantidad ?? r?.cantidad ?? r?.qty ?? r?.Qty ?? r?.quantity ?? "0";
+
+    const Unidad = String(
+      r?.Unidad ?? r?.unidad ?? r?.uom ?? r?.Uom ?? "",
+    ).trim();
+
+    const Centro = String(plantFallback || "TLP1").trim();
 
     const qtyNum = toNum(CantidadRaw);
     const qtyOk =
       qtyNum != null
         ? qtyNum > 0
-        : String(CantidadRaw || "").trim() !== "" && String(CantidadRaw) !== "0";
+        : String(CantidadRaw || "").trim() !== "" &&
+          String(CantidadRaw) !== "0";
 
     if (!Material) continue;
     if (!qtyOk) continue;
@@ -306,9 +327,12 @@ function buildConfirmationPayloadFromSelectedOps({
   finishMs,
   consumiblesRows,
   plantFallback,
+  user, // 👈 CAMBIA 'userEmail' POR 'user' PARA TENER EL OBJETO COMPLETO
 }) {
   const selectedOpsRaw = (selectedIds || [])
-    .map((idKey) => (opsAll || []).find((op) => String(op.id) === String(idKey)))
+    .map((idKey) =>
+      (opsAll || []).find((op) => String(op.id) === String(idKey)),
+    )
     .filter(Boolean);
 
   const uniqByOp = (ops) => {
@@ -325,7 +349,12 @@ function buildConfirmationPayloadFromSelectedOps({
   const selectedOps = uniqByOp(selectedOpsRaw);
   if (!selectedOps.length) return null;
 
-  if (!Number.isFinite(startMs) || !Number.isFinite(finishMs) || finishMs <= startMs) return null;
+  if (
+    !Number.isFinite(startMs) ||
+    !Number.isFinite(finishMs) ||
+    finishMs <= startMs
+  )
+    return null;
 
   const totalMs = Math.max(0, finishMs - startMs);
   const totalMin = msToMinutesRounded(totalMs);
@@ -334,11 +363,13 @@ function buildConfirmationPayloadFromSelectedOps({
 
   const ConfirmationMaterialSet = normalizeConsumiblesToMaterialSet(
     consumiblesRows,
-    plantFallback
+    plantFallback,
   );
 
   return {
     Order: "S1",
+    // Ahora 'user' ya existe porque lo pasamos como parámetro
+    Mail: String(user?.correo || user?.email || "").trim(),
     ConfirmationOrderSet: selectedOps.map((op, idx) => {
       const actRaw = String(op.activity || op.Activity || "").trim();
       const subRaw = String(op.subactivity || op.SubActivity || "").trim();
@@ -411,7 +442,9 @@ function mergeOpsWithLocalState(orderId, ops, state) {
 
     const sapEstatus = (o.estatus || "pendiente").toLowerCase();
     const estatusFinal =
-      sapEstatus === "finalizada" ? "finalizada" : st.estatus || sapEstatus || "pendiente";
+      sapEstatus === "finalizada"
+        ? "finalizada"
+        : st.estatus || sapEstatus || "pendiente";
 
     return {
       ...o,
@@ -453,7 +486,8 @@ function formatValueForRow(value) {
       direccion,
     } = value;
 
-    const posibleFull = full || direccion || value.fullAddress || value.addressString;
+    const posibleFull =
+      full || direccion || value.fullAddress || value.addressString;
     if (posibleFull && typeof posibleFull === "string") return posibleFull;
 
     const partes = [
@@ -564,10 +598,12 @@ function extractCodes(raw) {
 function pickCurrentStatusCode(orden) {
   const codes = extractCodes(orden?.userstatus ?? "");
   const apiCode = normalizeCode(orden?.estatus_code ?? "");
-  const all = Array.from(new Set([...(codes || []), ...(apiCode ? [apiCode] : [])]));
+  const all = Array.from(
+    new Set([...(codes || []), ...(apiCode ? [apiCode] : [])]),
+  );
   if (all.includes("0400")) return "0400";
   if (all.includes("0200")) return "0200";
-  return apiCode || (codes[0] || "");
+  return apiCode || codes[0] || "";
 }
 
 function buildStatus0300Payload({ orderId, email, currentCode }) {
@@ -600,7 +636,8 @@ function logSapPayload(label, payload, { stripBase64 = false } = {}) {
     }
     const cloned = JSON.parse(JSON.stringify(payload));
     const att = cloned?.Attachments?.[0];
-    if (att?.Base64) att.Base64 = `<<base64 omitted: ${String(att.Base64).length} chars>>`;
+    if (att?.Base64)
+      att.Base64 = `<<base64 omitted: ${String(att.Base64).length} chars>>`;
     console.log(label);
     console.log(JSON.stringify(cloned, null, 2));
   } catch {
@@ -610,7 +647,9 @@ function logSapPayload(label, payload, { stripBase64 = false } = {}) {
 
 /* ====================== Email / Red ====================== */
 function isValidEmail(email) {
-  const s = String(email || "").trim().toLowerCase();
+  const s = String(email || "")
+    .trim()
+    .toLowerCase();
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
 }
 
@@ -663,7 +702,10 @@ function getSapErrorMessage(error, fallback = "Ocurrió un error con SAP.") {
 }
 
 function makeCheckinQueueKey(userEmail) {
-  const safe = String(userEmail || "anon").toLowerCase().trim() || "anon";
+  const safe =
+    String(userEmail || "anon")
+      .toLowerCase()
+      .trim() || "anon";
   return `checkin_queue_v1_${safe}`;
 }
 
@@ -675,13 +717,88 @@ async function hasOfflineQueuedCheckin(userEmail, orderId) {
     if (!Array.isArray(arr)) return false;
 
     return arr.some(
-      (x) => String(x?.orderId || "").trim() === String(orderId || "").trim()
+      (x) => String(x?.orderId || "").trim() === String(orderId || "").trim(),
     );
   } catch {
     return false;
   }
 }
 
+const BG_TIMEOUT_MS = 2 * 60 * 1000; // 2 minutos
+
+function isTimeoutError(error) {
+  const msg = String(error?.message || "").toLowerCase();
+  const code = String(error?.code || "").toUpperCase();
+
+  return (
+    code === "ECONNABORTED" ||
+    code === "ETIMEDOUT" ||
+    msg.includes("timeout") ||
+    msg.includes("tiempo de espera") ||
+    msg.includes("exceeded")
+  );
+}
+
+async function postWithBackgroundFallback({
+  apiInstance,
+  endpoint,
+  payload,
+  timeoutMs = BG_TIMEOUT_MS,
+  enqueueFn,
+  queueItem,
+}) {
+  try {
+    const response = await apiInstance.post(endpoint, payload, {
+      timeout: timeoutMs,
+    });
+
+    return {
+      ok: true,
+      queued: false,
+      response,
+    };
+  } catch (error) {
+    const networkLike = isNetworkLikeError(error);
+    const timeoutLike = isTimeoutError(error);
+
+    if (networkLike || timeoutLike) {
+      await enqueueFn(queueItem);
+
+      return {
+        ok: true,
+        queued: true,
+        response: null,
+        error,
+      };
+    }
+
+    throw error;
+  }
+}
+
+function hasValidConsumibles(consumiblesRows) {
+  const rows = Array.isArray(consumiblesRows) ? consumiblesRows : [];
+
+  return rows.some((r) => {
+    const material = String(
+      r?.Material ?? r?.material ?? r?.codigo ?? r?.Codigo ?? r?.matnr ?? "",
+    ).trim();
+
+    const cantidadRaw =
+      r?.Cantidad ?? r?.cantidad ?? r?.qty ?? r?.Qty ?? r?.quantity ?? "";
+
+    const unidad = String(
+      r?.Unidad ?? r?.unidad ?? r?.uom ?? r?.Uom ?? "",
+    ).trim();
+
+    const cantidadNum = Number(cantidadRaw);
+    const cantidadValida = Number.isFinite(cantidadNum) && cantidadNum > 0;
+
+    return !!material && cantidadValida && !!unidad;
+  });
+}
+
+// CAMBIOS agregasdos por miguel
 /* ====================== Componente ====================== */
 export default function DetalleOrden() {
   const { id } = useLocalSearchParams();
@@ -736,10 +853,15 @@ export default function DetalleOrden() {
   const [signatureData, setSignatureData] = useState(null);
   const [savingSignature, setSavingSignature] = useState(false);
   const [savingPending0400, setSavingPending0400] = useState(false);
-  const [hasPendingOfflineCheckin, setHasPendingOfflineCheckin] = useState(false);
+  const [hasPendingOfflineCheckin, setHasPendingOfflineCheckin] =
+    useState(false);
 
   const userEmail = String(
-    user?.correo || user?.email || user?.username || user?.preferred_username || "unknown"
+    user?.correo ||
+      user?.email ||
+      user?.username ||
+      user?.preferred_username ||
+      "unknown",
   ).trim();
 
   const baseStatusCode = pickCurrentStatusCode(orden);
@@ -748,33 +870,51 @@ export default function DetalleOrden() {
     ? "CHECK-IN PENDIENTE (OFFLINE)"
     : resolveStatusLabelFromCode(
         statusCode,
-        String(orden?.estatus_label || orden?.estatus || orden?.status || "").trim()
+        String(
+          orden?.estatus_label || orden?.estatus || orden?.status || "",
+        ).trim(),
       );
 
   const statusTipo = String(orden?.estatus_tipo || "").toUpperCase();
   const isNoMant = statusTipo === "NO_MANTENIMIENTO";
   const isOrderSinEmpezar = !statusCode;
   const isOrderPendiente0100 = statusCode === "0100";
-  const isOrderFinishedReal = !!orden?.isFinal || ["0300", "0500"].includes(statusCode);
-  const isPending0400 = statusCode === "0400" || String(statusCode).includes("0400");
+  const isOrderFinishedReal =
+    !!orden?.isFinal || ["0300", "0500"].includes(statusCode);
+  const isPending0400 =
+    statusCode === "0400" || String(statusCode).includes("0400");
 
-  const estatusTxt = String(orden?.estatus_label || orden?.estatus || orden?.status || "")
+  const estatusTxt = String(
+    orden?.estatus_label || orden?.estatus || orden?.status || "",
+  )
     .trim()
     .toUpperCase();
 
   const isOrderEnProceso =
-    estatusTxt === "EN_PROCESO" || estatusTxt === "EN PROCESO" || statusCode === "0200";
+    estatusTxt === "EN_PROCESO" ||
+    estatusTxt === "EN PROCESO" ||
+    statusCode === "0200";
 
-  const coberturaTipo = String(orden?.cobertura_tipo || "").trim().toUpperCase();
+  const coberturaTipo = String(orden?.cobertura_tipo || "")
+    .trim()
+    .toUpperCase();
 
   const checkinDone =
     !hasPendingOfflineCheckin &&
-    (!!orden?.checkin_done || !!orden?.checkin || !!orden?.checked_in || statusCode === "0200");
+    (!!orden?.checkin_done ||
+      !!orden?.checkin ||
+      !!orden?.checked_in ||
+      statusCode === "0200");
 
   const isOpsLocked =
-    isNoMant || isOrderSinEmpezar || isOrderPendiente0100 || isOrderFinishedReal || !checkinDone;
+    isNoMant ||
+    isOrderSinEmpezar ||
+    isOrderPendiente0100 ||
+    isOrderFinishedReal ||
+    !checkinDone;
 
-  const canStartTimer = isOrderEnProceso && !isNoMant && !isOrderFinishedReal && !!checkinDone;
+  const canStartTimer =
+    isOrderEnProceso && !isNoMant && !isOrderFinishedReal && !!checkinDone;
   const showRunningTimer = isOrderEnProceso && !!orderStartedAtMs;
   const showFrozenTimer = isPending0400 && orderElapsedMs != null;
 
@@ -838,7 +978,10 @@ export default function DetalleOrden() {
         if (selectedOpIds.includes(oid)) return { ...o, estatus: "finalizada" };
         return o;
       });
-      await safeSaveDetailIfWindow(orderId, { ...(base || {}), operaciones: ops2 });
+      await safeSaveDetailIfWindow(orderId, {
+        ...(base || {}),
+        operaciones: ops2,
+      });
     } catch {}
   };
 
@@ -876,10 +1019,17 @@ export default function DetalleOrden() {
     } catch {}
   };
 
-  const enqueueSap = async ({ type, orderId, endpoint, payload, dedupeKey, method }) => {
+  const enqueueSap = async ({
+    type,
+    orderId,
+    endpoint,
+    payload,
+    dedupeKey,
+    method,
+  }) => {
     if (typeof upsertSapQueueItem !== "function") {
       throw new Error(
-        "upsertSapQueueItem no existe en src/offline/sapQueue.js. Asegúrate de exportarla."
+        "upsertSapQueueItem no existe en src/offline/sapQueue.js. Asegúrate de exportarla.",
       );
     }
 
@@ -927,9 +1077,42 @@ export default function DetalleOrden() {
     return () => sub.remove();
   }, []);
 
+  //CAMBIOS agregados por miguel
+
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", async (state) => {
+      if (state !== "active") return;
+
+      try {
+        const net = await NetInfo.fetch();
+        const online = !!(
+          net?.isConnected && net?.isInternetReachable !== false
+        );
+        if (!online) return;
+
+        console.log("📲 App activa, intentando procesar cola SAP...");
+        await processSapQueue({
+          ensureValidToken,
+          apiInstance: api,
+        });
+      } catch (e) {
+        console.warn(
+          "Error procesando cola al volver a la app:",
+          e?.message || e,
+        );
+      }
+    });
+
+    return () => sub.remove();
+  }, [ensureValidToken]);
+
+  // CAMBIOS agregados por miguel
+
   useEffect(() => {
     const unsub = NetInfo.addEventListener(async (state) => {
-      const online = !!(state?.isConnected && state?.isInternetReachable !== false);
+      const online = !!(
+        state?.isConnected && state?.isInternetReachable !== false
+      );
 
       if (online && !wasOnlineRef.current) {
         wasOnlineRef.current = true;
@@ -968,7 +1151,7 @@ export default function DetalleOrden() {
 
       const pending = await hasOfflineQueuedCheckin(
         user?.correo || user?.email || user?.username || null,
-        orderId
+        orderId,
       );
 
       if (mounted) setHasPendingOfflineCheckin(pending);
@@ -989,7 +1172,9 @@ export default function DetalleOrden() {
       if (cached?.data) {
         setOrden(cached.data);
 
-        const cachedOrderId = String(cached?.data?.Orderid || orderIdParam).trim();
+        const cachedOrderId = String(
+          cached?.data?.Orderid || orderIdParam,
+        ).trim();
 
         const savedStartCached = await loadOrderStart(cachedOrderId);
         if (savedStartCached) {
@@ -1004,8 +1189,10 @@ export default function DetalleOrden() {
         if (savedElapsedCached != null) setOrderElapsedMs(savedElapsedCached);
 
         const pendingCached = await loadPendingSign(cachedOrderId);
-        if (pendingCached?.checkedMap) setCheckedMap(pendingCached.checkedMap || {});
-        if (Array.isArray(pendingCached?.consumibles)) setConsumibles(pendingCached.consumibles);
+        if (pendingCached?.checkedMap)
+          setCheckedMap(pendingCached.checkedMap || {});
+        if (Array.isArray(pendingCached?.consumibles))
+          setConsumibles(pendingCached.consumibles);
         if (typeof pendingCached?.notaTecnico === "string")
           setNotaTecnico(pendingCached.notaTecnico || "");
         if (typeof pendingCached?.clienteNombre === "string")
@@ -1026,7 +1213,8 @@ export default function DetalleOrden() {
         }
 
         const emailCached = String(cached?.data?.cliente_email || "").trim();
-        if (emailCached && isValidEmail(emailCached)) setClienteEmail(emailCached);
+        if (emailCached && isValidEmail(emailCached))
+          setClienteEmail(emailCached);
 
         const cn = String(cached?.data?.cliente_nombre || "").trim();
         const cc = String(cached?.data?.cliente_cargo || "").trim();
@@ -1037,13 +1225,15 @@ export default function DetalleOrden() {
       }
 
       const net = await NetInfo.fetch();
-      const isOnline = !!(net?.isConnected && net?.isInternetReachable !== false);
+      const isOnline = !!(
+        net?.isConnected && net?.isInternetReachable !== false
+      );
 
       if (!isOnline) {
         if (!cached?.data) {
           Alert.alert(
             "Sin conexión",
-            "No hay internet y no hay detalle guardado aún para esta orden."
+            "No hay internet y no hay detalle guardado aún para esta orden.",
           );
         }
         return;
@@ -1055,7 +1245,7 @@ export default function DetalleOrden() {
       let shortTextHeader = "";
       try {
         const resHeader = await api.get(
-          `/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet('${orderIdParam}')`
+          `/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet('${orderIdParam}')`,
         );
 
         shortTextHeader =
@@ -1067,7 +1257,7 @@ export default function DetalleOrden() {
       } catch (e) {
         console.warn(
           "[COBERTURA] No se pudo cargar WorkOrderHeaderSet:",
-          e?.response?.data || e?.message || e
+          e?.response?.data || e?.message || e,
         );
       }
 
@@ -1079,24 +1269,33 @@ export default function DetalleOrden() {
         baseOrden?.shortText ||
         "";
 
-      const coberturaDetectada = detectCoberturaFromShortText(shortTextForCoverage);
+      const coberturaDetectada =
+        detectCoberturaFromShortText(shortTextForCoverage);
 
       let direccionSap = "";
       let clienteSap = "";
       try {
-        const resAddr = await api.get(`/api/ordenes/sap/${orderIdParam}/addresses`);
-        const results = resAddr?.data?.results || resAddr?.data?.d?.results || [];
+        const resAddr = await api.get(
+          `/api/ordenes/sap/${orderIdParam}/addresses`,
+        );
+        const results =
+          resAddr?.data?.results || resAddr?.data?.d?.results || [];
         const chosen = pickSecondAddress(results);
         const mapped = mapDireccionLikeBackend(chosen);
         direccionSap = mapped.direccion || "";
         clienteSap = mapped.cliente || "";
       } catch (e) {
-        console.warn("[ADDR] no se pudo cargar /addresses:", e?.response?.data || e?.message || e);
+        console.warn(
+          "[ADDR] no se pudo cargar /addresses:",
+          e?.response?.data || e?.message || e,
+        );
       }
 
       let ops = [];
       try {
-        const resOps = await api.get(`/api/operaciones/sap/${String(orderIdParam)}`);
+        const resOps = await api.get(
+          `/api/operaciones/sap/${String(orderIdParam)}`,
+        );
         const rawOps =
           resOps?.data?.d?.results ||
           resOps?.data?.results ||
@@ -1106,20 +1305,32 @@ export default function DetalleOrden() {
 
         ops = normalizeOpsFromBackend(rawOps);
       } catch (e) {
-        console.warn("No se pudieron cargar operaciones:", e?.response?.data || e);
+        console.warn(
+          "No se pudieron cargar operaciones:",
+          e?.response?.data || e,
+        );
         ops = normalizeOpsFromBackend(baseOrden?.operaciones || []);
       }
 
-      const orderIdReal = String(baseOrden?.Orderid || baseOrden?.OrderId || orderIdParam).trim();
-      const opsWithId = ops.map((o) => ({ ...o, id: o.id || opKey(orderIdReal, o) }));
+      const orderIdReal = String(
+        baseOrden?.Orderid || baseOrden?.OrderId || orderIdParam,
+      ).trim();
+      const opsWithId = ops.map((o) => ({
+        ...o,
+        id: o.id || opKey(orderIdReal, o),
+      }));
 
       const localState = await loadOpState(orderIdReal);
-      const opsMerged = mergeOpsWithLocalState(orderIdReal, opsWithId, localState);
+      const opsMerged = mergeOpsWithLocalState(
+        orderIdReal,
+        opsWithId,
+        localState,
+      );
 
       let emailFromPartners = "";
       try {
         const resPartners = await api.get(
-          `/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet('${orderIdParam}')/ToPartners`
+          `/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet('${orderIdParam}')/ToPartners`,
         );
 
         const results =
@@ -1128,10 +1339,15 @@ export default function DetalleOrden() {
           resPartners?.data?.d?.ToPartners?.results ||
           [];
 
-        const re = (results || []).find((p) => String(p?.PartnRoleOld || "").trim() === "RE");
+        const re = (results || []).find(
+          (p) => String(p?.PartnRoleOld || "").trim() === "RE",
+        );
         emailFromPartners = String(re?.Mail1 || re?.Mail2 || "").trim();
       } catch (e) {
-        console.warn("[MAIL] no se pudo cargar ToPartners:", e?.response?.data || e?.message || e);
+        console.warn(
+          "[MAIL] no se pudo cargar ToPartners:",
+          e?.response?.data || e?.message || e,
+        );
       }
 
       const data = {
@@ -1158,7 +1374,11 @@ export default function DetalleOrden() {
       setOrden(data);
 
       const emailResolved = String(emailFromPartners || "").trim();
-      if (emailResolved && isValidEmail(emailResolved) && !String(clienteEmail || "").trim()) {
+      if (
+        emailResolved &&
+        isValidEmail(emailResolved) &&
+        !String(clienteEmail || "").trim()
+      ) {
         setClienteEmail(emailResolved);
       }
 
@@ -1205,8 +1425,10 @@ export default function DetalleOrden() {
 
         if (pending) {
           if (pending?.checkedMap) setCheckedMap(pending.checkedMap || {});
-          if (Array.isArray(pending?.consumibles)) setConsumibles(pending.consumibles);
-          if (typeof pending?.notaTecnico === "string") setNotaTecnico(pending.notaTecnico || "");
+          if (Array.isArray(pending?.consumibles))
+            setConsumibles(pending.consumibles);
+          if (typeof pending?.notaTecnico === "string")
+            setNotaTecnico(pending.notaTecnico || "");
           if (typeof pending?.clienteNombre === "string")
             setClienteNombre(pending.clienteNombre || "");
           if (typeof pending?.clienteCargo === "string")
@@ -1228,10 +1450,14 @@ export default function DetalleOrden() {
         }
       } catch {}
 
-      const estatusTxtLocal = String(data?.estatus_label || data?.estatus || data?.status || "")
+      const estatusTxtLocal = String(
+        data?.estatus_label || data?.estatus || data?.status || "",
+      )
         .trim()
         .toUpperCase();
-      const statusCodeLocal = String(data?.estatus_code || data?.userstatus || "").trim();
+      const statusCodeLocal = String(
+        data?.estatus_code || data?.userstatus || "",
+      ).trim();
 
       const isEnProcesoLocal =
         estatusTxtLocal === "EN_PROCESO" ||
@@ -1240,7 +1466,8 @@ export default function DetalleOrden() {
 
       const isPending0400Local =
         statusCodeLocal === "0400" || String(statusCodeLocal).includes("0400");
-      const isFinalLocal = ["0300", "0500"].includes(statusCodeLocal) || !!data?.isFinal;
+      const isFinalLocal =
+        ["0300", "0500"].includes(statusCodeLocal) || !!data?.isFinal;
 
       if (isEnProcesoLocal) {
         const savedStart = await loadOrderStart(orderIdReal);
@@ -1267,7 +1494,10 @@ export default function DetalleOrden() {
         if (savedElapsed != null) setOrderElapsedMs(savedElapsed);
       }
     } catch (error) {
-      console.error("Error al obtener orden (SAP):", error?.response?.data || error);
+      console.error(
+        "Error al obtener orden (SAP):",
+        error?.response?.data || error,
+      );
 
       const orderIdParam2 = String(id || "").trim();
       const cached2 = await loadOrdenTecnicoDetail(orderIdParam2);
@@ -1275,7 +1505,9 @@ export default function DetalleOrden() {
       if (cached2?.data) {
         setOrden(cached2.data);
 
-        const cachedOrderId = String(cached2?.data?.Orderid || orderIdParam2).trim();
+        const cachedOrderId = String(
+          cached2?.data?.Orderid || orderIdParam2,
+        ).trim();
         const savedStart = await loadOrderStart(cachedOrderId);
         if (savedStart) {
           setOrderStartedAtMs(savedStart);
@@ -1290,8 +1522,10 @@ export default function DetalleOrden() {
 
         const pending = await loadPendingSign(cachedOrderId);
         if (pending?.checkedMap) setCheckedMap(pending.checkedMap || {});
-        if (Array.isArray(pending?.consumibles)) setConsumibles(pending.consumibles);
-        if (typeof pending?.notaTecnico === "string") setNotaTecnico(pending.notaTecnico || "");
+        if (Array.isArray(pending?.consumibles))
+          setConsumibles(pending.consumibles);
+        if (typeof pending?.notaTecnico === "string")
+          setNotaTecnico(pending.notaTecnico || "");
         if (typeof pending?.clienteNombre === "string")
           setClienteNombre(pending.clienteNombre || "");
         if (typeof pending?.clienteCargo === "string")
@@ -1310,7 +1544,8 @@ export default function DetalleOrden() {
         }
 
         const emailCached = String(cached2?.data?.cliente_email || "").trim();
-        if (emailCached && isValidEmail(emailCached)) setClienteEmail(emailCached);
+        if (emailCached && isValidEmail(emailCached))
+          setClienteEmail(emailCached);
       } else {
         Alert.alert("Error", "No se pudo cargar la orden desde SAP");
       }
@@ -1318,7 +1553,26 @@ export default function DetalleOrden() {
       setLoading(false);
     }
   };
+  const COMPONENTS_KEY = (orderId, activity) =>
+    `orderComponents:${orderId}:${activity}`;
 
+  async function saveOfflineComponents(orderId, activity, data) {
+    try {
+      await AsyncStorage.setItem(
+        COMPONENTS_KEY(orderId, activity),
+        JSON.stringify(Array.isArray(data) ? data : []),
+      );
+    } catch {}
+  }
+
+  async function loadOfflineComponents(orderId, activity) {
+    try {
+      const raw = await AsyncStorage.getItem(COMPONENTS_KEY(orderId, activity));
+      return raw ? JSON.parse(raw) : [];
+    } catch {
+      return [];
+    }
+  }
   const openComponentsModal = async (op) => {
     try {
       setSelectedOp(op);
@@ -1326,17 +1580,65 @@ export default function DetalleOrden() {
       setShowCompModal(true);
       setLoadingComponents(true);
 
-      const Orderid = orden?.Orderid || id;
-      const Activity = op.activity || op.Activity;
+      const Orderid = String(orden?.Orderid || id || "").trim();
+      const Activity = String(op?.activity || op?.Activity || "").trim();
 
-      const res = await api.get(
-        `/api/operaciones/ordenes/${Orderid}/operaciones/${Activity}/componentes`
+      if (!Orderid || !Activity) {
+        Alert.alert("Materiales", "No se encontró la operación.");
+        return;
+      }
+
+      const net = await NetInfo.fetch();
+      const isOnline = !!(
+        net?.isConnected && net?.isInternetReachable !== false
       );
 
-      setCompList(Array.isArray(res.data) ? res.data : []);
+      if (isOnline) {
+        const res = await api.get(
+          `/api/operaciones/ordenes/${Orderid}/operaciones/${Activity}/componentes`,
+        );
+
+        const data = Array.isArray(res.data) ? res.data : [];
+        setCompList(data);
+
+        await saveOfflineComponents(Orderid, Activity, data);
+        return;
+      }
+
+      const offlineData = await loadOfflineComponents(Orderid, Activity);
+
+      if (offlineData.length > 0) {
+        setCompList(offlineData);
+        return;
+      }
+
+      Alert.alert(
+        "Materiales",
+        "No hay conexión y esta operación no tiene materiales guardados offline.",
+      );
     } catch (error) {
-      console.error("Error al obtener componentes:", error?.response?.data || error);
-      Alert.alert("Materiales", "No se pudieron obtener los materiales de esta operación.");
+      console.error(
+        "Error al obtener componentes:",
+        error?.response?.data || error,
+      );
+
+      const Orderid = String(orden?.Orderid || id || "").trim();
+      const Activity = String(op?.activity || op?.Activity || "").trim();
+
+      const offlineData = await loadOfflineComponents(Orderid, Activity);
+
+      if (offlineData.length > 0) {
+        setCompList(offlineData);
+        Alert.alert(
+          "Materiales",
+          "Se mostraron los materiales guardados offline.",
+        );
+      } else {
+        Alert.alert(
+          "Materiales",
+          "No se pudieron obtener los materiales de esta operación.",
+        );
+      }
     } finally {
       setLoadingComponents(false);
     }
@@ -1354,7 +1656,9 @@ export default function DetalleOrden() {
 
     (async () => {
       try {
-        const { sound } = await Audio.Sound.createAsync(require("../../../../assets/alert.mp3"));
+        const { sound } = await Audio.Sound.createAsync(
+          require("../../../../assets/alert.mp3"),
+        );
         localSound = sound;
         if (mounted) setSoundObj(sound);
       } catch (e) {
@@ -1377,34 +1681,47 @@ export default function DetalleOrden() {
       return;
     }
     const orderid = String(orden.Orderid).trim();
-    router.push({ pathname: "/tecnico/ordenes/[id]/aviso-averia", params: { id: orderid } });
+    router.push({
+      pathname: "/tecnico/ordenes/[id]/aviso-averia",
+      params: { id: orderid },
+    });
   };
 
   const iniciarOrden = async () => {
     if (!orden?.Orderid) return;
 
-    const estatusTxtNow = String(orden?.estatus_label || orden?.estatus || orden?.status || "")
+    const estatusTxtNow = String(
+      orden?.estatus_label || orden?.estatus || orden?.status || "",
+    )
       .trim()
       .toUpperCase();
 
     const puedeIniciarPorEstatus =
-      estatusTxtNow === "EN_PROCESO" || estatusTxtNow === "EN PROCESO" || statusCode === "0200";
+      estatusTxtNow === "EN_PROCESO" ||
+      estatusTxtNow === "EN PROCESO" ||
+      statusCode === "0200";
 
     if (!puedeIniciarPorEstatus) {
       Alert.alert(
         "No disponible",
-        'El cronómetro solo se puede iniciar cuando la orden está en "EN_PROCESO" (o código 0200).'
+        'El cronómetro solo se puede iniciar cuando la orden está en "EN_PROCESO" (o código 0200).',
       );
       return;
     }
 
     if (!checkinDone) {
-      Alert.alert("Check-in requerido", "Primero debes hacer Check-in para iniciar el cronómetro.");
+      Alert.alert(
+        "Check-in requerido",
+        "Primero debes hacer Check-in para iniciar el cronómetro.",
+      );
       return;
     }
 
     if (isNoMant || isOrderFinishedReal) {
-      Alert.alert("No disponible", "La orden no permite iniciar cronómetro en este estado.");
+      Alert.alert(
+        "No disponible",
+        "La orden no permite iniciar cronómetro en este estado.",
+      );
       return;
     }
 
@@ -1453,21 +1770,30 @@ export default function DetalleOrden() {
     setNoMantError(null);
 
     try {
-      const res = await api.get(`/evidencias/orden/${orden.Orderid}/no-mantenimiento-pdf`);
+      const res = await api.get(
+        `/evidencias/orden/${orden.Orderid}/no-mantenimiento-pdf`,
+      );
       const { pdf_url } = res.data || {};
       if (!pdf_url) throw new Error("Sin URL de PDF desde backend");
 
       const apiBase = api.defaults.baseURL || "";
       const serverRoot = apiBase.replace(/\/api\/?$/, "");
 
-      const rawUrl = pdf_url.startsWith("http") ? pdf_url : `${serverRoot}${pdf_url}`;
+      const rawUrl = pdf_url.startsWith("http")
+        ? pdf_url
+        : `${serverRoot}${pdf_url}`;
       setNoMantPdfRawUrl(rawUrl);
 
       const viewerUrl = `https://docs.google.com/gview?embedded=1&url=${encodeURIComponent(rawUrl)}`;
       setNoMantPdfUrl(viewerUrl);
     } catch (error) {
-      console.error("Error al obtener PDF no mantto:", error?.response?.data || error);
-      setNoMantError("No se pudo cargar el PDF de la carta de no mantenimiento.");
+      console.error(
+        "Error al obtener PDF no mantto:",
+        error?.response?.data || error,
+      );
+      setNoMantError(
+        "No se pudo cargar el PDF de la carta de no mantenimiento.",
+      );
     } finally {
       setLoadingNoMantPdf(false);
     }
@@ -1483,7 +1809,10 @@ export default function DetalleOrden() {
 
   const descargarNoMantPdf = async () => {
     if (!noMantPdfRawUrl) {
-      Alert.alert("Sin archivo", "No se encontró la URL del PDF para descargar.");
+      Alert.alert(
+        "Sin archivo",
+        "No se encontró la URL del PDF para descargar.",
+      );
       return;
     }
 
@@ -1491,14 +1820,18 @@ export default function DetalleOrden() {
       setDownloadingNoMantPdf(true);
 
       const filename =
-        noMantPdfRawUrl.split("/").pop() || `carta-no-mantto_${orden?.Orderid || ""}.pdf`;
+        noMantPdfRawUrl.split("/").pop() ||
+        `carta-no-mantto_${orden?.Orderid || ""}.pdf`;
       const localUri = FileSystem.documentDirectory + filename;
 
       const { uri } = await FileSystem.downloadAsync(noMantPdfRawUrl, localUri);
 
       const canShare = await Sharing.isAvailableAsync();
       if (!canShare) {
-        Alert.alert("Descarga completa", "El PDF se guardó en la carpeta de documentos de la app.");
+        Alert.alert(
+          "Descarga completa",
+          "El PDF se guardó en la carpeta de documentos de la app.",
+        );
         return;
       }
 
@@ -1508,7 +1841,10 @@ export default function DetalleOrden() {
       });
     } catch (e) {
       console.error("Error al descargar PDF:", e);
-      Alert.alert("Error", "No se pudo descargar el PDF. Verifica acceso a la URL del servidor.");
+      Alert.alert(
+        "Error",
+        "No se pudo descargar el PDF. Verifica acceso a la URL del servidor.",
+      );
     } finally {
       setDownloadingNoMantPdf(false);
     }
@@ -1532,14 +1868,26 @@ export default function DetalleOrden() {
 
     const selectedIds = Object.keys(checkedMap || {});
     if (!selectedIds.length) {
-      Alert.alert("Sin selección", "Marca al menos una operación realizada antes de guardar.");
+      Alert.alert(
+        "Sin selección",
+        "Marca al menos una operación realizada antes de guardar.",
+      );
       return;
     }
 
     if (!orderStartedAtMs) {
       Alert.alert(
         "Sin cronómetro",
-        "No se detectó el inicio del cronómetro. Inicia la orden para poder prorratear y mandar operaciones."
+        "No se detectó el inicio del cronómetro. Inicia la orden para poder prorratear y mandar operaciones.",
+      );
+      return;
+    }
+
+    const consumiblesValidos = hasValidConsumibles(consumibles);
+    if (!consumiblesValidos) {
+      Alert.alert(
+        "Consumibles obligatorios",
+        "Debes agregar al menos un consumible válido antes de guardar pendiente de firma.",
       );
       return;
     }
@@ -1567,7 +1915,9 @@ export default function DetalleOrden() {
       };
 
       const opsAll = Array.isArray(orden?.operaciones) ? orden.operaciones : [];
-      const plantFallback = String(orden?.Plant || orden?.plant || orden?.centro || "").trim();
+      const plantFallback = String(
+        orden?.Plant || orden?.plant || orden?.centro || "",
+      ).trim();
 
       const confirmationPayload0400 = buildConfirmationPayloadFromSelectedOps({
         orderId,
@@ -1577,10 +1927,14 @@ export default function DetalleOrden() {
         finishMs,
         consumiblesRows: consumibles,
         plantFallback,
+        user: user, // 👈 CAMBIO: Pasamos el objeto 'user' completo
       });
 
       if (!confirmationPayload0400) {
-        Alert.alert("Error", "No se pudo armar el payload de confirmaciones de operaciones.");
+        Alert.alert(
+          "Error",
+          "No se pudo armar el payload de confirmaciones de operaciones.",
+        );
         return;
       }
 
@@ -1594,7 +1948,9 @@ export default function DetalleOrden() {
         clienteNombre: String(clienteNombre || "").trim(),
         clienteCargo: String(clienteCargo || "").trim(),
         avisoCliente: String(avisoCliente || "").trim(),
-        orderStartedAtMs: Number.isFinite(orderStartedAtMs) ? orderStartedAtMs : null,
+        orderStartedAtMs: Number.isFinite(orderStartedAtMs)
+          ? orderStartedAtMs
+          : null,
         orderFinishedAtMs: finishMs,
         orderElapsedMs: elapsedMs,
       };
@@ -1602,13 +1958,16 @@ export default function DetalleOrden() {
       await savePendingSign(orderId, pendingPayload);
 
       const net = await NetInfo.fetch();
-      const isOnline = !!(net?.isConnected && net?.isInternetReachable !== false);
+      const isOnline = !!(
+        net?.isConnected && net?.isInternetReachable !== false
+      );
 
       if (!isOnline) {
         await enqueueSap({
           type: "CONFIRMATIONS",
           orderId,
-          endpoint: "/api/odata/ZCS_CREATE_CONFIRMATION_SRV/ConfirmationHeaderSet",
+          endpoint:
+            "/api/odata/ZCS_CREATE_CONFIRMATION_SRV/ConfirmationHeaderSet",
           payload: confirmationPayload0400,
           dedupeKey: `CONFIRMATIONS:${orderId}:0400`,
         });
@@ -1630,14 +1989,17 @@ export default function DetalleOrden() {
 
         Alert.alert(
           "Guardado offline",
-          "La orden quedó en pendiente de firma. Las operaciones/consumibles y el estatus 0400 se enviarán cuando vuelva el internet."
+          "La orden quedó en pendiente de firma. Las operaciones/consumibles y el estatus 0400 se enviarán cuando vuelva el internet.",
         );
 
         setFinalizeMode(false);
         router.replace("/tecnico/ordenes");
         return;
       }
+      //////////////////////////////////////
 
+      ////////////////////////////////////////
+      /*
       let confirmationsOk = false;
       let statusOk = false;
 
@@ -1645,7 +2007,7 @@ export default function DetalleOrden() {
         await api.post(
           "/api/odata/ZCS_CREATE_CONFIRMATION_SRV/ConfirmationHeaderSet",
           confirmationPayload0400,
-          { timeout: 300000 }
+          { timeout: 120000  }
         );
         confirmationsOk = true;
       } catch (err) {
@@ -1745,7 +2107,82 @@ export default function DetalleOrden() {
           )
         );
         return;
+      }*/
+      ///////////////////////////////////////////////////////////////
+
+      let confirmationsOk = false;
+      let statusOk = false;
+      let confirmationsResult = { ok: false, queued: false };
+      let statusResult = { ok: false, queued: false };
+
+      try {
+        confirmationsResult = await postWithBackgroundFallback({
+          apiInstance: api,
+          endpoint:
+            "/api/odata/ZCS_CREATE_CONFIRMATION_SRV/ConfirmationHeaderSet",
+          payload: confirmationPayload0400,
+          timeoutMs: BG_TIMEOUT_MS,
+          enqueueFn: enqueueSap,
+          queueItem: {
+            type: "CONFIRMATIONS",
+            orderId,
+            endpoint:
+              "/api/odata/ZCS_CREATE_CONFIRMATION_SRV/ConfirmationHeaderSet",
+            payload: confirmationPayload0400,
+            dedupeKey: `CONFIRMATIONS:${orderId}:0400`,
+          },
+        });
+
+        confirmationsOk = true;
+      } catch (err) {
+        console.warn("[0400][CONFIRMATIONS ERROR]", err?.response?.data || err);
+
+        Alert.alert(
+          "Error SAP",
+          getSapErrorMessage(err, "SAP rechazó el envío de confirmaciones."),
+        );
+        return;
       }
+
+      try {
+        statusResult = await postWithBackgroundFallback({
+          apiInstance: api,
+          endpoint: "/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet",
+          payload: payload0400,
+          timeoutMs: BG_TIMEOUT_MS,
+          enqueueFn: enqueueSap,
+          queueItem: {
+            type: "STATUS",
+            orderId,
+            endpoint: "/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet",
+            payload: payload0400,
+            dedupeKey: `STATUS:${orderId}:0400`,
+          },
+        });
+
+        statusOk = true;
+      } catch (err) {
+        console.warn("[0400][STATUS ERROR]", err?.response?.data || err);
+
+        await savePendingSign(orderId, {
+          ...pendingPayload,
+          confirmationsSent: true,
+        });
+
+        Alert.alert(
+          "Error SAP",
+          getSapErrorMessage(
+            err,
+            "Las operaciones sí se enviaron, pero SAP rechazó el cambio a estatus 0400.",
+          ),
+        );
+        return;
+      }
+
+      /////////////////////////////////////////////////////////////////////////
+
+      /*
+
 
       if (confirmationsOk && statusOk) {
         await savePendingSign(orderId, {
@@ -1763,9 +2200,40 @@ export default function DetalleOrden() {
         setFinalizeMode(false);
         router.replace("/tecnico/ordenes");
       }
+
+*/
+
+      if (confirmationsOk && statusOk) {
+        await savePendingSign(orderId, {
+          ...pendingPayload,
+          confirmationsSent: true,
+        });
+
+        await applyLocalOrderStatus(orderId, "0400");
+
+        const algoEnCola = confirmationsResult?.queued || statusResult?.queued;
+
+        Alert.alert(
+          algoEnCola ? "Guardado y en sincronización" : "Listo",
+          algoEnCola
+            ? "La orden quedó en pendiente de firma. Lo que no alcanzó a enviarse en 2 minutos se mandará en segundo plano."
+            : "Se guardó pendiente de firma y se enviaron operaciones, consumibles y estatus.",
+        );
+
+        setFinalizeMode(false);
+        router.replace("/tecnico/ordenes");
+      }
+
+      /////////////////////////////////////////////////////////////////////////////////////////////////////////////
     } catch (e) {
-      console.error("Error guardando pendiente de firma:", e?.response?.data || e);
-      Alert.alert("Error", "No se pudo completar el guardado como pendiente de firma.");
+      console.error(
+        "Error guardando pendiente de firma:",
+        e?.response?.data || e,
+      );
+      Alert.alert(
+        "Error",
+        "No se pudo completar el guardado como pendiente de firma.",
+      );
     } finally {
       setSavingPending0400(false);
     }
@@ -1777,7 +2245,10 @@ export default function DetalleOrden() {
 
     const selectedIds = Object.keys(checkedMap || {});
     if (!selectedIds.length) {
-      Alert.alert("Sin selección", "Marca al menos una operación realizada antes de solicitar firma.");
+      Alert.alert(
+        "Sin selección",
+        "Marca al menos una operación realizada antes de solicitar firma.",
+      );
       return;
     }
 
@@ -1800,7 +2271,9 @@ export default function DetalleOrden() {
       clienteNombre: String(clienteNombre || "").trim(),
       clienteCargo: String(clienteCargo || "").trim(),
       avisoCliente: String(avisoCliente || "").trim(),
-      orderStartedAtMs: Number.isFinite(orderStartedAtMs) ? orderStartedAtMs : null,
+      orderStartedAtMs: Number.isFinite(orderStartedAtMs)
+        ? orderStartedAtMs
+        : null,
       orderFinishedAtMs: draftFinishMs,
       orderElapsedMs: draftElapsedMs,
     });
@@ -1815,12 +2288,18 @@ export default function DetalleOrden() {
 
     const email = String(clienteEmail || "").trim();
     if (email && !isValidEmail(email)) {
-      Alert.alert("Correo inválido", "Si capturas un correo, debe ser válido (ej: nombre@dominio.com).");
+      Alert.alert(
+        "Correo inválido",
+        "Si capturas un correo, debe ser válido (ej: nombre@dominio.com).",
+      );
       return;
     }
 
     if (!String(clienteNombre || "").trim()) {
-      Alert.alert("Falta nombre", "Escribe el nombre del cliente (obligatorio).");
+      Alert.alert(
+        "Falta nombre",
+        "Escribe el nombre del cliente (obligatorio).",
+      );
       return;
     }
     if (!String(clienteCargo || "").trim()) {
@@ -1829,13 +2308,28 @@ export default function DetalleOrden() {
     }
 
     if (!signatureData) {
-      Alert.alert("Falta firma", 'Pida al cliente que firme y toque "Listo" dentro del recuadro.');
+      Alert.alert(
+        "Falta firma",
+        'Pida al cliente que firme y toque "Listo" dentro del recuadro.',
+      );
+      return;
+    }
+
+    const consumiblesValidos = hasValidConsumibles(consumibles);
+    if (!consumiblesValidos) {
+      Alert.alert(
+        "Consumibles obligatorios",
+        "Debes agregar al menos un consumible válido antes de finalizar la orden.",
+      );
       return;
     }
 
     const selectedIds = Object.keys(checkedMap || {});
     if (!selectedIds.length) {
-      Alert.alert("Sin selección", "Marca al menos una operación realizada antes de finalizar.");
+      Alert.alert(
+        "Sin selección",
+        "Marca al menos una operación realizada antes de finalizar.",
+      );
       return;
     }
 
@@ -1855,19 +2349,20 @@ export default function DetalleOrden() {
       const effectiveElapsedMs = Number.isFinite(pendingDraft?.orderElapsedMs)
         ? pendingDraft.orderElapsedMs
         : Number.isFinite(effectiveStartMs)
-        ? Math.max(0, effectiveFinishMs - effectiveStartMs)
-        : null;
+          ? Math.max(0, effectiveFinishMs - effectiveStartMs)
+          : null;
 
       if (!effectiveStartMs) {
         Alert.alert(
           "Sin cronómetro",
-          "No se detectó el inicio del cronómetro. Inicia la orden para poder prorratear tiempos."
+          "No se detectó el inicio del cronómetro. Inicia la orden para poder prorratear tiempos.",
         );
         return;
       }
 
       const finishMs = effectiveFinishMs;
-      const elapsedNow = effectiveElapsedMs ?? Math.max(0, finishMs - effectiveStartMs);
+      const elapsedNow =
+        effectiveElapsedMs ?? Math.max(0, finishMs - effectiveStartMs);
 
       await saveOrderElapsed(orderId, elapsedNow);
       setOrderElapsedMs(elapsedNow);
@@ -1895,7 +2390,10 @@ export default function DetalleOrden() {
 
       const selectedOps = uniqByOp(selectedOpsRaw);
       if (!selectedOps.length) {
-        Alert.alert("Error", "No se encontraron las operaciones seleccionadas en la orden.");
+        Alert.alert(
+          "Error",
+          "No se encontraron las operaciones seleccionadas en la orden.",
+        );
         return;
       }
 
@@ -1910,11 +2408,17 @@ export default function DetalleOrden() {
         currentCode,
       });
 
-      const plantFallback = String(orden?.Plant || orden?.plant || orden?.centro || "").trim();
-      const ConfirmationMaterialSet = normalizeConsumiblesToMaterialSet(consumibles, plantFallback);
+      const plantFallback = String(
+        orden?.Plant || orden?.plant || orden?.centro || "",
+      ).trim();
+      const ConfirmationMaterialSet = normalizeConsumiblesToMaterialSet(
+        consumibles,
+        plantFallback,
+      );
 
       const confirmationPayload = {
         Order: "S1",
+        Mail: String(userEmail || "").trim(), // 👈 AQUI
         ConfirmationOrderSet: selectedOps.map((op, idx) => {
           const actRaw = String(op.activity || op.Activity || "").trim();
           const subRaw = String(op.subactivity || op.SubActivity || "").trim();
@@ -1961,7 +2465,7 @@ export default function DetalleOrden() {
             user?.fullName ||
             user?.displayName ||
             user?.username ||
-            ""
+            "",
         ).trim(),
         avisoCliente: String(avisoCliente || "").trim(),
         notaTecnico: String(notaTecnico || "").trim(),
@@ -1978,7 +2482,9 @@ export default function DetalleOrden() {
       let pdfUri = null;
 
       try {
-        const { uri } = await Print.printToFileAsync({ html: String(html || "") });
+        const { uri } = await Print.printToFileAsync({
+          html: String(html || ""),
+        });
         pdfUri = uri;
         setMantPdfUri(uri);
 
@@ -1991,7 +2497,9 @@ export default function DetalleOrden() {
       }
 
       const fileName =
-        tipo === "escalera" ? "mantenimiento_escaleras.pdf" : "mantenimiento_elevadores.pdf";
+        tipo === "escalera"
+          ? "mantenimiento_escaleras.pdf"
+          : "mantenimiento_elevadores.pdf";
 
       const change0300WithPdfPayload = {
         ...statusPayload0300,
@@ -2020,7 +2528,10 @@ export default function DetalleOrden() {
       setShowSignModal(false);
       setShowMantPreview(true);
     } catch (e) {
-      console.error("Error preparando finalización (preview):", e?.response?.data || e);
+      console.error(
+        "Error preparando finalización (preview):",
+        e?.response?.data || e,
+      );
       Alert.alert("Error", "No se pudo generar la vista previa del reporte.");
     } finally {
       setSavingSignature(false);
@@ -2029,7 +2540,10 @@ export default function DetalleOrden() {
 
   const abrirPdfMantenimiento = async () => {
     if (!mantPdfUri) {
-      Alert.alert("Sin PDF", "No se pudo generar el PDF en este dispositivo (puedes continuar).");
+      Alert.alert(
+        "Sin PDF",
+        "No se pudo generar el PDF en este dispositivo (puedes continuar).",
+      );
       return;
     }
     try {
@@ -2037,7 +2551,7 @@ export default function DetalleOrden() {
       if (!canShare) {
         Alert.alert(
           "No disponible",
-          "Este dispositivo no permite abrir/compartir archivos. Puedes continuar igualmente."
+          "Este dispositivo no permite abrir/compartir archivos. Puedes continuar igualmente.",
         );
         return;
       }
@@ -2057,14 +2571,21 @@ export default function DetalleOrden() {
       return;
     }
 
-    const { orderId, finishMs, selectedIds, change0300WithPdfPayload, confirmationPayload } =
-      pendingFinalize;
+    const {
+      orderId,
+      finishMs,
+      selectedIds,
+      change0300WithPdfPayload,
+      confirmationPayload,
+    } = pendingFinalize;
 
     try {
       setFinishingOrder(true);
 
       const net = await NetInfo.fetch();
-      const isOnline = !!(net?.isConnected && net?.isInternetReachable !== false);
+      const isOnline = !!(
+        net?.isConnected && net?.isInternetReachable !== false
+      );
 
       let alreadySentConfirmations = false;
       try {
@@ -2072,10 +2593,17 @@ export default function DetalleOrden() {
         alreadySentConfirmations = !!pending?.confirmationsSent;
       } catch {}
 
-      logSapPayload("=== SAP PAYLOAD (CHANGE 0300 + PDF) ===", change0300WithPdfPayload, {
-        stripBase64: true,
-      });
-      logSapPayload("=== SAP PAYLOAD (CONFIRMATIONS + CONSUMIBLES) ===", confirmationPayload);
+      logSapPayload(
+        "=== SAP PAYLOAD (CHANGE 0300 + PDF) ===",
+        change0300WithPdfPayload,
+        {
+          stripBase64: true,
+        },
+      );
+      logSapPayload(
+        "=== SAP PAYLOAD (CONFIRMATIONS + CONSUMIBLES) ===",
+        confirmationPayload,
+      );
       console.log("CONFIRMATIONS alreadySent:", alreadySentConfirmations);
 
       if (!isOnline) {
@@ -2094,12 +2622,15 @@ export default function DetalleOrden() {
           await enqueueSap({
             type: "CONFIRMATIONS",
             orderId,
-            endpoint: "/api/odata/ZCS_CREATE_CONFIRMATION_SRV/ConfirmationHeaderSet",
+            endpoint:
+              "/api/odata/ZCS_CREATE_CONFIRMATION_SRV/ConfirmationHeaderSet",
             payload: confirmationPayload,
             dedupeKey: `CONFIRMATIONS:${orderId}:0300`,
           });
         } else {
-          console.log("Saltando enqueue confirmaciones (ya fueron enviadas en 0400)");
+          console.log(
+            "Saltando enqueue confirmaciones (ya fueron enviadas en 0400)",
+          );
         }
 
         await clearOrderStart(orderId);
@@ -2118,7 +2649,7 @@ export default function DetalleOrden() {
           "Finalizado (offline)",
           alreadySentConfirmations
             ? "Se encoló (Estatus 0300+PDF). Confirmaciones+consumibles ya se habían enviado en 0400."
-            : "Se encoló: (Estatus 0300+PDF) + confirmaciones+consumibles."
+            : "Se encoló: (Estatus 0300+PDF) + confirmaciones+consumibles.",
         );
 
         router.replace("/tecnico/ordenes");
@@ -2128,11 +2659,14 @@ export default function DetalleOrden() {
       if (!change0300WithPdfPayload?.Attachments?.[0]?.Base64) {
         Alert.alert(
           "No se pudo generar el PDF",
-          "No se pudo generar el PDF en este dispositivo. Intenta de nuevo o revisa permisos/almacenamiento."
+          "No se pudo generar el PDF en este dispositivo. Intenta de nuevo o revisa permisos/almacenamiento.",
         );
         return;
       }
 
+      /////////////////////////////////////////
+
+      /*
       try {
         await api.post(
           `/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet`,
@@ -2198,6 +2732,53 @@ export default function DetalleOrden() {
         router.replace("/tecnico/ordenes");
         return;
       }
+*/
+      let statusResult = { ok: false, queued: false };
+      let confirmationsResult = { ok: true, queued: false };
+
+      try {
+        statusResult = await postWithBackgroundFallback({
+          apiInstance: api,
+          endpoint: "/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet",
+          payload: change0300WithPdfPayload,
+          timeoutMs: BG_TIMEOUT_MS,
+          enqueueFn: enqueueSap,
+          queueItem: {
+            type: "STATUS",
+            orderId,
+            endpoint: "/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet",
+            payload: change0300WithPdfPayload,
+            dedupeKey: `STATUS:${orderId}:0300`,
+          },
+        });
+
+        if (!alreadySentConfirmations) {
+          confirmationsResult = await postWithBackgroundFallback({
+            apiInstance: api,
+            endpoint:
+              "/api/odata/ZCS_CREATE_CONFIRMATION_SRV/ConfirmationHeaderSet",
+            payload: confirmationPayload,
+            timeoutMs: BG_TIMEOUT_MS,
+            enqueueFn: enqueueSap,
+            queueItem: {
+              type: "CONFIRMATIONS",
+              orderId,
+              endpoint:
+                "/api/odata/ZCS_CREATE_CONFIRMATION_SRV/ConfirmationHeaderSet",
+              payload: confirmationPayload,
+              dedupeKey: `CONFIRMATIONS:${orderId}:0300`,
+            },
+          });
+        } else {
+          console.log(
+            "Saltando POST confirmaciones (ya fueron enviadas en 0400)",
+          );
+        }
+      } catch (err) {
+        throw err;
+      }
+
+      ////////////////////////////////////////////////////////////////////////
 
       await updateLocalOpsAsFinalizadas(orderId, selectedIds);
       await updateLocalOrderAsFinalizada0300(orderId, finishMs);
@@ -2214,6 +2795,9 @@ export default function DetalleOrden() {
       setShowMantPreview(false);
       setPendingFinalize(null);
 
+      /////////////////////////////
+
+      /*
       Alert.alert(
         "Orden finalizada",
         alreadySentConfirmations
@@ -2221,8 +2805,28 @@ export default function DetalleOrden() {
           : "Se envió: (Orden FINALIZADA + PDF) y confirmaciones+consumibles."
       );
       router.replace("/tecnico/ordenes");
+*/
+
+      const algoEnCola = statusResult?.queued || confirmationsResult?.queued;
+
+      Alert.alert(
+        algoEnCola ? "Finalizado y en sincronización" : "Orden finalizada",
+        algoEnCola
+          ? alreadySentConfirmations
+            ? "La orden quedó finalizada localmente. El estatus 0300 + PDF se enviará en segundo plano cuando termine o haya mejor conexión."
+            : "La orden quedó finalizada localmente. El estatus 0300 + PDF y las confirmaciones se enviarán en segundo plano."
+          : alreadySentConfirmations
+            ? "Se envió: (Orden FINALIZADA + PDF). Confirmaciones+consumibles ya se habían enviado al guardar como Pendiente de firma."
+            : "Se envió: (Orden FINALIZADA + PDF) y confirmaciones+consumibles.",
+      );
+      router.replace("/tecnico/ordenes");
+
+      ////////////////////////////////////////////////////////////////////////
     } catch (error) {
-      console.error("Error al finalizar (SAP):", error?.response?.data || error);
+      console.error(
+        "Error al finalizar (SAP):",
+        error?.response?.data || error,
+      );
 
       const msg = getSapErrorMessage(error, "No se pudo finalizar.");
       Alert.alert("Error", String(msg));
@@ -2259,21 +2863,31 @@ export default function DetalleOrden() {
           <View style={styles.topActionBar}>
             <View style={styles.timerPill}>
               <Ionicons name="time-outline" size={16} color={FIORI.text} />
-              <Text style={styles.timerText}>{msToHMS(nowTick - orderStartedAtMs)}</Text>
+              <Text style={styles.timerText}>
+                {msToHMS(nowTick - orderStartedAtMs)}
+              </Text>
             </View>
           </View>
         ) : showFrozenTimer ? (
           <View style={styles.topActionBar}>
             <View style={styles.timerPill}>
-              <Ionicons name="pause-circle-outline" size={16} color={FIORI.text} />
+              <Ionicons
+                name="pause-circle-outline"
+                size={16}
+                color={FIORI.text}
+              />
               <Text style={styles.timerText}>{msToHMS(orderElapsedMs)}</Text>
             </View>
           </View>
         ) : null}
 
-        <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
+        <View
+          style={{ flex: 1, alignItems: "center", justifyContent: "center" }}
+        >
           <ActivityIndicator size="large" color={FIORI.brand} />
-          <Text style={{ marginTop: 10, color: FIORI.textMuted, fontWeight: "700" }}>
+          <Text
+            style={{ marginTop: 10, color: FIORI.textMuted, fontWeight: "700" }}
+          >
             Cargando orden…
           </Text>
         </View>
@@ -2293,25 +2907,27 @@ export default function DetalleOrden() {
   const estatusColor = isNoMant
     ? FIORI.textMuted
     : isOrderFinishedReal
-    ? FIORI.ok
-    : !statusCode
-    ? FIORI.err
-    : statusCode === "0100"
-    ? FIORI.err
-    : statusCode === "0200"
-    ? FIORI.warn
-    : statusCode === "0400"
-    ? FIORI.warn
-    : FIORI.ok;
+      ? FIORI.ok
+      : !statusCode
+        ? FIORI.err
+        : statusCode === "0100"
+          ? FIORI.err
+          : statusCode === "0200"
+            ? FIORI.warn
+            : statusCode === "0400"
+              ? FIORI.warn
+              : FIORI.ok;
 
-  const direccionValor = orden.direccion || orden.address || orden.partner_address || null;
-  const allMaterials = Array.isArray(orden.componentes) ? orden.componentes : [];
+  const direccionValor =
+    orden.direccion || orden.address || orden.partner_address || null;
+  const allMaterials = Array.isArray(orden.componentes)
+    ? orden.componentes
+    : [];
   const hasSelectedOps = Object.keys(checkedMap || {}).length > 0;
 
   const ordenParaVista = {
     ...(orden || {}),
-    cliente_email:
-      String(orden?.cliente_email || "").trim() || "(sin correo)",
+    cliente_email: String(orden?.cliente_email || "").trim() || "(sin correo)",
   };
 
   return (
@@ -2336,13 +2952,19 @@ export default function DetalleOrden() {
         <View style={styles.topActionBar}>
           <View style={styles.timerPill}>
             <Ionicons name="time-outline" size={16} color={FIORI.text} />
-            <Text style={styles.timerText}>{msToHMS(nowTick - orderStartedAtMs)}</Text>
+            <Text style={styles.timerText}>
+              {msToHMS(nowTick - orderStartedAtMs)}
+            </Text>
           </View>
         </View>
       ) : showFrozenTimer ? (
         <View style={styles.topActionBar}>
           <View style={styles.timerPill}>
-            <Ionicons name="pause-circle-outline" size={16} color={FIORI.text} />
+            <Ionicons
+              name="pause-circle-outline"
+              size={16}
+              color={FIORI.text}
+            />
             <Text style={styles.timerText}>{msToHMS(orderElapsedMs)}</Text>
           </View>
         </View>
@@ -2379,7 +3001,9 @@ export default function DetalleOrden() {
           />
         }
         renderItem={() => {
-          const ops = Array.isArray(orden?.operaciones) ? orden.operaciones : [];
+          const ops = Array.isArray(orden?.operaciones)
+            ? orden.operaciones
+            : [];
           return (
             <>
               <ListaOperacionesAgrupadas
@@ -2396,8 +3020,16 @@ export default function DetalleOrden() {
 
               {finalizeMode ? (
                 <View style={[styles.panel, { marginTop: 12 }]}>
-                  <Text style={styles.panelTitle}>Descripción general de las actividades</Text>
-                  <Text style={{ color: FIORI.textMuted, fontWeight: "700", marginBottom: 8 }}>
+                  <Text style={styles.panelTitle}>
+                    Descripción general de las actividades
+                  </Text>
+                  <Text
+                    style={{
+                      color: FIORI.textMuted,
+                      fontWeight: "700",
+                      marginBottom: 8,
+                    }}
+                  >
                     Se insertará en el PDF.
                   </Text>
 
@@ -2421,7 +3053,9 @@ export default function DetalleOrden() {
                   />
 
                   <ConsumiblesFinalizacion
-                    plant={String(orden?.Plant || orden?.plant || orden?.centro || "").trim()}
+                    plant={String(
+                      orden?.Plant || orden?.plant || orden?.centro || "",
+                    ).trim()}
                     coberturaTipo={coberturaTipo || null}
                     FIORI={FIORI}
                     initialRows={consumibles}
@@ -2450,7 +3084,11 @@ export default function DetalleOrden() {
       />
 
       {!isOpsLocked && (
-        <TouchableOpacity style={styles.fab} activeOpacity={0.9} onPress={(e) => irAAvisoAveria(e)}>
+        <TouchableOpacity
+          style={styles.fab}
+          activeOpacity={0.9}
+          onPress={(e) => irAAvisoAveria(e)}
+        >
           <Ionicons name="warning-outline" size={20} color="#000000ff" />
           <Text style={styles.fabLabel}>Avería</Text>
         </TouchableOpacity>
@@ -2507,13 +3145,18 @@ export default function DetalleOrden() {
         <View style={styles.modalBackdrop}>
           <View style={[styles.modalCard, { maxWidth: 720, height: "90%" }]}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Vista previa · Reporte de mantenimiento</Text>
+              <Text style={styles.modalTitle}>
+                Vista previa · Reporte de mantenimiento
+              </Text>
               <TouchableOpacity
                 onPress={() => {
                   if (finishingOrder) return;
                   setShowMantPreview(false);
                 }}
-                style={[styles.modalCloseBtn, finishingOrder && { opacity: 0.7 }]}
+                style={[
+                  styles.modalCloseBtn,
+                  finishingOrder && { opacity: 0.7 },
+                ]}
                 disabled={!!finishingOrder}
               >
                 <Ionicons name="close" size={20} color="#fff" />
@@ -2556,9 +3199,13 @@ export default function DetalleOrden() {
                 disabled={!!finishingOrder}
               >
                 {finishingOrder ? (
-                  <Text style={[styles.smallBtnText, { color: "#fff" }]}>Finalizando…</Text>
+                  <Text style={[styles.smallBtnText, { color: "#fff" }]}>
+                    Finalizando…
+                  </Text>
                 ) : (
-                  <Text style={[styles.smallBtnText, { color: "#fff" }]}>Continuar</Text>
+                  <Text style={[styles.smallBtnText, { color: "#fff" }]}>
+                    Continuar
+                  </Text>
                 )}
               </TouchableOpacity>
             </View>
@@ -2566,12 +3213,19 @@ export default function DetalleOrden() {
         </View>
       </Modal>
 
-      <Modal visible={savingPending0400} transparent animationType="fade" statusBarTranslucent>
+      <Modal
+        visible={savingPending0400}
+        transparent
+        animationType="fade"
+        statusBarTranslucent
+      >
         <View style={styles.blockBackdrop}>
           <View style={styles.blockCard}>
             <ActivityIndicator size="large" color={FIORI.brand} />
             <Text style={styles.blockTitle}>Guardando pendiente de firma…</Text>
-            <Text style={styles.blockSub}>No cierres la pantalla ni toques botones.</Text>
+            <Text style={styles.blockSub}>
+              No cierres la pantalla ni toques botones.
+            </Text>
           </View>
         </View>
       </Modal>
@@ -2618,7 +3272,12 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     ...elev(0.3),
   },
-  noMantTitle: { fontSize: 14, fontWeight: "800", color: FIORI.text, marginBottom: 4 },
+  noMantTitle: {
+    fontSize: 14,
+    fontWeight: "800",
+    color: FIORI.text,
+    marginBottom: 4,
+  },
   noMantText: { fontSize: 12, color: FIORI.textMuted },
   btnNoMantBanner: {
     marginLeft: 10,
@@ -2638,9 +3297,18 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     ...elev(0.4),
   },
-  panelTitle: { fontSize: 14, fontWeight: "800", color: FIORI.text, marginBottom: 8 },
+  panelTitle: {
+    fontSize: 14,
+    fontWeight: "800",
+    color: FIORI.text,
+    marginBottom: 8,
+  },
 
-  row: { paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: FIORI.borderSoft },
+  row: {
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: FIORI.borderSoft,
+  },
   rowLabel: { fontSize: 13, color: FIORI.textMuted, marginBottom: 2 },
   rowValue: { fontSize: 14, color: FIORI.text, fontWeight: "600" },
 
@@ -2688,7 +3356,12 @@ const styles = StyleSheet.create({
     borderColor: FIORI.borderSoft,
     padding: 10,
   },
-  badgeSmall: { borderRadius: 999, borderWidth: 1, paddingHorizontal: 10, paddingVertical: 6 },
+  badgeSmall: {
+    borderRadius: 999,
+    borderWidth: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
   badgeSmallText: { fontSize: 11, fontWeight: "900", color: FIORI.text },
   operTitleSmall: { fontSize: 13, fontWeight: "900", color: FIORI.text },
   operDescSmall: { fontSize: 12, color: FIORI.textMuted, marginTop: 2 },
@@ -2736,7 +3409,12 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     ...elev(0.3),
   },
-  timerText: { color: FIORI.text, fontWeight: "900", fontSize: 13, letterSpacing: 0.3 },
+  timerText: {
+    color: FIORI.text,
+    fontWeight: "900",
+    fontSize: 13,
+    letterSpacing: 0.3,
+  },
 
   modalBackdrop: {
     flex: 1,
@@ -2824,9 +3502,16 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   blockTitle: { marginTop: 10, fontWeight: "900", color: FIORI.text },
-  blockSub: { marginTop: 6, color: FIORI.textMuted, textAlign: "center", fontSize: 12 },
+  blockSub: {
+    marginTop: 6,
+    color: FIORI.textMuted,
+    textAlign: "center",
+    fontSize: 12,
+  },
 });
+////////////////////////////////
 
+/*
 function elev(multiplier = 1) {
   return Platform.select({
     ios: {
@@ -2839,3 +3524,19 @@ function elev(multiplier = 1) {
     default: {},
   });
 }
+
+*/
+function elev(multiplier = 1) {
+  return Platform.select({
+    ios: {
+      shadowColor: "#000",
+      shadowOpacity: 0.08 * multiplier,
+      shadowRadius: 8 * multiplier,
+      shadowOffset: { width: 0, height: 3 * multiplier },
+    },
+    android: { elevation: 2 * multiplier },
+    default: {},
+  });
+}
+
+//////////////////////////////////////////////////

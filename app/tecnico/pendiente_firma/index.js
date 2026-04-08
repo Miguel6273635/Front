@@ -11,8 +11,11 @@ import {
   Alert,
   Pressable,
   Modal,
+  ScrollView,
 } from "react-native";
 import NetInfo from "@react-native-community/netinfo";
+import DateTimePicker from "@react-native-community/datetimepicker";
+import { useFocusEffect } from "@react-navigation/native";
 import Header from "../../../src/components/Header";
 import api from "../../../src/services/api";
 import { router } from "expo-router";
@@ -24,12 +27,12 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Print from "expo-print";
 import * as FileSystem from "expo-file-system/legacy";
 
-// cache detalle (para intentar usarlo antes de volver a pegar a SAP)
 import {
   loadOrdenTecnicoDetail,
   loadOrdenesTecnicoList,
   saveOrdenesTecnicoList,
   buildOfflineWindow,
+  filterOrdenesByWindow,
 } from "../../../src/offline/ordenesTecnicoCache";
 
 import {
@@ -38,8 +41,6 @@ import {
 } from "../../../src/offline/ordenesTecnicoLocalPatch";
 
 import { upsertSapQueueItem } from "../../../src/offline/sapQueue";
-
-// ✅ HTML/PDF mantenimiento (plantillas + operaciones)
 import { buildMantenimientoHtml } from "../../../src/services/templates/buildMantenimientoHtml";
 
 const FIORI = {
@@ -47,32 +48,95 @@ const FIORI = {
   cardBg: "#FFFFFF",
   cardSubtle: "#F5F7FA",
   border: "#DDE6F2",
+  borderMuted: "#CFD8E3",
   ink: "#0B1F3B",
   textMuted: "#63718B",
   accent: "#0A6ED1",
-  warn: "#2D9CDB", // 0400
+  accentSoft: "#E3F2FD",
+  neutralBtn: "#ECEFF5",
+  warn: "#2D9CDB",
   danger: "#EB5757",
   ok: "#2FBF71",
 };
 
+const MONTHS = [
+  "Enero",
+  "Febrero",
+  "Marzo",
+  "Abril",
+  "Mayo",
+  "Junio",
+  "Julio",
+  "Agosto",
+  "Septiembre",
+  "Octubre",
+  "Noviembre",
+  "Diciembre",
+];
+
 const safeStr = (v) => (v == null ? "" : String(v));
 
-/** yyyy-mm-dd (local) */
-const toYMD = (d) => {
+const atStartOfDay = (d) => {
   const x = new Date(d);
-  const yyyy = x.getFullYear();
-  const mm = String(x.getMonth() + 1).padStart(2, "0");
-  const dd = String(x.getDate()).padStart(2, "0");
+  x.setHours(0, 0, 0, 0);
+  return x;
+};
+
+const atEndOfDay = (d) => {
+  const x = new Date(d);
+  x.setHours(23, 59, 59, 999);
+  return x;
+};
+
+const startOfMonth = (d) => new Date(d.getFullYear(), d.getMonth(), 1, 0, 0, 0, 0);
+const endOfMonth = (d) => new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59, 999);
+const startOfYear = (y) => new Date(y, 0, 1, 0, 0, 0, 0);
+const endOfYear = (y) => new Date(y, 11, 31, 23, 59, 59, 999);
+
+const formatLocalYmd = (d) => {
+  if (!d) return null;
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
   return `${yyyy}-${mm}-${dd}`;
 };
 
-/** Ventana: hoy ± 8 días */
-const buildWindow = (ref = new Date(), days = 8) => {
-  const start = new Date(ref);
-  start.setDate(start.getDate() - days);
-  const end = new Date(ref);
-  end.setDate(end.getDate() + days);
-  return { startStr: toYMD(start), endStr: toYMD(end), start, end };
+const parseSapDate = (value) => {
+  if (!value) return null;
+  if (typeof value === "string" && value.startsWith("/Date(")) {
+    const ms = parseInt(value.replace("/Date(", "").replace(")/", ""), 10);
+    if (!Number.isNaN(ms)) return new Date(ms);
+    return null;
+  }
+  const d = new Date(value);
+  return isNaN(d.getTime()) ? null : d;
+};
+
+const getUtcYmd = (d) => {
+  if (!d) return null;
+  const yyyy = d.getUTCFullYear();
+  const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(d.getUTCDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+};
+
+const isWithin = (date, start, end) => {
+  if (!date) return false;
+  const dStr = getUtcYmd(date);
+  const sStr = start ? getUtcYmd(start) : null;
+  const eStr = end ? getUtcYmd(end) : null;
+  if (sStr && dStr < sStr) return false;
+  if (eStr && dStr > eStr) return false;
+  return true;
+};
+
+const formatDateDMY = (value) => {
+  const d = parseSapDate(value);
+  if (!d) return "—";
+  const dd = String(d.getUTCDate()).padStart(2, "0");
+  const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const yyyy = d.getUTCFullYear();
+  return `${dd}/${mm}/${yyyy}`;
 };
 
 function normalizeCode(code) {
@@ -96,31 +160,32 @@ function extractCodes(raw) {
 }
 
 function isPending0400(item) {
-  const codes = extractCodes(item?.userstatus ?? item?.Userstatus ?? "");
-  const apiCode = normalizeCode(item?.estatus_code ?? item?.estatusCode ?? "");
-  const all = Array.from(new Set([...(codes || []), ...(apiCode ? [apiCode] : [])]));
-  return all.includes("0400");
+  const rawStatusText = [
+    item?.userstatus,
+    item?.Userstatus,
+    item?.estatus_label,
+    item?.status_text,
+    item?.user_status,
+    item?.system_status,
+  ]
+    .filter(Boolean)
+    .join(" | ")
+    .toLowerCase();
+
+  const codes = new Set([
+    ...extractCodes(item?.userstatus),
+    ...extractCodes(item?.Userstatus),
+    ...extractCodes(item?.estatus_code),
+    ...extractCodes(item?.estatusCode),
+    ...extractCodes(item?.status_code),
+  ]);
+
+  return (
+    codes.has("0400") ||
+    rawStatusText.includes("pendiente de firma") ||
+    rawStatusText.includes("pendiente firma")
+  );
 }
-
-const parseSapDate = (value) => {
-  if (!value) return null;
-  if (typeof value === "string" && value.startsWith("/Date(")) {
-    const ms = parseInt(value.replace("/Date(", "").replace(")/", ""), 10);
-    if (!Number.isNaN(ms)) return new Date(ms);
-    return null;
-  }
-  const d = new Date(value);
-  return isNaN(d.getTime()) ? null : d;
-};
-
-const formatDateDMY = (value) => {
-  const d = parseSapDate(value);
-  if (!d) return "—";
-  const dd = String(d.getUTCDate()).padStart(2, "0");
-  const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
-  const yyyy = d.getUTCFullYear();
-  return `${dd}/${mm}/${yyyy}`;
-};
 
 const matchesQuery = (item, q) => {
   if (!q) return true;
@@ -138,10 +203,10 @@ const matchesQuery = (item, q) => {
     .filter(Boolean)
     .join(" ")
     .toLowerCase();
+
   return fields.includes(needle);
 };
 
-/** checkbox simple (sin libs extra) */
 function CheckBox({ checked, disabled, onPress }) {
   return (
     <Pressable
@@ -154,9 +219,6 @@ function CheckBox({ checked, disabled, onPress }) {
   );
 }
 
-/* =========================
-   ✅ PENDIENTE SIGN storage
-========================= */
 const PENDING_SIGN_KEY = (orderId) => `pendingSign:${orderId}`;
 
 async function loadPendingSign(orderId) {
@@ -182,9 +244,6 @@ async function loadPending0400FromOffline(userEmail) {
   }
 }
 
-/* =========================
-   ✅ Detección tipo (igual que detalle)
-========================= */
 const safeTrim = (v) => String(v ?? "").trim();
 
 function detectTipoMantenimiento(orden) {
@@ -207,9 +266,6 @@ function detectTipoMantenimiento(orden) {
   return "elevador";
 }
 
-/* =========================
-   ✅ Normalizar operaciones (para que el HTML sea consistente)
-========================= */
 function normalizeOpsForPdf(ops = []) {
   if (!Array.isArray(ops)) return [];
   return ops.map((op) => {
@@ -232,9 +288,6 @@ function normalizeOpsForPdf(ops = []) {
   });
 }
 
-/* =========================
-   ✅ Helpers para cliente/dirección
-========================= */
 function mapDireccionLikeBackend(addr) {
   if (!addr) return { cliente: "", direccion: "" };
 
@@ -271,9 +324,6 @@ function pickSecondAddress(results = []) {
   return results.length >= 2 ? results[1] : results[0];
 }
 
-/* =========================
-   ✅ Fetch detalle (cache → API)
-========================= */
 async function fetchOrdenFullForPdf({ apiClient, token, orderId }) {
   try {
     const cached = await loadOrdenTecnicoDetail(orderId);
@@ -332,7 +382,6 @@ async function fetchOrdenFullForPdf({ apiClient, token, orderId }) {
   };
 }
 
-/** Helper: recorta console.log del PDF para no reventar consola */
 function logSapPayload(label, payload, { stripBase64 = false } = {}) {
   try {
     if (!payload) {
@@ -350,12 +399,11 @@ function logSapPayload(label, payload, { stripBase64 = false } = {}) {
     if (att?.Base64) att.Base64 = `<<base64 omitted: ${String(att.Base64).length} chars>>`;
     console.log(label);
     console.log(JSON.stringify(cloned, null, 2));
-  } catch (e) {
+  } catch {
     console.log(label, payload);
   }
 }
 
-/** ✅ email simple */
 function isValidEmail(email) {
   const s = String(email || "").trim().toLowerCase();
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
@@ -364,12 +412,34 @@ function isValidEmail(email) {
 export default function PendienteFirmaIndex() {
   const { user, ensureValidToken, token } = useAuth();
 
+  const userEmail = safeStr(
+    user?.correo || user?.email || user?.upn || user?.username
+  ).trim();
+
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [isOnline, setIsOnline] = useState(true);
 
   const [allOrdenes, setAllOrdenes] = useState([]);
   const [rows, setRows] = useState([]);
   const [query, setQuery] = useState("");
+
+  const [dateMode, setDateMode] = useState("all");
+
+  const [dayRef, setDayRef] = useState(new Date());
+  const [showDayPicker, setShowDayPicker] = useState(false);
+
+  const [weekStart, setWeekStart] = useState(null);
+  const [weekEnd, setWeekEnd] = useState(null);
+  const [showWeekStartPicker, setShowWeekStartPicker] = useState(false);
+  const [showWeekEndPicker, setShowWeekEndPicker] = useState(false);
+
+  const now = new Date();
+  const [monthYear, setMonthYear] = useState({ month: now.getMonth(), year: now.getFullYear() });
+  const [showMonthModal, setShowMonthModal] = useState(false);
+
+  const [yearOnly, setYearOnly] = useState(now.getFullYear());
+  const [showYearModal, setShowYearModal] = useState(false);
 
   const [selectMode, setSelectMode] = useState(false);
   const [selectedMap, setSelectedMap] = useState({});
@@ -394,12 +464,64 @@ export default function PendienteFirmaIndex() {
     [selectedMap]
   );
 
+  const { start, end } = useMemo(() => {
+    if (dateMode === "day") {
+      const s = atStartOfDay(dayRef);
+      return { start: s, end: s };
+    }
+
+    if (dateMode === "weekRange") {
+      return {
+        start: weekStart ? atStartOfDay(weekStart) : atStartOfDay(new Date()),
+        end: weekEnd ? atEndOfDay(weekEnd) : atEndOfDay(new Date()),
+      };
+    }
+
+    if (dateMode === "month") {
+      const ref = new Date(monthYear.year, monthYear.month, 1);
+      return { start: startOfMonth(ref), end: endOfMonth(ref) };
+    }
+
+    if (dateMode === "year") {
+      return { start: startOfYear(yearOnly), end: endOfYear(yearOnly) };
+    }
+
+    const e = atEndOfDay(new Date());
+    const s = new Date();
+    s.setDate(s.getDate() - 365);
+    return { start: atStartOfDay(s), end: e };
+  }, [dateMode, dayRef, weekStart, weekEnd, monthYear, yearOnly]);
+
+  const getSapRequestRange = useCallback(() => {
+    if (dateMode === "all") {
+      const e = atEndOfDay(new Date());
+      const s = new Date();
+      s.setDate(s.getDate() - 365);
+      const ss = atStartOfDay(s);
+      return { startDate: ss, endDate: e, startStr: formatLocalYmd(ss), endStr: formatLocalYmd(e) };
+    }
+
+    if (dateMode === "day") {
+      const s = atStartOfDay(dayRef);
+      const e = atEndOfDay(dayRef);
+      return { startDate: s, endDate: e, startStr: formatLocalYmd(s), endStr: formatLocalYmd(e) };
+    }
+
+    if (dateMode === "weekRange" || dateMode === "month" || dateMode === "year") {
+      const s = atStartOfDay(start);
+      const e = atEndOfDay(end);
+      return { startDate: s, endDate: e, startStr: formatLocalYmd(s), endStr: formatLocalYmd(e) };
+    }
+
+    const e = atEndOfDay(new Date());
+    const s = new Date();
+    s.setDate(s.getDate() - 365);
+    const ss = atStartOfDay(s);
+    return { startDate: ss, endDate: e, startStr: formatLocalYmd(ss), endStr: formatLocalYmd(e) };
+  }, [dateMode, dayRef, start, end]);
+
   const fetchOrdenes0400 = useCallback(
     async ({ isRefresh = false } = {}) => {
-      const userEmail = safeStr(
-        user?.correo || user?.email || user?.upn || user?.username
-      ).trim();
-
       try {
         if (isRefresh) setRefreshing(true);
         else setLoading(true);
@@ -410,22 +532,27 @@ export default function PendienteFirmaIndex() {
           return;
         }
 
-        const offlineRows = await loadPending0400FromOffline(userEmail);
-        if (offlineRows.length) {
-          setAllOrdenes(offlineRows);
-        } else if (!isRefresh) {
-          setAllOrdenes([]);
+        if (!isRefresh) {
+          const offlineRows = await loadPending0400FromOffline(userEmail);
+          if (offlineRows.length) {
+            setAllOrdenes(offlineRows);
+            setLoading(false);
+          }
         }
 
         const net = await NetInfo.fetch();
-        const isOnline = !!(net?.isConnected && net?.isInternetReachable !== false);
+        const online = !!(net?.isConnected && net?.isInternetReachable !== false);
+        setIsOnline(online);
 
-        if (!isOnline) {
+        if (!online) {
+          const offlineRows = await loadPending0400FromOffline(userEmail);
           if (!offlineRows.length) {
             Alert.alert(
               "Sin conexión",
               "No hay internet y no se encontró una lista offline de órdenes pendientes de firma."
             );
+          } else {
+            setAllOrdenes(offlineRows);
           }
           return;
         }
@@ -433,11 +560,18 @@ export default function PendienteFirmaIndex() {
         const ok = await ensureValidToken();
         if (!ok) return;
 
-        const win = buildWindow(new Date(), 8);
+        const req = getSapRequestRange();
+
+        console.log("[PENDIENTE FIRMA] Request SAP range:", {
+          dateMode,
+          start: req.startStr,
+          end: req.endStr,
+          user: userEmail,
+        });
 
         const params = new URLSearchParams({
-          start: win.startStr,
-          end: win.endStr,
+          start: req.startStr,
+          end: req.endStr,
           mode: "range",
           user: userEmail,
         });
@@ -446,7 +580,8 @@ export default function PendienteFirmaIndex() {
         const data = Array.isArray(res.data) ? res.data : [];
 
         const offlineWin = buildOfflineWindow(new Date());
-        await saveOrdenesTecnicoList(userEmail, data, offlineWin);
+        const offlineOnly = filterOrdenesByWindow(data, offlineWin.start, offlineWin.end);
+        await saveOrdenesTecnicoList(userEmail, offlineOnly, offlineWin);
 
         const only0400 = data.filter((it) => isPending0400(it));
         setAllOrdenes(only0400);
@@ -454,17 +589,15 @@ export default function PendienteFirmaIndex() {
         setSelectedMap((prev) => {
           const valid = new Set(only0400.map((x) => String(x?.Orderid)));
           const next = {};
-          for (const k of Object.keys(prev)) if (valid.has(k) && prev[k]) next[k] = true;
+          for (const k of Object.keys(prev)) {
+            if (valid.has(k) && prev[k]) next[k] = true;
+          }
           return next;
         });
       } catch (e) {
         console.error("fetchOrdenes0400 ERROR:", e?.response?.data || e?.message || e);
 
-        const userEmail2 = safeStr(
-          user?.correo || user?.email || user?.upn || user?.username
-        ).trim();
-
-        const offlineRows = await loadPending0400FromOffline(userEmail2);
+        const offlineRows = await loadPending0400FromOffline(userEmail);
         if (offlineRows.length) {
           setAllOrdenes(offlineRows);
           Alert.alert(
@@ -475,7 +608,7 @@ export default function PendienteFirmaIndex() {
           const serverMsg =
             e?.response?.data?.detail ||
             e?.response?.data?.error ||
-            "No se pudieron cargar las órdenes 0400.";
+            "No se pudieron cargar las órdenes pendientes de firma.";
           Alert.alert("Error", serverMsg);
           setAllOrdenes([]);
         }
@@ -484,17 +617,32 @@ export default function PendienteFirmaIndex() {
         setRefreshing(false);
       }
     },
-    [ensureValidToken, user]
+    [ensureValidToken, userEmail, dateMode, dayRef, start, end, getSapRequestRange]
   );
 
   useEffect(() => {
     fetchOrdenes0400();
   }, [fetchOrdenes0400]);
 
+  useFocusEffect(
+    useCallback(() => {
+      fetchOrdenes0400({ isRefresh: true });
+    }, [fetchOrdenes0400])
+  );
+
   useEffect(() => {
-    const filtered = (allOrdenes || []).filter((it) => matchesQuery(it, query));
+    const filtered = (allOrdenes || []).filter((item) => {
+      const okQuery = matchesQuery(item, query);
+      if (!okQuery) return false;
+
+      const sd = parseSapDate(item?.start_date);
+      if (!sd) return false;
+
+      return isWithin(sd, start, end);
+    });
+
     setRows(filtered);
-  }, [allOrdenes, query]);
+  }, [allOrdenes, query, start, end]);
 
   const openDetalle = (orderId) => {
     const id = String(orderId);
@@ -526,6 +674,16 @@ export default function PendienteFirmaIndex() {
     setComentarioCliente("");
   };
 
+  const clearFilters = () => {
+    setQuery("");
+    setDateMode("all");
+    setDayRef(new Date());
+    setWeekStart(null);
+    setWeekEnd(null);
+    setMonthYear({ month: now.getMonth(), year: now.getFullYear() });
+    setYearOnly(now.getFullYear());
+  };
+
   const startFirmaFlow = () => {
     if (selectedIds.length === 0) {
       Alert.alert("Selecciona órdenes", "Selecciona al menos una orden para firmar.");
@@ -555,10 +713,6 @@ export default function PendienteFirmaIndex() {
     Alert.alert("Firma vacía", "El cliente no firmó. Intenta de nuevo.");
   };
 
-  /* =========================
-     ✅ Enviar órdenes a SAP (PDF + estatus)
-     ✅ Si no hay internet, encolar
-  ========================= */
   const sendSelectedOrders = async () => {
     if (!firmaDataUrl) {
       Alert.alert("Falta firma", "Primero captura la firma del cliente.");
@@ -597,16 +751,16 @@ export default function PendienteFirmaIndex() {
     }
 
     const net = await NetInfo.fetch();
-    const isOnline = !!(net?.isConnected && net?.isInternetReachable !== false);
+    const online = !!(net?.isConnected && net?.isInternetReachable !== false);
 
-    if (isOnline) {
+    if (online) {
       const ok = await ensureValidToken();
       if (!ok) return;
     }
 
     Alert.alert(
       "Confirmar envío",
-      isOnline
+      online
         ? `Se enviarán ${selectedIds.length} orden(es) a SAP:\n- PDF de mantenimiento\n- Cambio de estatus a FINALIZADA\n\n¿Deseas continuar?`
         : `No hay internet.\n\nSe guardarán ${selectedIds.length} orden(es) localmente con:\n- PDF de mantenimiento\n- Cambio de estatus a FINALIZADA\n\nY se enviarán automáticamente cuando vuelva la red.\n\n¿Deseas continuar?`,
       [
@@ -741,7 +895,7 @@ export default function PendienteFirmaIndex() {
 
                   const workOrderEndpoint = `/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet`;
 
-                  if (!isOnline) {
+                  if (!online) {
                     await upsertSapQueueItem({
                       type: "PENDIENTE_FIRMA_0300",
                       orderId,
@@ -801,7 +955,7 @@ export default function PendienteFirmaIndex() {
 
               Alert.alert(
                 "Envío terminado",
-                isOnline
+                online
                   ? `Correctas: ${okCount}\nCon error: ${failCount}\n\nRevisa la consola para ver los JSON enviados.`
                   : `Guardadas/encoladas: ${okCount}\nCon error: ${failCount}\n\nSe enviarán automáticamente cuando vuelva la red.`
               );
@@ -821,11 +975,42 @@ export default function PendienteFirmaIndex() {
     );
   };
 
+  const activeRangeText = useMemo(() => {
+    if (dateMode === "all") return "Últimos 365 días";
+    if (dateMode === "day") return `Día: ${atStartOfDay(dayRef).toLocaleDateString()}`;
+    if (dateMode === "weekRange") {
+      const a = weekStart ? atStartOfDay(weekStart).toLocaleDateString() : "—";
+      const b = weekEnd ? atEndOfDay(weekEnd).toLocaleDateString() : "—";
+      return `Semana (rango): ${a} → ${b}`;
+    }
+    if (dateMode === "month") return `Mes: ${MONTHS[monthYear.month]} ${monthYear.year}`;
+    if (dateMode === "year") return `Año: ${yearOnly}`;
+    return "";
+  }, [dateMode, dayRef, weekStart, weekEnd, monthYear, yearOnly]);
+
+  const YearPickerContent = ({ selectedYear, onSelect, from = 2020, to = now.getFullYear() + 2 }) => {
+    const years = [];
+    for (let y = to; y >= from; y--) years.push(y);
+
+    return (
+      <ScrollView style={{ maxHeight: 320 }}>
+        {years.map((y) => (
+          <TouchableOpacity
+            key={y}
+            style={[styles.yearItem, selectedYear === y && styles.yearItemActive]}
+            onPress={() => onSelect(y)}
+          >
+            <Text style={[styles.yearItemText, selectedYear === y && styles.yearItemTextActive]}>{y}</Text>
+          </TouchableOpacity>
+        ))}
+      </ScrollView>
+    );
+  };
+
   const renderItem = ({ item }) => {
     const orderId = String(item?.Orderid ?? "");
     const startLabel = formatDateDMY(item.start_date);
     const finishLabel = formatDateDMY(item.finish_date);
-
     const checked = !!selectedMap[orderId];
 
     return (
@@ -901,7 +1086,58 @@ export default function PendienteFirmaIndex() {
           </TouchableOpacity>
         </View>
 
-        <View style={{ flexDirection: "row", gap: 10, marginTop: 10 }}>
+        <View style={styles.chipsRow}>
+          <TouchableOpacity
+            style={[styles.chip, dateMode === "all" && styles.chipActive]}
+            onPress={() => setDateMode("all")}
+          >
+            <Text style={[styles.chipText, dateMode === "all" && styles.chipTextActive]}>Todas</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.chip, dateMode === "day" && styles.chipActive]}
+            onPress={() => {
+              setDateMode("day");
+              setShowDayPicker(true);
+            }}
+          >
+            <Text style={[styles.chipText, dateMode === "day" && styles.chipTextActive]}>Día</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.chip, dateMode === "weekRange" && styles.chipActive]}
+            onPress={() => {
+              setDateMode("weekRange");
+              setShowWeekStartPicker(true);
+            }}
+          >
+            <Text style={[styles.chipText, dateMode === "weekRange" && styles.chipTextActive]}>Semana</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.chip, dateMode === "month" && styles.chipActive]}
+            onPress={() => {
+              setDateMode("month");
+              setShowMonthModal(true);
+            }}
+          >
+            <Text style={[styles.chipText, dateMode === "month" && styles.chipTextActive]}>Mes</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.chip, dateMode === "year" && styles.chipActive]}
+            onPress={() => {
+              setDateMode("year");
+              setShowYearModal(true);
+            }}
+          >
+            <Text style={[styles.chipText, dateMode === "year" && styles.chipTextActive]}>Año</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.clearBtn} onPress={clearFilters} activeOpacity={0.85}>
+            <Text style={styles.clearBtnText}>Limpiar</Text>
+          </TouchableOpacity>
+
           <TouchableOpacity
             style={styles.refreshBtn}
             onPress={() => fetchOrdenes0400({ isRefresh: true })}
@@ -909,11 +1145,11 @@ export default function PendienteFirmaIndex() {
           >
             <Text style={styles.refreshBtnText}>Recargar</Text>
           </TouchableOpacity>
-
-          <TouchableOpacity style={styles.clearBtn} onPress={() => setQuery("")} activeOpacity={0.85}>
-            <Text style={styles.clearBtnText}>Limpiar</Text>
-          </TouchableOpacity>
         </View>
+
+        <Text style={styles.activeRangeText}>
+          {activeRangeText} · {isOnline ? "Online" : "Offline"}
+        </Text>
 
         <Text style={styles.hint}>
           Mostrando solo órdenes con estatus <Text style={{ fontWeight: "900" }}>Pendiente de firma</Text>.
@@ -936,9 +1172,137 @@ export default function PendienteFirmaIndex() {
             </>
           ) : null}
         </Text>
+
+        {showDayPicker && (
+          <DateTimePicker
+            value={dayRef ?? new Date()}
+            mode="date"
+            display={Platform.OS === "ios" ? "inline" : "default"}
+            onChange={(e, date) => {
+              if (Platform.OS === "android") {
+                setShowDayPicker(false);
+                if (e.type !== "set") return;
+              }
+              if (date) setDayRef(date);
+              if (Platform.OS === "ios") setShowDayPicker(true);
+            }}
+          />
+        )}
+
+        {showWeekStartPicker && (
+          <DateTimePicker
+            value={weekStart ?? new Date()}
+            mode="date"
+            display={Platform.OS === "ios" ? "inline" : "default"}
+            onChange={(e, date) => {
+              if (Platform.OS === "android") {
+                setShowWeekStartPicker(false);
+                if (e.type !== "set") return;
+              }
+              if (date) {
+                setWeekStart(date);
+                if (Platform.OS !== "ios") setShowWeekEndPicker(true);
+              }
+              if (Platform.OS === "ios") setShowWeekStartPicker(true);
+            }}
+          />
+        )}
+
+        {showWeekEndPicker && (
+          <DateTimePicker
+            value={weekEnd ?? (weekStart ?? new Date())}
+            mode="date"
+            minimumDate={weekStart ?? undefined}
+            display={Platform.OS === "ios" ? "inline" : "default"}
+            onChange={(e, date) => {
+              if (Platform.OS === "android") {
+                setShowWeekEndPicker(false);
+                if (e.type !== "set") return;
+              }
+              if (date) setWeekEnd(date);
+              if (Platform.OS === "ios") setShowWeekEndPicker(true);
+            }}
+          />
+        )}
+
+        {dateMode === "weekRange" && (
+          <View style={styles.rangeButtonsRow}>
+            <TouchableOpacity
+              style={[styles.smallBtn, { backgroundColor: FIORI.cardSubtle }]}
+              onPress={() => setShowWeekStartPicker(true)}
+            >
+              <Text style={styles.smallBtnText}>Inicio: {weekStart ? weekStart.toLocaleDateString() : "—"}</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.smallBtn, { backgroundColor: FIORI.cardSubtle }]}
+              onPress={() => setShowWeekEndPicker(true)}
+            >
+              <Text style={styles.smallBtnText}>Fin: {weekEnd ? weekEnd.toLocaleDateString() : "—"}</Text>
+            </TouchableOpacity>
+          </View>
+        )}
       </View>
 
-      {loading ? (
+      <Modal visible={showMonthModal} transparent animationType="fade" onRequestClose={() => setShowMonthModal(false)}>
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <View style={styles.modalHeader}>
+              <TouchableOpacity onPress={() => setMonthYear((s) => ({ ...s, year: s.year - 1 }))}>
+                <Text style={styles.modalHeaderBtn}>{"‹"}</Text>
+              </TouchableOpacity>
+              <Text style={styles.modalHeaderTitle}>{monthYear.year}</Text>
+              <TouchableOpacity onPress={() => setMonthYear((s) => ({ ...s, year: s.year + 1 }))}>
+                <Text style={styles.modalHeaderBtn}>{"›"}</Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.monthGrid}>
+              {MONTHS.map((m, idx) => {
+                const active = idx === monthYear.month && dateMode === "month";
+                return (
+                  <TouchableOpacity
+                    key={m}
+                    style={[styles.monthCell, active && styles.monthCellActive]}
+                    onPress={() => {
+                      setMonthYear({ month: idx, year: monthYear.year });
+                      setShowMonthModal(false);
+                    }}
+                  >
+                    <Text style={[styles.monthCellText, active && styles.monthCellTextActive]}>{m}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+
+            <TouchableOpacity style={styles.modalClose} onPress={() => setShowMonthModal(false)}>
+              <Text style={styles.modalCloseText}>Cerrar</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={showYearModal} transparent animationType="fade" onRequestClose={() => setShowYearModal(false)}>
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <Text style={[styles.modalHeaderTitle, { marginBottom: 8 }]}>Selecciona un año</Text>
+            <YearPickerContent
+              selectedYear={yearOnly}
+              onSelect={(y) => {
+                setYearOnly(y);
+                setShowYearModal(false);
+              }}
+              from={now.getFullYear() - 10}
+              to={now.getFullYear() + 2}
+            />
+            <TouchableOpacity style={styles.modalClose} onPress={() => setShowYearModal(false)}>
+              <Text style={styles.modalCloseText}>Cerrar</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {loading && allOrdenes.length === 0 ? (
         <View style={{ paddingTop: 28, alignItems: "center" }}>
           <ActivityIndicator size="large" color={FIORI.accent} />
           <Text style={{ marginTop: 10, color: FIORI.textMuted }}>Cargando…</Text>
@@ -1069,7 +1433,7 @@ export default function PendienteFirmaIndex() {
         onRequestClose={() => setShowFirmaModal(false)}
       >
         <View style={styles.modalBackdrop}>
-          <View style={styles.modalCard}>
+          <View style={[styles.modalCard, { maxWidth: 520 }]}>
             <Text style={styles.modalTitle}>Firma del cliente</Text>
             <Text style={styles.modalSub}>
               Órdenes a firmar: <Text style={{ fontWeight: "900" }}>{firmaForOrderIds.length}</Text>
@@ -1313,25 +1677,41 @@ const styles = StyleSheet.create({
   actionBtnDanger: { backgroundColor: FIORI.danger },
   actionBtnText: { color: "#fff", fontWeight: "900" },
 
-  refreshBtn: {
-    backgroundColor: FIORI.accent,
+  chipsRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 10 },
+  chip: {
+    borderWidth: 1,
+    borderColor: FIORI.border,
+    borderRadius: 999,
     paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderRadius: 10,
+    paddingVertical: 6,
+    backgroundColor: FIORI.cardBg,
   },
-  refreshBtnText: { color: "#fff", fontWeight: "900" },
+  chipActive: { backgroundColor: FIORI.accent, borderColor: FIORI.accent },
+  chipText: { color: FIORI.ink, fontWeight: "600" },
+  chipTextActive: { color: "#fff" },
 
   clearBtn: {
-    backgroundColor: "#ECEFF5",
+    backgroundColor: FIORI.neutralBtn,
     paddingHorizontal: 12,
-    paddingVertical: 10,
+    paddingVertical: 8,
     borderRadius: 10,
     borderWidth: 1,
     borderColor: FIORI.border,
   },
-  clearBtnText: { color: FIORI.ink, fontWeight: "800" },
+  clearBtnText: { color: FIORI.ink, fontWeight: "600" },
 
+  refreshBtn: {
+    backgroundColor: FIORI.accent,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 10,
+  },
+  refreshBtnText: { color: "#fff", fontWeight: "700" },
+
+  activeRangeText: { marginTop: 8, color: FIORI.textMuted, fontSize: 12 },
   hint: { marginTop: 10, color: FIORI.textMuted, fontSize: 12 },
+
+  rangeButtonsRow: { flexDirection: "row", gap: 10, marginTop: 10 },
 
   card: {
     backgroundColor: FIORI.cardBg,
@@ -1413,15 +1793,21 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     padding: 16,
   },
+
   modalCard: {
     width: "100%",
-    maxWidth: 520,
+    maxWidth: 420,
     backgroundColor: FIORI.cardBg,
     borderRadius: 14,
     padding: 14,
     borderWidth: 1,
     borderColor: FIORI.border,
   },
+
+  modalHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 10 },
+  modalHeaderTitle: { fontSize: 18, fontWeight: "700", color: FIORI.ink },
+  modalHeaderBtn: { fontSize: 22, fontWeight: "900", color: FIORI.accent, paddingHorizontal: 12 },
+
   modalTitle: { fontSize: 18, fontWeight: "900", color: FIORI.ink },
   modalSub: { marginTop: 6, color: FIORI.textMuted },
 
@@ -1434,14 +1820,55 @@ const styles = StyleSheet.create({
   },
 
   smallBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: FIORI.cardSubtle,
+    borderWidth: 1,
+    borderColor: FIORI.border,
     marginTop: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderRadius: 10,
     flexDirection: "row",
     alignItems: "center",
   },
-  smallBtnText: { fontWeight: "900" },
+  smallBtnText: { color: FIORI.ink, fontWeight: "600" },
+
+  monthGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8, justifyContent: "space-between" },
+  monthCell: {
+    width: "31.5%",
+    backgroundColor: FIORI.cardSubtle,
+    borderRadius: 10,
+    paddingVertical: 12,
+    alignItems: "center",
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: FIORI.border,
+  },
+  monthCellActive: { backgroundColor: FIORI.accent, borderColor: FIORI.accent },
+  monthCellText: { color: FIORI.ink, fontWeight: "600" },
+  monthCellTextActive: { color: "#fff" },
+
+  modalClose: {
+    marginTop: 10,
+    alignSelf: "flex-end",
+    backgroundColor: FIORI.accent,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+  modalCloseText: { color: "#fff", fontWeight: "700" },
+
+  yearItem: {
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+    borderRadius: 8,
+    marginBottom: 6,
+    backgroundColor: FIORI.cardSubtle,
+    borderWidth: 1,
+    borderColor: FIORI.border,
+  },
+  yearItemActive: { backgroundColor: FIORI.accent, borderColor: FIORI.accent },
+  yearItemText: { fontSize: 16, color: FIORI.ink, fontWeight: "600" },
+  yearItemTextActive: { color: "#fff" },
 
   blockBackdrop: {
     flex: 1,
