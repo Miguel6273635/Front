@@ -1,4 +1,3 @@
-// src/offline/prefetchOrdenesTecnico.js
 import api from "../services/api";
 import {
   saveOrdenTecnicoDetail,
@@ -51,7 +50,7 @@ function normalizeOpsFromBackend(ops = []) {
 
     return {
       ...op,
-      id: op.id, // si ya viene
+      id: op.id,
       activity: String(Activity || ""),
       subactivity: String(SubActivity || ""),
       description: String(Description || ""),
@@ -80,6 +79,22 @@ function odataEntity(res) {
   return res?.data?.d || res?.data || {};
 }
 
+function safeStr(v) {
+  return String(v ?? "").trim();
+}
+
+function detectCoberturaFromShortText(shortText) {
+  const s = String(shortText || "").toUpperCase();
+  const idx = s.indexOf("COBERTURA");
+  if (idx < 0) return null;
+
+  const tail = s.slice(idx);
+  if (tail.includes("COBERTURABASICA")) return "BASICA";
+  if (tail.includes("COBERTURAMEDIA")) return "MEDIA";
+  if (tail.includes("COBERTURASEMI")) return "SEMI";
+  return null;
+}
+
 export async function prefetchOrdenesTecnicoDetalles({
   orderIds = [],
   concurrency = 3,
@@ -87,7 +102,6 @@ export async function prefetchOrdenesTecnicoDetalles({
   const ids = [...new Set(orderIds.map((x) => String(x).trim()).filter(Boolean))];
   if (!ids.length) return { ok: 0, skip: 0, fail: 0 };
 
-  // ventana hoy ± 8 (incluye hoy)
   const win = buildOfflineWindow(new Date());
 
   let ok = 0,
@@ -109,8 +123,6 @@ export async function prefetchOrdenesTecnicoDetalles({
 
         const orderIdReal = String(baseOrden?.Orderid || orderId).trim();
 
-        // 1.1) si está fuera de ventana hoy±8 -> NO guardes
-        // shouldCacheDetailByOrder usa order.start_date, aquí se lo damos desde StartDate
         const orderLikeForWindow = {
           Orderid: orderIdReal,
           start_date: baseOrden?.StartDate,
@@ -120,6 +132,17 @@ export async function prefetchOrdenesTecnicoDetalles({
           skip++;
           continue;
         }
+
+        // ✅ detectar cobertura desde ShortText
+        const shortTextValue =
+          baseOrden?.ShortText ??
+          baseOrden?.shorttext ??
+          baseOrden?.Shorttext ??
+          baseOrden?.shortText ??
+          "";
+
+        const coberturaDetectada =
+          detectCoberturaFromShortText(shortTextValue);
 
         // 2) Addresses (cliente + dirección)
         let direccionSap = "";
@@ -137,11 +160,17 @@ export async function prefetchOrdenesTecnicoDetalles({
 
         // 3) Partners (OData)
         let partners = [];
+        let emailFromPartners = "";
         try {
           const resPartners = await api.get(
             `/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet('${orderIdReal}')/ToPartners?$format=json`
           );
           partners = odataResults(resPartners);
+
+          const re = (partners || []).find(
+            (p) => String(p?.PartnRoleOld || "").trim() === "RE"
+          );
+          emailFromPartners = String(re?.Mail1 || re?.Mail2 || "").trim();
         } catch {}
 
         // 4) Operations (OData)
@@ -159,7 +188,6 @@ export async function prefetchOrdenesTecnicoDetalles({
           ops = [];
         }
 
-        // 5) shape final (similar a tu DetalleOrden)
         const userstatusRaw = String(
           baseOrden?.Userstatus ??
             baseOrden?.userstatus ??
@@ -183,19 +211,21 @@ export async function prefetchOrdenesTecnicoDetalles({
         ).trim();
 
         const detail = {
-          // mapeo OData -> tu app
           Orderid: orderIdReal,
           order_type: baseOrden?.OrderType ?? null,
           equipment: baseOrden?.Equipment ?? null,
           plant: baseOrden?.Plant ?? null,
 
-          // IMPORTANTÍSIMO: tus filtros offline usan start_date/finish_date
           start_date: baseOrden?.StartDate ?? null,
           finish_date: baseOrden?.FinishDate ?? null,
 
-          short_text: baseOrden?.ShortText ?? null,
+          // ✅ guarda ShortText consistente
+          ShortText: shortTextValue || null,
+          short_text: shortTextValue || null,
 
-          // ✅ guardar estatus también en el detalle prefetched
+          // ✅ guarda cobertura offline
+          cobertura_tipo: coberturaDetectada || null,
+
           userstatus: userstatusRaw || null,
           estatus_code: estatusCodeRaw || userstatusRaw || null,
           estatus_label: estatusLabelRaw || null,
@@ -204,6 +234,7 @@ export async function prefetchOrdenesTecnicoDetalles({
 
           cliente: clienteSap || "",
           direccion: direccionSap || "",
+          cliente_email: emailFromPartners || "",
 
           partners,
           operaciones: ops,

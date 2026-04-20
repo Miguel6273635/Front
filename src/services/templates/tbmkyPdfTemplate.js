@@ -144,7 +144,7 @@ function renderMedidasAcciones(medidas, acciones) {
 export function buildTbmkyHtml(payload) {
   const orderid = esc(payload.orderid);
   const fecha = esc(payload.fecha);
-  const centro = esc(payload.centroTrabajo || "");
+  const equipment = esc(payload.equipment || "");
   const area = esc(payload.selectedAreaLabel || "");
   const jefe = esc(payload.jefeInmediato || "");
   const actividadDia = esc(payload.actividadDia || "");
@@ -294,8 +294,8 @@ export function buildTbmkyHtml(payload) {
 
       <table style="margin: 5px; width: 40%">
         <tr>
-          <th style="width: 50%">CENTRO DE TRABAJO:</th>
-          <th class="left">MX-${centro}</th>
+          <th style="width: 50%">NÚMERO DE EQUIPO:</th>
+          <th class="left">${equipment}</th>
         </tr>
         <tr>
           <th>ÁREA DE TRABAJO:</th>

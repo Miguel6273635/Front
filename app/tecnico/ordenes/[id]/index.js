@@ -3056,7 +3056,7 @@ export default function DetalleOrden() {
                     plant={String(
                       orden?.Plant || orden?.plant || orden?.centro || "",
                     ).trim()}
-                    coberturaTipo={coberturaTipo || null}
+                    coberturaTipo={coberturaTipo || orden?.cobertura_tipo || null}
                     FIORI={FIORI}
                     initialRows={consumibles}
                     onChange={(rows) => setConsumibles(rows)}

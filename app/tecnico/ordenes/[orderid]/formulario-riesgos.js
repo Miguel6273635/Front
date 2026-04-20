@@ -338,7 +338,7 @@ export default function FormularioRiesgosScreen() {
   const toBase64 = (data) => (data || "").replace(/^data:image\/\w+;base64,/, "");
   const toDataUrl = (b64) => `data:image/png;base64,${b64}`;
   const sanitize = (s) => (s || "").replace(/\s/g, "");
-  const EQUIPO_TIPO_URL_BASE = "https://my-node-api-qas-01.cfapps.us10-001.hana.ondemand.com";
+  const EQUIPO_TIPO_URL_BASE = "https://my-node-api-pro-01.cfapps.us10-001.hana.ondemand.com";
 
   function mapEqartToTipo(eqartRaw) {
     const v = String(eqartRaw || "").toUpperCase().trim();
@@ -1152,7 +1152,7 @@ export default function FormularioRiesgosScreen() {
       const payload = {
         orderid: orden?.Orderid || orden?.orderid || orderid,
         fecha,
-        centroTrabajo: centroTrabajo || "TLP1",
+        equipment: orden?.Equipment || orden?.equipment || "",
         selectedAreaLabel,
         jefeInmediato,
         actividadDia,
@@ -1506,7 +1506,11 @@ export default function FormularioRiesgosScreen() {
               </View>
 
               <SectionSubTitle text="Datos del área (requerido)" />
-              <LabeledInput label="Centro de trabajo" value={centroTrabajo || "TLP1"} editable={false} />
+              <LabeledInput
+                label="Número de equipo"
+                value={orden?.Equipment || orden?.equipment || ""}
+                editable={false}
+              />
 
               <Text style={styles.fieldLabel}>Área de trabajo *</Text>
               <Dropdown
@@ -1745,7 +1749,7 @@ export default function FormularioRiesgosScreen() {
                   <View style={styles.taskCard}>
                     <Text style={styles.taskTitle}>Tarea 3 — Causas y medidas de control (para cada TOP)</Text>
                     <Text style={styles.taskHint}>
-                      Aquí se autollenaron los riesgos TOP. Ahora captura la causa y 3 medidas por cada uno.
+                      Aquí se colocó el TOP 3 de los riesgos elegidos. Ahora captura la causa y al menos 2 medidas de control por cada uno.
                     </Text>
 
                     {riesgosTopText.map((r, i) => (

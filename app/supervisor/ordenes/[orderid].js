@@ -219,7 +219,8 @@ function normalizeDetalle(det) {
 
   const orderid = det.orderid ?? det.Orderid ?? "";
   const equipment = det.equipment ?? det.Equipment ?? "";
-  const nombre_orden = det.nombre_orden ?? det.ShortText ?? det.order_type ?? det.OrderType ?? "";
+  const nombre_orden =
+    det.nombre_orden ?? det.ShortText ?? det.order_type ?? det.OrderType ?? "";
 
   const userstatus = det.userstatus ?? det.Userstatus ?? "";
 
@@ -274,7 +275,10 @@ export default function DetalleOrdenSupervisor() {
       setOperaciones(Array.isArray(ops) ? ops : []);
     } catch (err) {
       console.error("Error supervisor detalle:", err?.response?.data || err);
-      setErrorMsg(err?.response?.data?.error || "No se pudo cargar el detalle de la orden.");
+      setErrorMsg(
+        err?.response?.data?.error ||
+          "No se pudo cargar el detalle de la orden.",
+      );
       setData(null);
       setOperaciones([]);
     } finally {
@@ -297,7 +301,9 @@ export default function DetalleOrdenSupervisor() {
         <Header title="Detalle de orden" />
         <View style={styles.centerBody}>
           <ActivityIndicator size="large" color={COLORS.accent} />
-          <Text style={{ marginTop: 10, color: COLORS.muted }}>Cargando detalle…</Text>
+          <Text style={{ marginTop: 10, color: COLORS.muted }}>
+            Cargando detalle…
+          </Text>
         </View>
       </View>
     );
@@ -308,7 +314,9 @@ export default function DetalleOrdenSupervisor() {
       <View style={styles.container}>
         <Header title="Detalle de orden" />
         <View style={styles.errorWrap}>
-          <Text style={styles.errorText}>{errorMsg || "Orden no encontrada."}</Text>
+          <Text style={styles.errorText}>
+            {errorMsg || "Orden no encontrada."}
+          </Text>
 
           <TouchableOpacity style={styles.backBtn} onPress={goBack}>
             <Ionicons name="arrow-back" size={18} color="#fff" />
@@ -334,16 +342,26 @@ export default function DetalleOrdenSupervisor() {
           <View style={styles.cardHeaderRow}>
             <View style={{ flex: 1 }}>
               <Text style={styles.orderIdText}>Orden #{data.orderid}</Text>
-              <Text style={styles.orderTypeText}>{data.nombre_orden || "—"}</Text>
+              <Text style={styles.orderTypeText}>
+                {data.nombre_orden || "—"}
+              </Text>
             </View>
 
             <View
               style={[
                 styles.statusPill,
-                { borderColor: headerStatus.color, backgroundColor: headerStatus.color + "22" },
+                {
+                  borderColor: headerStatus.color,
+                  backgroundColor: headerStatus.color + "22",
+                },
               ]}
             >
-              <View style={[styles.statusDot, { backgroundColor: headerStatus.color }]} />
+              <View
+                style={[
+                  styles.statusDot,
+                  { backgroundColor: headerStatus.color },
+                ]}
+              />
               <Text style={styles.statusPillText}>
                 {headerStatus.label}
                 {headerStatus.code ? ` (${headerStatus.code})` : ""}
@@ -360,13 +378,17 @@ export default function DetalleOrdenSupervisor() {
           <View style={styles.row}>
             <Ionicons name="calendar-outline" size={16} color={COLORS.muted} />
             <Text style={styles.rowLabel}>Inicio:</Text>
-            <Text style={styles.rowValue}>{formatDateUTC(data.start_date)}</Text>
+            <Text style={styles.rowValue}>
+              {formatDateUTC(data.start_date)}
+            </Text>
           </View>
 
           <View style={styles.row}>
             <Ionicons name="calendar-outline" size={16} color={COLORS.muted} />
             <Text style={styles.rowLabel}>Fin:</Text>
-            <Text style={styles.rowValue}>{formatDateUTC(data.finish_date)}</Text>
+            <Text style={styles.rowValue}>
+              {formatDateUTC(data.finish_date)}
+            </Text>
           </View>
         </View>
 
@@ -375,7 +397,9 @@ export default function DetalleOrdenSupervisor() {
           <Text style={styles.sectionTitle}>Operaciones</Text>
 
           {operaciones.length === 0 ? (
-            <Text style={styles.emptyText}>No hay operaciones registradas.</Text>
+            <Text style={styles.emptyText}>
+              No hay operaciones registradas.
+            </Text>
           ) : (
             operaciones.map((op, idx) => {
               const activity = String(op?.Activity || "").padStart(4, "0");
@@ -406,10 +430,17 @@ export default function DetalleOrdenSupervisor() {
                     <View style={{ flex: 1 }}>
                       <Text style={styles.operationTitle}>
                         {activity}
-                        {sub ? `.${sub}` : ""} — {op?.Description || "Sin descripción"}
+                        {sub ? `.${sub}` : ""} —{" "}
+                        {op?.Description || "Sin descripción"}
                       </Text>
 
-                      <View style={{ marginTop: 6, flexDirection: "row", alignItems: "center" }}>
+                      <View
+                        style={{
+                          marginTop: 6,
+                          flexDirection: "row",
+                          alignItems: "center",
+                        }}
+                      >
                         <View
                           style={[
                             styles.opBadge,
@@ -419,7 +450,12 @@ export default function DetalleOrdenSupervisor() {
                             },
                           ]}
                         >
-                          <Text style={[styles.opBadgeText, { color: opStatus.color }]}>
+                          <Text
+                            style={[
+                              styles.opBadgeText,
+                              { color: opStatus.color },
+                            ]}
+                          >
                             {opStatus.label}
                             {opStatus.code ? ` (${opStatus.code})` : ""}
                           </Text>
@@ -427,7 +463,11 @@ export default function DetalleOrdenSupervisor() {
                       </View>
                     </View>
 
-                    <Ionicons name="construct-outline" size={20} color={opStatus.color} />
+                    <Ionicons
+                      name="construct-outline"
+                      size={20}
+                      color={opStatus.color}
+                    />
                   </View>
                 </View>
               );
@@ -435,6 +475,15 @@ export default function DetalleOrdenSupervisor() {
           )}
         </View>
       </ScrollView>
+      {/* 🔥 BOTÓN FLOTANTE EVIDENCIA */}
+      <TouchableOpacity
+        style={styles.fab}
+        onPress={() =>
+          router.push(`/supervisor/ordenes/evidencia/${data.orderid}`)
+        }
+      >
+        <Ionicons name="camera" size={22} color="#fff" />
+      </TouchableOpacity>
     </View>
   );
 }
@@ -464,7 +513,11 @@ const styles = StyleSheet.create({
     }),
   },
 
-  cardHeaderRow: { flexDirection: "row", alignItems: "center", marginBottom: 10 },
+  cardHeaderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 10,
+  },
   orderIdText: { fontSize: 18, fontWeight: "700", color: COLORS.title },
   orderTypeText: { fontSize: 14, color: COLORS.text, marginTop: 2 },
 
@@ -479,11 +532,21 @@ const styles = StyleSheet.create({
   statusDot: { width: 10, height: 10, borderRadius: 5, marginRight: 6 },
   statusPillText: { fontSize: 12, fontWeight: "600", color: COLORS.title },
 
-  row: { flexDirection: "row", alignItems: "center", marginTop: 6, columnGap: 6 },
+  row: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: 6,
+    columnGap: 6,
+  },
   rowLabel: { fontSize: 13, color: COLORS.muted, fontWeight: "600" },
   rowValue: { fontSize: 13, color: COLORS.text },
 
-  sectionTitle: { fontSize: 15, fontWeight: "700", color: COLORS.title, marginBottom: 6 },
+  sectionTitle: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: COLORS.title,
+    marginBottom: 6,
+  },
 
   operationCard: {
     borderWidth: 1,
@@ -519,10 +582,25 @@ const styles = StyleSheet.create({
     fontWeight: "800",
   },
 
-  emptyText: { fontSize: 13, color: COLORS.muted, marginTop: 4, fontStyle: "italic" },
+  emptyText: {
+    fontSize: 13,
+    color: COLORS.muted,
+    marginTop: 4,
+    fontStyle: "italic",
+  },
 
-  errorWrap: { flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 24 },
-  errorText: { textAlign: "center", fontSize: 14, color: COLORS.danger, marginBottom: 12 },
+  errorWrap: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 24,
+  },
+  errorText: {
+    textAlign: "center",
+    fontSize: 14,
+    color: COLORS.danger,
+    marginBottom: 12,
+  },
   backBtn: {
     flexDirection: "row",
     alignItems: "center",
@@ -533,5 +611,31 @@ const styles = StyleSheet.create({
   },
   backBtnText: { color: "#fff", marginLeft: 6, fontWeight: "600" },
 
-  centerBody: { flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 16 },
+  centerBody: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 16,
+  },
+
+  fab: {
+    position: "absolute",
+    bottom: 20,
+    right: 20,
+    backgroundColor: "#0A6ED1",
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    alignItems: "center",
+    justifyContent: "center",
+
+    // sombra iOS
+    shadowColor: "#000",
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 2 },
+
+    // sombra Android
+    elevation: 6,
+  },
 });

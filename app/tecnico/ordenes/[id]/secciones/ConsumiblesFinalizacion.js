@@ -13,7 +13,12 @@ import {
   ScrollView,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import NetInfo from "@react-native-community/netinfo";
 import api from "../../../../../src/services/api";
+import {
+  getConsumiblesByPair,
+  mergeConsumiblesPair,
+} from "../../../../../src/offline/consumiblesCatalogoCache";
 
 /**
  * ✅ Cobertura -> pares (Agrupador1, Agrupador2)
@@ -236,14 +241,48 @@ export default function ConsumiblesFinalizacion({
       if (!selectedPair) return;
 
       setLoadingMaterials(true);
-      try {
-        const a1 = String(selectedPair.Agr1 || "")
-          .trim()
-          .toUpperCase();
-        const a2 = String(selectedPair.Agr2 || "")
-          .trim()
-          .toUpperCase();
 
+      const a1 = String(selectedPair.Agr1 || "")
+        .trim()
+        .toUpperCase();
+      const a2 = String(selectedPair.Agr2 || "")
+        .trim()
+        .toUpperCase();
+      const cov = String(coverageKey || "")
+        .trim()
+        .toUpperCase();
+
+      try {
+        // 1) primero intenta leer offline
+        const offlineRows = await getConsumiblesByPair({
+          coverageKey: cov,
+          agr1: a1,
+          agr2: a2,
+        });
+
+        if (mounted && myLoadId === loadIdRef.current && offlineRows.length > 0) {
+          setMaterials(offlineRows);
+        }
+
+        // 2) revisa si hay red
+        const net = await NetInfo.fetch();
+        const isOnline = !!(
+          net?.isConnected && net?.isInternetReachable !== false
+        );
+
+        // si no hay red, se queda con lo offline
+        if (!isOnline) {
+          if (
+            mounted &&
+            myLoadId === loadIdRef.current &&
+            offlineRows.length === 0
+          ) {
+            setMaterials([]);
+          }
+          return;
+        }
+
+        // 3) si hay red, refresca desde API y vuelve a guardar offline
         const url =
           `/api/odata/ZSD_CATALOGOS_SRV/MaterialesCoberturaSet` +
           `?$filter=Agrupador1 eq '${a1}' and Agrupador2 eq '${a2}'`;
@@ -271,12 +310,31 @@ export default function ConsumiblesFinalizacion({
             `${x.Material}__${x.Descripcion}__${x.Agrupador1}__${x.Agrupador2}__${x.Unidad}`,
         );
 
+        await mergeConsumiblesPair({
+          coverageKey: cov,
+          agr1: a1,
+          agr2: a2,
+          materials: deduped,
+        });
+
         if (mounted && myLoadId === loadIdRef.current) {
           setMaterials(deduped);
         }
       } catch (e) {
-        if (mounted && myLoadId === loadIdRef.current) {
-          setMaterials([]);
+        try {
+          const fallbackRows = await getConsumiblesByPair({
+            coverageKey: cov,
+            agr1: a1,
+            agr2: a2,
+          });
+
+          if (mounted && myLoadId === loadIdRef.current) {
+            setMaterials(Array.isArray(fallbackRows) ? fallbackRows : []);
+          }
+        } catch {
+          if (mounted && myLoadId === loadIdRef.current) {
+            setMaterials([]);
+          }
         }
       } finally {
         if (mounted && myLoadId === loadIdRef.current) {
@@ -288,7 +346,7 @@ export default function ConsumiblesFinalizacion({
     return () => {
       mounted = false;
     };
-  }, [selectedPair]);
+  }, [selectedPair, coverageKey]);
 
   const filteredMaterials = useMemo(() => {
     const qq = String(materialSearch || "")

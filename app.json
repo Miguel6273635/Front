@@ -1,11 +1,11 @@
 {
   "expo": {
-    "name": "Melmex App QAS",
+    "name": "Melmex App",
     "slug": "mitsu_frontend",
     "scheme": "mitsuapp",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/icon_mitsu_qas.png",
+    "icon": "./assets/icon_mitsu_prod.png",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
     "splash": {
@@ -21,7 +21,7 @@
     },
     "android": {
       "adaptiveIcon": {
-        "foregroundImage": "./assets/icon_mitsu_qas.png",
+        "foregroundImage": "./assets/icon_mitsu_prod.png",
         "backgroundColor": "#FFFFFF"
       },
       "edgeToEdgeEnabled": true,
@@ -39,7 +39,7 @@
         "android.permission.ACCESS_COARSE_LOCATION"
       ],
        
-      "package": "com.melmex.qas" 
+      "package": "com.guadalub130.mitsu_frontend" 
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -58,7 +58,7 @@
       "AZURE_API_SCOPE": "api://3478f3f9-66a8-46f1-adf8-078641a31024/access_as_user/AccessMitsuApp",
 
       "API_BASE_URL_DEV": "http://192.168.3.17:5000",
-      "API_BASE_URL_PROD": "https://my-node-api-qas-01.cfapps.us10-001.hana.ondemand.com",
+      "API_BASE_URL_PROD": "https://my-node-api-pro-01.cfapps.us10-001.hana.ondemand.com",
 
       "MAPTILER_KEY": "xXsfDizxhemYIlweqX7X",
 

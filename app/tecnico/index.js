@@ -16,6 +16,7 @@ import Header from "../../src/components/Header";
 import { useAuth } from "../../src/context/AuthContext";
 import { useOffline } from "../../src/offline/OfflineProvider";
 import { bootstrapPrefetchOrdenesTecnico } from "../../src/offline/bootstrapSyncTecnico";
+import { bootstrapPrefetchConsumiblesCatalogo } from "../../src/offline/bootstrapConsumiblesCatalogo";
 
 // ====== Datos del menú (tiles) ======
 const TILES = [
@@ -99,7 +100,6 @@ export default function TecnicoHome() {
   const { online, dbReady } = useOffline();
 
   useEffect(() => {
-    // ✅ detecta email (ajusta aquí si tu user trae otro nombre de campo)
     const email =
       user?.email ||
       user?.Email ||
@@ -109,13 +109,20 @@ export default function TecnicoHome() {
 
     if (!online || !dbReady || !email) return;
 
-    // dispara prefetch (no bloquea UI)
     bootstrapPrefetchOrdenesTecnico(String(email).trim())
       .then((r) => {
         console.log("[OFFLINE] prefetch tecnico:", r);
       })
       .catch((e) => {
         console.log("[OFFLINE] prefetch tecnico error:", e?.message || e);
+      });
+
+    bootstrapPrefetchConsumiblesCatalogo()
+      .then((r) => {
+        console.log("[OFFLINE] prefetch consumibles:", r);
+      })
+      .catch((e) => {
+        console.log("[OFFLINE] prefetch consumibles error:", e?.message || e);
       });
   }, [online, dbReady, user]);
 
