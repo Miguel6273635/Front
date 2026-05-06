@@ -8,19 +8,21 @@ import {
   StyleSheet,
   Platform,
   StatusBar,
+  ActivityIndicator,
 } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "../../src/context/AuthContext";
 import { router } from "expo-router";
 
-const FIORI = {
-  pageBg: "#F7F7F7",
-  cardBg: "#FFFFFF",
-  border: "#DDE6F2",
-  text: "#0B1F3B",
-  textMuted: "#63718B",
-  accent: "#0A6ED1",
-  danger: "#EB5757",
+const COLORS = {
+  bg: "#F3F4F6",
+  white: "#FFFFFF",
+  text: "#1B1F3B",
+  muted: "#7B8494",
+  softMuted: "#A0A7B4",
+  border: "#D8DEE8",
+  red: "#E60012",
+  danger: "#D92D20",
+  shadow: "#000000",
 };
 
 function pickHomeByRole(rol_id) {
@@ -30,7 +32,6 @@ function pickHomeByRole(rol_id) {
 }
 
 const BRAND = {
-  developer: "Tellus Technologies",
   customer: "Mitsubishi Electric de México",
 };
 
@@ -50,16 +51,17 @@ export default function LoginScreen() {
     try {
       const result = await loginSSO();
 
-      // ✅ Si el usuario canceló/dismiss, NO lo mostramos como error
       if (result?.ok === false && result?.cancelled) {
         setError("");
         return;
       }
-
-      // Si ok=true, el flujo sigue en /auth (finishSSO)
     } catch (e) {
       console.log("SSO error:", e?.message || e);
-      setError(e?.message ? String(e.message) : "No se pudo iniciar sesión con Microsoft");
+      setError(
+        e?.message
+          ? String(e.message)
+          : "No se pudo iniciar sesión con Microsoft"
+      );
     } finally {
       setSending(false);
     }
@@ -70,27 +72,44 @@ export default function LoginScreen() {
 
   return (
     <View style={styles.container}>
-      <StatusBar barStyle="dark-content" />
+      <StatusBar barStyle="dark-content" backgroundColor={COLORS.bg} />
 
-      <View style={styles.centerWrap}>
-        <Image source={require("../../assets/logo.png")} style={styles.logo} />
+      {/* fondo decorativo */}
+      <View style={styles.bgTopShape} />
+      <View style={styles.bgBottomCircle} />
+
+      <View style={styles.content}>
+        <View style={styles.brandWrap}>
+          <Image
+            source={require("../../assets/logo.png")}
+            style={styles.logo}
+          />
+        </View>
 
         <View style={styles.card}>
           <Text style={styles.title}>Iniciar sesión</Text>
+          <View style={styles.titleAccent} />
 
           {error ? (
             <Text style={styles.error}>{error}</Text>
           ) : (
-            <Text style={styles.helper}>Continúa con tu cuenta corporativa Microsoft</Text>
+            <Text style={styles.helper}>
+              Inicia sesión con tu correo corporativo
+            </Text>
           )}
 
           <TouchableOpacity
             onPress={handleLoginSSO}
-            style={[styles.msButton, disabled && { opacity: 0.7 }]}
+            style={[styles.msButton, disabled && styles.disabledButton]}
             disabled={disabled}
-            activeOpacity={0.85}
+            activeOpacity={0.86}
           >
-            <Ionicons name="logo-microsoft" size={18} color={FIORI.text} />
+            {sending ? (
+              <ActivityIndicator size="small" color={COLORS.text} />
+            ) : (
+              <MicrosoftIcon />
+            )}
+
             <Text style={styles.msButtonText}>
               {sending ? "Abriendo Microsoft..." : "Continuar con Microsoft"}
             </Text>
@@ -99,10 +118,15 @@ export default function LoginScreen() {
       </View>
 
       <View style={styles.footer}>
-        <Text style={styles.footerLine1}>
-          Desarrollado por <Text style={styles.footerStrong}>{BRAND.developer}</Text>
-        </Text>
-        <Image source={require("../../assets/tellus_logo.png")} style={styles.footerLogo} />
+        <View style={styles.footerDivider} />
+
+        <View style={styles.developerRow}>
+          <Text style={styles.footerLine1}>Desarrollado por</Text>
+          <Image
+            source={require("../../assets/tellus_logo.png")}
+            style={styles.footerLogo}
+          />
+        </View>
 
         <Text style={styles.footerLine2}>
           © {year} {BRAND.customer}. Todos los derechos reservados.
@@ -112,85 +136,172 @@ export default function LoginScreen() {
   );
 }
 
+function MicrosoftIcon() {
+  return (
+    <View style={styles.msIcon}>
+      <View style={[styles.msSquare, { backgroundColor: "#F25022" }]} />
+      <View style={[styles.msSquare, { backgroundColor: "#7FBA00" }]} />
+      <View style={[styles.msSquare, { backgroundColor: "#00A4EF" }]} />
+      <View style={[styles.msSquare, { backgroundColor: "#FFB900" }]} />
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: FIORI.pageBg,
+    backgroundColor: COLORS.bg,
     paddingHorizontal: 24,
-    paddingTop: 10,
-    paddingBottom: 18,
-    justifyContent: "space-between",
+    paddingTop: Platform.OS === "android" ? 16 : 10,
+    paddingBottom: 16,
+    overflow: "hidden",
   },
 
-  centerWrap: {
+  bgTopShape: {
+    position: "absolute",
+    top: -120,
+    left: -120,
+    width: 420,
+    height: 320,
+    borderBottomRightRadius: 220,
+    borderBottomLeftRadius: 120,
+    borderTopLeftRadius: 120,
+    borderTopRightRadius: 120,
+    backgroundColor: "#FFFFFF",
+    opacity: 0.35,
+  },
+
+  bgBottomCircle: {
+    position: "absolute",
+    right: -180,
+    bottom: 140,
+    width: 420,
+    height: 420,
+    borderRadius: 210,
+    backgroundColor: "#FFFFFF",
+    opacity: 0.3,
+    borderWidth: 1,
+    borderColor: "#E9EDF2",
+  },
+
+  content: {
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
+    paddingBottom: 36,
+  },
+
+  brandWrap: {
+    alignItems: "center",
+    marginBottom: 34,
   },
 
   logo: {
-    width: 160,
-    height: 90,
+    width: 230,
+    height: 120,
     resizeMode: "contain",
-    marginBottom: 18,
   },
 
   card: {
     width: "100%",
-    maxWidth: 420,
-    backgroundColor: FIORI.cardBg,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: FIORI.border,
-    padding: 18,
+    maxWidth: 390,
+    backgroundColor: COLORS.white,
+    borderRadius: 22,
+    paddingHorizontal: 20,
+    paddingTop: 28,
+    paddingBottom: 24,
+    alignItems: "center",
     ...Platform.select({
       ios: {
-        shadowColor: "#000",
-        shadowOpacity: 0.06,
-        shadowRadius: 12,
-        shadowOffset: { width: 0, height: 6 },
+        shadowColor: COLORS.shadow,
+        shadowOpacity: 0.12,
+        shadowRadius: 18,
+        shadowOffset: { width: 0, height: 8 },
       },
-      android: { elevation: 3 },
+      android: {
+        elevation: 6,
+      },
     }),
   },
 
   title: {
-    fontSize: 20,
-    fontWeight: "700",
-    color: FIORI.text,
-    marginBottom: 10,
+    fontSize: 25,
+    fontWeight: "800",
+    color: COLORS.text,
     textAlign: "center",
+    letterSpacing: -0.3,
+  },
+
+  titleAccent: {
+    width: 48,
+    height: 4,
+    borderRadius: 99,
+    backgroundColor: COLORS.red,
+    marginTop: 12,
+    marginBottom: 24,
   },
 
   helper: {
-    marginBottom: 12,
-    fontSize: 12,
-    color: FIORI.textMuted,
+    fontSize: 13,
+    lineHeight: 19,
+    color: COLORS.muted,
     textAlign: "center",
+    marginBottom: 24,
   },
 
   error: {
-    color: FIORI.danger,
-    marginBottom: 12,
+    fontSize: 13,
+    lineHeight: 18,
+    color: COLORS.danger,
     textAlign: "center",
     fontWeight: "600",
+    marginBottom: 20,
   },
 
   msButton: {
+    width: "100%",
+    minHeight: 56,
+    borderRadius: 14,
     borderWidth: 1,
-    borderColor: FIORI.border,
-    borderRadius: 12,
-    paddingVertical: 12,
-    paddingHorizontal: 12,
+    borderColor: COLORS.border,
+    backgroundColor: COLORS.white,
+    flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
+    paddingHorizontal: 16,
+    ...Platform.select({
+      ios: {
+        shadowColor: COLORS.shadow,
+        shadowOpacity: 0.08,
+        shadowRadius: 8,
+        shadowOffset: { width: 0, height: 4 },
+      },
+      android: {
+        elevation: 3,
+      },
+    }),
+  },
+
+  disabledButton: {
+    opacity: 0.72,
+  },
+
+  msIcon: {
+    width: 24,
+    height: 24,
     flexDirection: "row",
-    gap: 8,
-    backgroundColor: "#FFF",
+    flexWrap: "wrap",
+    marginRight: 12,
+  },
+
+  msSquare: {
+    width: 10,
+    height: 10,
+    margin: 1,
   },
 
   msButtonText: {
-    color: FIORI.text,
+    color: COLORS.text,
     fontSize: 15,
     fontWeight: "700",
   },
@@ -198,33 +309,40 @@ const styles = StyleSheet.create({
   footer: {
     alignItems: "center",
     justifyContent: "center",
-    paddingTop: 10,
+    paddingBottom: Platform.OS === "ios" ? 8 : 2,
   },
 
-  footerLogo: {
-    width: 90,
-    height: 20,
-    resizeMode: "contain",
-    marginBottom: 6,
-    opacity: 0.95,
+  footerDivider: {
+    width: "100%",
+    height: 1,
+    backgroundColor: "#D9DEE7",
+    marginBottom: 18,
+  },
+
+  developerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 10,
   },
 
   footerLine1: {
-    fontSize: 11,
-    color: FIORI.textMuted,
-    marginBottom: 2,
-    textAlign: "center",
+    fontSize: 13,
+    color: COLORS.muted,
+    fontWeight: "600",
+    marginRight: 8,
   },
 
-  footerStrong: {
-    color: FIORI.text,
-    fontWeight: "700",
+  footerLogo: {
+    width: 34,
+    height: 18,
+    resizeMode: "contain",
   },
 
   footerLine2: {
-    fontSize: 10,
-    color: FIORI.textMuted,
-    opacity: 0.9,
+    fontSize: 10.5,
+    color: COLORS.softMuted,
     textAlign: "center",
+    lineHeight: 15,
   },
 });

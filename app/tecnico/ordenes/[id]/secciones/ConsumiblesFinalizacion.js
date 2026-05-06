@@ -21,7 +21,7 @@ import {
 } from "../../../../../src/offline/consumiblesCatalogoCache";
 
 /**
- * ✅ Cobertura -> pares (Agrupador1, Agrupador2)
+ * Cobertura -> pares (Agrupador1, Agrupador2)
  */
 const COVERAGE_PAIRS = {
   BASICA: [
@@ -97,26 +97,20 @@ const COVERAGE_PAIRS = {
 
 const uniqBy = (arr, keyFn) => {
   const map = new Map();
-  for (const x of arr) {
+
+  for (const x of arr || []) {
     const k = keyFn(x);
     if (!map.has(k)) map.set(k, x);
   }
+
   return Array.from(map.values());
 };
 
-const pairId = (p) =>
-  `${String(p?.Agr1 || "")
-    .trim()
-    .toUpperCase()}__${String(p?.Agr2 || "")
-    .trim()
-    .toUpperCase()}`;
+const safeUpper = (v) => String(v || "").trim().toUpperCase();
 
-const pairLabel = (p) =>
-  `${String(p?.Agr1 || "")
-    .trim()
-    .toUpperCase()} · ${String(p?.Agr2 || "")
-    .trim()
-    .toUpperCase()}`;
+const pairId = (p) => `${safeUpper(p?.Agr1)}__${safeUpper(p?.Agr2)}`;
+
+const pairLabel = (p) => `${safeUpper(p?.Agr1)} · ${safeUpper(p?.Agr2)}`;
 
 function stableRowsString(rows) {
   try {
@@ -124,22 +118,35 @@ function stableRowsString(rows) {
       (Array.isArray(rows) ? rows : []).map((r) => ({
         Material: String(r?.Material || "").trim(),
         Descripcion: String(r?.Descripcion || "").trim(),
-        Agrupador1: String(r?.Agrupador1 || "")
-          .trim()
-          .toUpperCase(),
-        Agrupador2: String(r?.Agrupador2 || "")
-          .trim()
-          .toUpperCase(),
+        Agrupador1: safeUpper(r?.Agrupador1),
+        Agrupador2: safeUpper(r?.Agrupador2),
         Cantidad: String(r?.Cantidad || "").trim(),
-        Unidad: String(r?.Unidad || "")
-          .trim()
-          .toUpperCase(),
+        Unidad: safeUpper(r?.Unidad),
         Centro: String(r?.Centro || "").trim(),
-      })),
+      }))
     );
   } catch {
     return "[]";
   }
+}
+
+function normalizeMaterialRows(rows = [], a1, a2) {
+  const normalized = (Array.isArray(rows) ? rows : [])
+    .map((r) => ({
+      Id: String(r?.Id || "").trim(),
+      Material: String(r?.Material || "").trim(),
+      Agrupador1: safeUpper(r?.Agrupador1 || a1),
+      Agrupador2: safeUpper(r?.Agrupador2 || a2),
+      Descripcion: String(r?.Descripcion || r?.Description || "").trim(),
+      Unidad: safeUpper(r?.Unidad) || "PZA",
+    }))
+    .filter((x) => !!x.Material);
+
+  return uniqBy(
+    normalized,
+    (x) =>
+      `${x.Material}__${x.Descripcion}__${x.Agrupador1}__${x.Agrupador2}__${x.Unidad}`
+  );
 }
 
 export default function ConsumiblesFinalizacion({
@@ -153,16 +160,21 @@ export default function ConsumiblesFinalizacion({
   const s = stylesGlobal || localStyles;
   const P = FIORI || {};
 
-  const coverageKey = String(coberturaTipo || "")
-    .trim()
-    .toUpperCase();
+  /**
+   * CLAVE:
+   * Si coberturaTipo viene vacío, de todos modos usamos BASICA.
+   * Antes se mostraban categorías BASICA, pero el cache se buscaba con coverageKey="".
+   */
+  const coverageKey = safeUpper(coberturaTipo);
+  const effectiveCoverageKey = ["BASICA", "MEDIA", "SEMI"].includes(coverageKey)
+    ? coverageKey
+    : "BASICA";
 
   const pairsForCoverage = useMemo(() => {
-    if (coverageKey === "MEDIA") return COVERAGE_PAIRS.MEDIA;
-    if (coverageKey === "SEMI") return COVERAGE_PAIRS.SEMI;
-    if (coverageKey === "BASICA") return COVERAGE_PAIRS.BASICA;
+    if (effectiveCoverageKey === "MEDIA") return COVERAGE_PAIRS.MEDIA;
+    if (effectiveCoverageKey === "SEMI") return COVERAGE_PAIRS.SEMI;
     return COVERAGE_PAIRS.BASICA;
-  }, [coverageKey]);
+  }, [effectiveCoverageKey]);
 
   const [selected, setSelected] = useState([]);
   const [modalOpen, setModalOpen] = useState(false);
@@ -183,12 +195,12 @@ export default function ConsumiblesFinalizacion({
 
   const loadIdRef = useRef(0);
 
-  // ✅ banderas para evitar ciclo infinito padre <-> hijo
+  // banderas para evitar ciclo infinito padre <-> hijo
   const skipNextOnChangeRef = useRef(false);
   const lastHydratedRef = useRef("");
   const lastEmittedRef = useRef("");
 
-  // ✅ hidrata SOLO cuando initialRows cambió de verdad
+  // hidrata SOLO cuando initialRows cambió de verdad
   useEffect(() => {
     const incomingKey = stableRowsString(initialRows);
 
@@ -199,7 +211,7 @@ export default function ConsumiblesFinalizacion({
     }
   }, [initialRows]);
 
-  // ✅ emite al padre solo cuando el cambio fue del usuario, no de la hidratación
+  // emite al padre solo cuando el cambio fue del usuario
   useEffect(() => {
     const selectedKey = stableRowsString(selected);
 
@@ -221,10 +233,10 @@ export default function ConsumiblesFinalizacion({
     setSelectedMaterial(null);
     setMaterialSearch("");
     setQtyDraft("1");
-    setUnitDraft("");
+    setUnitDraft("PZA");
     setPairPickerOpen(false);
     setMaterialPickerOpen(false);
-  }, [coverageKey]);
+  }, [effectiveCoverageKey]);
 
   const selectedPair = useMemo(() => {
     return pairsForCoverage.find((p) => pairId(p) === selectedPairId) || null;
@@ -234,7 +246,7 @@ export default function ConsumiblesFinalizacion({
     let mounted = true;
     const myLoadId = ++loadIdRef.current;
 
-    (async () => {
+    async function loadMaterialsForPair() {
       setMaterials([]);
       setSelectedMaterial(null);
 
@@ -242,47 +254,72 @@ export default function ConsumiblesFinalizacion({
 
       setLoadingMaterials(true);
 
-      const a1 = String(selectedPair.Agr1 || "")
-        .trim()
-        .toUpperCase();
-      const a2 = String(selectedPair.Agr2 || "")
-        .trim()
-        .toUpperCase();
-      const cov = String(coverageKey || "")
-        .trim()
-        .toUpperCase();
+      const a1 = safeUpper(selectedPair.Agr1);
+      const a2 = safeUpper(selectedPair.Agr2);
+      const cov = effectiveCoverageKey;
 
       try {
-        // 1) primero intenta leer offline
+        /**
+         * 1) Primero intenta leer del cache offline.
+         */
         const offlineRows = await getConsumiblesByPair({
           coverageKey: cov,
           agr1: a1,
           agr2: a2,
         });
 
-        if (mounted && myLoadId === loadIdRef.current && offlineRows.length > 0) {
-          setMaterials(offlineRows);
+        if (mounted && myLoadId === loadIdRef.current) {
+          if (Array.isArray(offlineRows) && offlineRows.length > 0) {
+            console.log("[CONSUMIBLES][CACHE HIT]", {
+              coverageKey: cov,
+              Agr1: a1,
+              Agr2: a2,
+              count: offlineRows.length,
+            });
+
+            setMaterials(normalizeMaterialRows(offlineRows, a1, a2));
+          } else {
+            console.log("[CONSUMIBLES][CACHE EMPTY]", {
+              coverageKey: cov,
+              Agr1: a1,
+              Agr2: a2,
+            });
+          }
         }
 
-        // 2) revisa si hay red
+        /**
+         * 2) Revisa red.
+         */
         const net = await NetInfo.fetch();
         const isOnline = !!(
           net?.isConnected && net?.isInternetReachable !== false
         );
 
-        // si no hay red, se queda con lo offline
+        /**
+         * Si no hay red, se queda con lo que encontró en cache.
+         */
         if (!isOnline) {
+          console.log("[CONSUMIBLES][OFFLINE]", {
+            coverageKey: cov,
+            Agr1: a1,
+            Agr2: a2,
+            offlineCount: Array.isArray(offlineRows) ? offlineRows.length : 0,
+          });
+
           if (
             mounted &&
             myLoadId === loadIdRef.current &&
-            offlineRows.length === 0
+            (!Array.isArray(offlineRows) || offlineRows.length === 0)
           ) {
             setMaterials([]);
           }
+
           return;
         }
 
-        // 3) si hay red, refresca desde API y vuelve a guardar offline
+        /**
+         * 3) Si hay red, refresca desde SAP/backend y guarda offline.
+         */
         const url =
           `/api/odata/ZSD_CATALOGOS_SRV/MaterialesCoberturaSet` +
           `?$filter=Agrupador1 eq '${a1}' and Agrupador2 eq '${a2}'`;
@@ -292,23 +329,7 @@ export default function ConsumiblesFinalizacion({
         if (!mounted || myLoadId !== loadIdRef.current) return;
 
         const rows = res?.data?.d?.results || res?.data?.results || [];
-
-        const all = rows.map((r) => ({
-          Id: String(r?.Id || "").trim(),
-          Material: String(r?.Material || "").trim(),
-          Agrupador1: a1,
-          Agrupador2: a2,
-          Descripcion: String(r?.Descripcion || r?.Description || "").trim(),
-          Unidad: String(r?.Unidad || "")
-            .trim()
-            .toUpperCase(),
-        }));
-
-        const deduped = uniqBy(
-          all.filter((x) => x.Material),
-          (x) =>
-            `${x.Material}__${x.Descripcion}__${x.Agrupador1}__${x.Agrupador2}__${x.Unidad}`,
-        );
+        const deduped = normalizeMaterialRows(rows, a1, a2);
 
         await mergeConsumiblesPair({
           coverageKey: cov,
@@ -317,10 +338,22 @@ export default function ConsumiblesFinalizacion({
           materials: deduped,
         });
 
+        console.log("[CONSUMIBLES][SAP SAVED CACHE]", {
+          coverageKey: cov,
+          Agr1: a1,
+          Agr2: a2,
+          count: deduped.length,
+        });
+
         if (mounted && myLoadId === loadIdRef.current) {
           setMaterials(deduped);
         }
       } catch (e) {
+        console.log(
+          "[CONSUMIBLES][ERROR] Falló SAP, usando cache:",
+          e?.response?.data || e?.message || e
+        );
+
         try {
           const fallbackRows = await getConsumiblesByPair({
             coverageKey: cov,
@@ -328,8 +361,10 @@ export default function ConsumiblesFinalizacion({
             agr2: a2,
           });
 
+          const normalizedFallback = normalizeMaterialRows(fallbackRows, a1, a2);
+
           if (mounted && myLoadId === loadIdRef.current) {
-            setMaterials(Array.isArray(fallbackRows) ? fallbackRows : []);
+            setMaterials(normalizedFallback);
           }
         } catch {
           if (mounted && myLoadId === loadIdRef.current) {
@@ -341,17 +376,17 @@ export default function ConsumiblesFinalizacion({
           setLoadingMaterials(false);
         }
       }
-    })();
+    }
+
+    loadMaterialsForPair();
 
     return () => {
       mounted = false;
     };
-  }, [selectedPair, coverageKey]);
+  }, [selectedPair, effectiveCoverageKey]);
 
   const filteredMaterials = useMemo(() => {
-    const qq = String(materialSearch || "")
-      .toUpperCase()
-      .trim();
+    const qq = String(materialSearch || "").toUpperCase().trim();
     if (!qq) return materials;
 
     return materials.filter((m) => {
@@ -367,7 +402,7 @@ export default function ConsumiblesFinalizacion({
     setSelectedMaterial(null);
     setMaterialSearch("");
     setQtyDraft("1");
-    setUnitDraft("");
+    setUnitDraft("PZA");
     setEditingKey(null);
     setPairPickerOpen(false);
     setMaterialPickerOpen(false);
@@ -384,39 +419,30 @@ export default function ConsumiblesFinalizacion({
   };
 
   const buildSelectedKey = (item) =>
-    `${String(item?.Material || "").trim()}__${String(item?.Agrupador1 || "")
-      .trim()
-      .toUpperCase()}__${String(item?.Agrupador2 || "")
-      .trim()
-      .toUpperCase()}`;
+    `${String(item?.Material || "").trim()}__${safeUpper(
+      item?.Agrupador1
+    )}__${safeUpper(item?.Agrupador2)}`;
 
   const handleEditItem = (item) => {
     setEditingKey(buildSelectedKey(item));
+
     setSelectedPairId(
       pairId({
         Agr1: item?.Agrupador1,
         Agr2: item?.Agrupador2,
-      }),
+      })
     );
+
     setSelectedMaterial({
       Material: String(item?.Material || "").trim(),
       Descripcion: String(item?.Descripcion || "").trim(),
-      Agrupador1: String(item?.Agrupador1 || "")
-        .trim()
-        .toUpperCase(),
-      Agrupador2: String(item?.Agrupador2 || "")
-        .trim()
-        .toUpperCase(),
-      Unidad: String(item?.Unidad || "")
-        .trim()
-        .toUpperCase(),
+      Agrupador1: safeUpper(item?.Agrupador1),
+      Agrupador2: safeUpper(item?.Agrupador2),
+      Unidad: safeUpper(item?.Unidad) || "PZA",
     });
+
     setQtyDraft(String(item?.Cantidad || "1"));
-    setUnitDraft(
-      String(item?.Unidad || "PZA")
-        .trim()
-        .toUpperCase(),
-    );
+    setUnitDraft(safeUpper(item?.Unidad) || "PZA");
     setModalOpen(true);
   };
 
@@ -434,20 +460,13 @@ export default function ConsumiblesFinalizacion({
       .replace(/[^0-9.]/g, "")
       .trim();
 
-    const uClean =
-      String(unitDraft || selectedMaterial?.Unidad || "")
-        .trim()
-        .toUpperCase() || "PZA";
+    const uClean = safeUpper(unitDraft || selectedMaterial?.Unidad) || "PZA";
 
     const row = {
       Material: String(selectedMaterial.Material || "").trim(),
       Descripcion: String(selectedMaterial.Descripcion || "").trim(),
-      Agrupador1: String(selectedMaterial.Agrupador1 || "")
-        .trim()
-        .toUpperCase(),
-      Agrupador2: String(selectedMaterial.Agrupador2 || "")
-        .trim()
-        .toUpperCase(),
+      Agrupador1: safeUpper(selectedMaterial.Agrupador1),
+      Agrupador2: safeUpper(selectedMaterial.Agrupador2),
       Cantidad: qClean || "1",
       Unidad: uClean,
       Centro: plant || "",
@@ -480,7 +499,7 @@ export default function ConsumiblesFinalizacion({
           <Text style={[s.title, { color: P.text || "#0B1F3B" }]}>
             Consumibles (obligatorios)
           </Text>
-          <Text style={s.helperText}>Seleccionalos uno por uno.</Text>
+          <Text style={s.helperText}>Selecciónalos uno por uno.</Text>
         </View>
 
         <TouchableOpacity
@@ -495,9 +514,7 @@ export default function ConsumiblesFinalizacion({
 
       <View style={s.metaRow}>
         <Text style={s.metaLabel}>Cobertura:</Text>
-        <Text style={s.metaValue}>{coverageKey || "—"}</Text>
-        {/*<Text style={[s.metaLabel, { marginLeft: 12 }]}>Centro:</Text>
-        <Text style={s.metaValue}>{plant || "—"}</Text>*/}
+        <Text style={s.metaValue}>{effectiveCoverageKey || "—"}</Text>
       </View>
 
       {!selected.length ? (
@@ -713,14 +730,10 @@ export default function ConsumiblesFinalizacion({
                         {filteredMaterials.map((item, idx) => {
                           const active =
                             selectedMaterial?.Material === item.Material &&
-                            String(
-                              selectedMaterial?.Agrupador1 || "",
-                            ).toUpperCase() ===
-                              String(item.Agrupador1 || "").toUpperCase() &&
-                            String(
-                              selectedMaterial?.Agrupador2 || "",
-                            ).toUpperCase() ===
-                              String(item.Agrupador2 || "").toUpperCase();
+                            safeUpper(selectedMaterial?.Agrupador1) ===
+                              safeUpper(item.Agrupador1) &&
+                            safeUpper(selectedMaterial?.Agrupador2) ===
+                              safeUpper(item.Agrupador2);
 
                           return (
                             <TouchableOpacity
@@ -731,11 +744,7 @@ export default function ConsumiblesFinalizacion({
                               ]}
                               onPress={() => {
                                 setSelectedMaterial(item);
-                                setUnitDraft(
-                                  String(item?.Unidad || "")
-                                    .trim()
-                                    .toUpperCase() || "PZA",
-                                );
+                                setUnitDraft(safeUpper(item?.Unidad) || "PZA");
                                 setMaterialPickerOpen(false);
                               }}
                               activeOpacity={0.9}

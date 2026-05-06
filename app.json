@@ -1,11 +1,11 @@
 {
   "expo": {
-    "name": "Melmex App",
+    "name": "Melmex App QAS",
     "slug": "mitsu_frontend",
     "scheme": "mitsuapp",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/icon_mitsu_prod.png",
+    "icon": "./assets/icon_mitsu_qas.png",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
     "splash": {
@@ -21,25 +21,23 @@
     },
     "android": {
       "adaptiveIcon": {
-        "foregroundImage": "./assets/icon_mitsu_prod.png",
+        "foregroundImage": "./assets/icon_mitsu_qas.png",
         "backgroundColor": "#FFFFFF"
       },
       "edgeToEdgeEnabled": true,
-
+      "versionCode": 132,
       "config": {
         "googleMaps": {
-          "apiKey": "AIzaSyCNzVLTuidfPcwlSWO8113G5H_oy8fqdlU" 
+          "apiKey": "AIzaSyCNzVLTuidfPcwlSWO8113G5H_oy8fqdlU"
         }
       },
-
       "permissions": [
         "android.permission.RECORD_AUDIO",
         "android.permission.MODIFY_AUDIO_SETTINGS",
         "android.permission.ACCESS_FINE_LOCATION",
         "android.permission.ACCESS_COARSE_LOCATION"
       ],
-       
-      "package": "com.guadalub130.mitsu_frontend" 
+      "package": "com.melmex.qas"
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -50,23 +48,22 @@
       "expo-video",
       "expo-sqlite",
       "expo-asset",
-      "expo-location"
+      "expo-location",
+      "expo-splash-screen"
     ],
     "extra": {
       "AZURE_TENANT_ID": "12326ef5-6c3e-48e8-a6ff-2661c6efcfb1",
       "AZURE_CLIENT_ID": "3478f3f9-66a8-46f1-adf8-078641a31024",
       "AZURE_API_SCOPE": "api://3478f3f9-66a8-46f1-adf8-078641a31024/access_as_user/AccessMitsuApp",
-
+      "AZURE_GRAPH_SCOPE": "User.Read",
       "API_BASE_URL_DEV": "http://192.168.3.17:5000",
-      "API_BASE_URL_PROD": "https://my-node-api-pro-01.cfapps.us10-001.hana.ondemand.com",
-
+      "API_BASE_URL_PROD": "https://my-node-api-qas-01.cfapps.us10-001.hana.ondemand.com",
       "MAPTILER_KEY": "xXsfDizxhemYIlweqX7X",
-
       "router": {},
       "eas": {
-        "projectId": "d04410ef-8bd9-4b24-b62b-0ba1939c86e6"
+        "projectId": "55edde5d-9ba4-435c-b8da-2c085af9b249"
       }
     },
-    "owner": "tellustechnologiess-organization"
+    "owner": "tellustechnologies"
   }
 }

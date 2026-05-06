@@ -1,4 +1,3 @@
-// src/components/SideDrawer.js
 import React, { useEffect, useMemo, useRef } from "react";
 import {
   View,
@@ -10,6 +9,7 @@ import {
   Animated,
   Platform,
   Alert,
+  Image,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
@@ -50,7 +50,6 @@ export default function SideDrawer() {
   };
 
   const handleLogout = () => {
-    // opcional: confirmación
     Alert.alert("Cerrar sesión", "¿Deseas cerrar sesión?", [
       { text: "Cancelar", style: "cancel" },
       {
@@ -64,7 +63,6 @@ export default function SideDrawer() {
     ]);
   };
 
-  // ✅ Ahora logout va en la lista, justo después de Perfil
   const items = useMemo(
     () => [
       {
@@ -87,21 +85,24 @@ export default function SideDrawer() {
         onPress: handleLogout,
       },
     ],
-    [homeRoute, router] // handleLogout usa Alert y logout; no pasa nada si queda estable
+    [homeRoute, router]
   );
+
+  const avatarSource = user?.photo ? { uri: user.photo } : null;
 
   return (
     <Modal visible={open} transparent animationType="none" onRequestClose={closeDrawer}>
       <View style={styles.root}>
-        {/* overlay (toca afuera para cerrar) */}
         <Pressable style={styles.overlay} onPress={closeDrawer} />
 
-        {/* panel */}
         <Animated.View style={[styles.panel, { transform: [{ translateX: slideX }] }]}>
-          {/* header perfil */}
           <View style={styles.profile}>
             <View style={styles.avatarWrap}>
-              <Ionicons name="person-circle-outline" size={46} color={FIORI.accent} />
+              {avatarSource ? (
+                <Image source={avatarSource} style={styles.avatarImage} resizeMode="cover" />
+              ) : (
+                <Ionicons name="person-circle-outline" size={46} color={FIORI.accent} />
+              )}
             </View>
 
             <View style={{ flex: 1 }}>
@@ -120,7 +121,6 @@ export default function SideDrawer() {
 
           <View style={styles.divider} />
 
-          {/* items */}
           {items.map((it) => (
             <TouchableOpacity
               key={it.key}
@@ -139,8 +139,6 @@ export default function SideDrawer() {
               </Text>
             </TouchableOpacity>
           ))}
-
-          {/* ✅ ya NO hay <View style={{ flex: 1 }} /> */}
         </Animated.View>
       </View>
     </Modal>
@@ -189,6 +187,13 @@ const styles = StyleSheet.create({
     backgroundColor: "#F3F6FB",
     borderWidth: 1,
     borderColor: FIORI.border,
+    overflow: "hidden",
+  },
+
+  avatarImage: {
+    width: 54,
+    height: 54,
+    borderRadius: 18,
   },
 
   name: { fontSize: 16, fontWeight: "700", color: FIORI.ink },
@@ -206,7 +211,6 @@ const styles = StyleSheet.create({
 
   itemText: { fontSize: 15, color: FIORI.ink, fontWeight: "600" },
 
-  // opcional: estilo “peligro” para logout
   itemDanger: {
     backgroundColor: "rgba(235,87,87,0.08)",
   },

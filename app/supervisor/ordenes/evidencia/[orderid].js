@@ -12,12 +12,13 @@ import {
 } from "react-native";
 import * as DocumentPicker from "expo-document-picker";
 import * as FileSystem from "expo-file-system/legacy";
+import * as ImagePicker from "expo-image-picker";
 import { useLocalSearchParams, router } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import Header from "../../../../src/components/Header";
 import api from "../../../../src/services/api";
 import { fetchOperacionesSupervisor } from "../../../../src/services/operacionesSupervisor";
-
+import * as ImageManipulator from "expo-image-manipulator";
 const COLORS = {
   pageBg: "#F4F6F9",
   cardBg: "#FFFFFF",
@@ -40,6 +41,7 @@ function sapDateFromMs(ms) {
     d.getMonth(),
     d.getDate(),
   ).getTime();
+
   return `/Date(${midnight})/`;
 }
 
@@ -48,6 +50,7 @@ function sapTimePTFromMs(ms) {
   const h = d.getHours();
   const m = d.getMinutes();
   const s = d.getSeconds();
+
   return `PT${h}H${m}M${s}S`;
 }
 
@@ -55,12 +58,17 @@ function prorateMinutes(totalMin, n) {
   const base = Math.floor(totalMin / n);
   const rem = totalMin % n;
   const arr = Array(n).fill(base);
-  for (let i = 0; i < rem; i++) arr[i] += 1;
+
+  for (let i = 0; i < rem; i++) {
+    arr[i] += 1;
+  }
+
   return arr;
 }
 
 function buildSequentialWindows(startMs, mins) {
   let cursor = startMs;
+
   return mins.map((m) => {
     const end = cursor + m * 60000;
     const win = { start: cursor, end };
@@ -71,6 +79,7 @@ function buildSequentialWindows(startMs, mins) {
 
 function normalizeSupervisorOps(ops = []) {
   if (!Array.isArray(ops)) return [];
+
   return ops
     .map((op) => {
       const activity = String(
@@ -90,12 +99,38 @@ function normalizeSupervisorOps(ops = []) {
     .filter((op) => !!op.activity);
 }
 
+function getOpId(orderId, op, index) {
+  const activity = String(op?.activity || op?.Activity || "").trim();
+  const subactivity = String(op?.subactivity || op?.SubActivity || "").trim();
+
+  return (
+    `${orderId}-${activity}${subactivity ? `-${subactivity}` : ""}` ||
+    `op-${index}`
+  );
+}
+
+function getOpText(op) {
+  const activity = String(op?.activity || op?.Activity || "").trim();
+  const subactivity = String(op?.subactivity || op?.SubActivity || "").trim();
+  const desc = String(op?.description || op?.Description || "").trim();
+
+  return `${activity}${subactivity ? `-${subactivity}` : ""}${
+    desc ? ` · ${desc}` : ""
+  }`;
+}
+
 function buildSupervisorConfirmationPayload({
   orderId,
   opsAll,
   durationMinutes,
+  selectedIds,
 }) {
-  const selectedOps = normalizeSupervisorOps(opsAll);
+  const selectedOps = normalizeSupervisorOps(
+    (opsAll || []).filter((op, index) => {
+      const id = getOpId(orderId, op, index);
+      return !!selectedIds?.[id];
+    }),
+  );
 
   if (!selectedOps.length) return null;
   if (!Number.isFinite(durationMinutes) || durationMinutes <= 0) return null;
@@ -131,6 +166,7 @@ function buildSupervisorConfirmationPayload({
       };
 
       if (SubActivity) row.SubActivity = SubActivity;
+
       return row;
     }),
     ConfirmationMaterialSet: [],
@@ -149,6 +185,145 @@ function getBackendMessage(err, fallback) {
   );
 }
 
+/* =========================
+   Estatus 0300
+   ========================= */
+function normalizeStatusCode(value) {
+  const s = String(value || "").trim();
+  if (!s) return "";
+
+  const matches = s.match(/\d{1,4}/g) || [];
+  const codes = matches.map((x) => x.padStart(4, "0"));
+
+  if (codes.includes("0200")) return "0200";
+  if (codes.includes("0100")) return "0100";
+  if (codes.includes("0400")) return "0400";
+  if (codes.includes("0300")) return "0300";
+
+  return codes[0] || "";
+}
+
+function getCurrentOrderStatusFor0300(orden) {
+  const candidates = [
+    orden?.estatus_code,
+    orden?.userstatus,
+    orden?.UserStatus,
+    orden?.UserStText,
+    orden?.status_code,
+    orden?.estatus,
+    orden?.status,
+  ];
+
+  for (const item of candidates) {
+    const code = normalizeStatusCode(item);
+    if (code) return code;
+  }
+
+  return "";
+}
+
+function buildPayloadFinalizacion0300SinStatus({ orderId }) {
+  const cleanOrderId = String(orderId || "").trim();
+
+  return {
+    OrderId: cleanOrderId,
+    WorkOrderHeader: {
+      Orderid: cleanOrderId,
+    },
+    WorkOrderUserStatusSet: [
+      {
+        UserStText: "0300",
+        Langu: "ES",
+        Inactive: "",
+      },
+    ],
+    Return: [],
+  };
+}
+
+function buildPayloadFinalizacion0300ConStatus({ orderId, currentStatusCode }) {
+  const cleanOrderId = String(orderId || "").trim();
+  const current = normalizeStatusCode(currentStatusCode);
+
+  return {
+    OrderId: cleanOrderId,
+    WorkOrderHeader: {
+      Orderid: cleanOrderId,
+    },
+    WorkOrderUserStatusSet: [
+      {
+        UserStText: "0300",
+        Langu: "ES",
+        Inactive: "",
+      },
+      {
+        UserStText: current,
+        Langu: "ES",
+        Inactive: "X",
+      },
+    ],
+    Return: [],
+  };
+}
+
+function buildPayloadFinalizacion0300({ orderId, currentStatusCode }) {
+  const current = normalizeStatusCode(currentStatusCode);
+
+  if (!current) {
+    return buildPayloadFinalizacion0300SinStatus({ orderId });
+  }
+
+  return buildPayloadFinalizacion0300ConStatus({
+    orderId,
+    currentStatusCode: current,
+  });
+}
+
+/* =========================
+   Validación respuesta SAP
+   ========================= */
+async function validarErroresSapEnRespuesta(response) {
+  const returns =
+    response?.data?.d?.Return?.results ||
+    response?.data?.Return?.results ||
+    response?.data?.Return ||
+    [];
+
+  const lista = Array.isArray(returns) ? returns : [];
+
+  const errores = lista.filter(
+    (item) => String(item?.Type || "").toUpperCase() === "E",
+  );
+
+  if (errores.length > 0) {
+    const mensaje = errores
+      .map((item) => `• ${item?.Message || "Error SAP"}`)
+      .join("\n");
+
+    throw new Error(mensaje || "SAP devolvió error.");
+  }
+}
+
+function logPayloadSinBase64(label, payload) {
+  try {
+    const cloned = JSON.parse(JSON.stringify(payload));
+
+    if (Array.isArray(cloned?.Attachments)) {
+      cloned.Attachments = cloned.Attachments.map((a) => ({
+        ...a,
+        Base64: `<<base64 omitted: ${String(a?.Base64 || "").length} chars>>`,
+      }));
+    }
+
+    console.log("========================================");
+    console.log(label);
+    console.log(JSON.stringify(cloned, null, 2));
+    console.log("========================================");
+  } catch {
+    console.log(label, payload);
+  }
+}
+
 export default function EvidenciaOrden() {
   const { orderid } = useLocalSearchParams();
 
@@ -157,7 +332,10 @@ export default function EvidenciaOrden() {
   const [tipoEnvio, setTipoEnvio] = useState("TBM");
 
   const [operaciones, setOperaciones] = useState([]);
+  const [expandedGroups, setExpandedGroups] = useState({});
+  const [checkedMap, setCheckedMap] = useState({});
   const [loadingOperaciones, setLoadingOperaciones] = useState(true);
+  const [ordenDetalle, setOrdenDetalle] = useState(null);
 
   const [horasEjecucion, setHorasEjecucion] = useState("");
   const [minutosEjecucion, setMinutosEjecucion] = useState("");
@@ -165,7 +343,18 @@ export default function EvidenciaOrden() {
   const orderIdLimpio = useMemo(() => {
     return String(orderid || "").trim();
   }, [orderid]);
+  const statusOrden = useMemo(() => {
+    return getCurrentOrderStatusFor0300(ordenDetalle);
+  }, [ordenDetalle]);
 
+  const esFinalizada0300 = statusOrden === "0300";
+  const esPendienteFirma0400 = statusOrden === "0400";
+  const esProceso0200 = statusOrden === "0200";
+  useEffect(() => {
+    if (esPendienteFirma0400) {
+      setTipoEnvio("FINALIZACION");
+    }
+  }, [esPendienteFirma0400]);
   useEffect(() => {
     let mounted = true;
 
@@ -180,13 +369,28 @@ export default function EvidenciaOrden() {
 
       try {
         setLoadingOperaciones(true);
+
         const ops = await fetchOperacionesSupervisor(orderIdLimpio);
 
         if (mounted) {
           setOperaciones(Array.isArray(ops) ? ops : []);
+
+          try {
+            const resOrden = await api.get(`/api/ordenes/sap/${orderIdLimpio}`);
+
+            if (mounted) {
+              setOrdenDetalle(resOrden?.data || null);
+            }
+          } catch (e) {
+            console.log(
+              "[EVIDENCIA] No se pudo cargar detalle de orden:",
+              e?.response?.data || e?.message || e,
+            );
+          }
         }
       } catch (error) {
         console.log("[EVIDENCIA] Error cargando operaciones:", error);
+
         if (mounted) {
           setOperaciones([]);
         }
@@ -214,6 +418,7 @@ export default function EvidenciaOrden() {
     if (size < 1024 * 1024 * 1024) {
       return `${(size / (1024 * 1024)).toFixed(1)} MB`;
     }
+
     return `${(size / (1024 * 1024 * 1024)).toFixed(1)} GB`;
   };
 
@@ -227,6 +432,7 @@ export default function EvidenciaOrden() {
     const dd = String(date.getDate()).padStart(2, "0");
     const mm = String(date.getMonth() + 1).padStart(2, "0");
     const yyyy = String(date.getFullYear());
+
     return `${dd}${mm}${yyyy}`;
   };
 
@@ -245,8 +451,8 @@ export default function EvidenciaOrden() {
   const seleccionarArchivo = async () => {
     try {
       const result = await DocumentPicker.getDocumentAsync({
-        type: "*/*",
-        multiple: true,
+        type: ["application/pdf", "image/*"],
+        multiple: false,
         copyToCacheDirectory: true,
       });
 
@@ -255,17 +461,46 @@ export default function EvidenciaOrden() {
       const assets = Array.isArray(result.assets) ? result.assets : [];
       if (!assets.length) return;
 
-      const assetsConTipo = assets.map((file) => ({
-        ...file,
-        tipoEnvio,
-      }));
+      const archivosValidos = [];
+
+      for (const file of assets) {
+        const info = await FileSystem.getInfoAsync(file.uri);
+        const sizeReal = Number(info?.size || file?.size || 0);
+        const sizeMB = sizeReal / (1024 * 1024);
+
+        console.log(
+          `[EVIDENCIA] Archivo seleccionado: ${file.name} - ${sizeMB.toFixed(2)} MB`,
+        );
+
+        const mime = String(file?.mimeType || "").toLowerCase();
+        const name = String(file?.name || "").toLowerCase();
+        const esPdf = mime.includes("pdf") || name.endsWith(".pdf");
+
+        if (esPdf && sizeReal > MAX_PDF_BYTES) {
+          Alert.alert(
+            "PDF demasiado grande",
+            `El PDF "${file.name}" pesa ${sizeMB.toFixed(
+              1,
+            )} MB. Para enviarlo correctamente debe pesar máximo ${MAX_PDF_MB} MB, porque al convertirlo a Base64 aumenta de tamaño.`,
+          );
+          continue;
+        }
+
+        archivosValidos.push({
+          ...file,
+          size: sizeReal,
+          tipoEnvio: esPendienteFirma0400 ? "FINALIZACION" : tipoEnvio,
+        });
+      }
+
+      if (!archivosValidos.length) return;
 
       setArchivos((prev) => {
         const existentes = new Set(
           prev.map((f) => `${f.name}-${f.size}-${f.uri}-${f.tipoEnvio}`),
         );
 
-        const nuevos = assetsConTipo.filter(
+        const nuevos = archivosValidos.filter(
           (f) => !existentes.has(`${f.name}-${f.size}-${f.uri}-${f.tipoEnvio}`),
         );
 
@@ -273,10 +508,46 @@ export default function EvidenciaOrden() {
       });
     } catch (error) {
       console.log("[EVIDENCIA] Error seleccionando archivo:", error);
-      Alert.alert("Error", "No se pudo abrir el selector de archivos.");
+      Alert.alert("Error", "No se pudo seleccionar el archivo.");
     }
   };
+  const tomarFoto = async () => {
+    try {
+      const permiso = await ImagePicker.requestCameraPermissionsAsync();
 
+      if (!permiso.granted) {
+        Alert.alert(
+          "Permiso requerido",
+          "Necesitas permitir el acceso a la cámara para tomar fotos.",
+        );
+        return;
+      }
+
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ["images"],
+        quality: 0.6,
+        allowsEditing: false,
+      });
+
+      if (result.canceled) return;
+
+      const asset = result.assets?.[0];
+      if (!asset?.uri) return;
+
+      const foto = {
+        uri: asset.uri,
+        name: `foto_${orderIdLimpio}_${Date.now()}.jpg`,
+        mimeType: "image/jpeg",
+        size: asset.fileSize || 0,
+        tipoEnvio: esPendienteFirma0400 ? "FINALIZACION" : tipoEnvio,
+      };
+
+      setArchivos((prev) => [...prev, foto]);
+    } catch (error) {
+      console.log("[EVIDENCIA] Error tomando foto:", error);
+      Alert.alert("Error", "No se pudo abrir la cámara.");
+    }
+  };
   const eliminarArchivo = (uri) => {
     setArchivos((prev) => prev.filter((file) => file.uri !== uri));
   };
@@ -288,9 +559,118 @@ export default function EvidenciaOrden() {
       ),
     );
   };
+  const MAX_SIZE_MB = 3;
+
+  // Para imágenes comprimidas
+  const MAX_SIZE_BYTES = MAX_SIZE_MB * 1024 * 1024;
+
+  // Para PDF, usamos menos porque Base64 aumenta el tamaño
+  const MAX_PDF_MB = 10; // o 15 si quieres
+  const MAX_PDF_BYTES = MAX_PDF_MB * 1024 * 1024;
+  const comprimirImagenSiAplica = async (file) => {
+    const mime = String(file?.mimeType || "").toLowerCase();
+    const name = String(file?.name || "").toLowerCase();
+
+    const esImagen =
+      mime.startsWith("image/") ||
+      name.endsWith(".jpg") ||
+      name.endsWith(".jpeg") ||
+      name.endsWith(".png");
+
+    if (!esImagen) return file;
+
+    let calidad = 0.7;
+    let width = 1280;
+    let result = null;
+
+    for (let i = 0; i < 5; i++) {
+      result = await ImageManipulator.manipulateAsync(
+        file.uri,
+        [{ resize: { width } }],
+        {
+          compress: calidad,
+          format: ImageManipulator.SaveFormat.JPEG,
+        },
+      );
+
+      const info = await FileSystem.getInfoAsync(result.uri);
+      const sizeMB = info.size / (1024 * 1024);
+
+      console.log(`📸 Intento ${i + 1}: ${sizeMB.toFixed(2)} MB`);
+
+      if (sizeMB <= MAX_SIZE_MB) {
+        return {
+          ...file,
+          uri: result.uri,
+          name:
+            file.name?.replace(/\.(png|jpg|jpeg)$/i, ".jpg") ||
+            `imagen_${Date.now()}.jpg`,
+          mimeType: "image/jpeg",
+          size: info.size,
+        };
+      }
+
+      // bajar más calidad y tamaño
+      calidad -= 0.15;
+      width -= 200;
+    }
+
+    throw new Error(
+      `No se pudo comprimir la imagen ${file.name} a menos de 3 MB`,
+    );
+  };
+
+  const validarPesoArchivo = async (file) => {
+    const info = await FileSystem.getInfoAsync(file.uri);
+    const sizeMB = info.size / (1024 * 1024);
+
+    console.log(`📄 Archivo ${file.name}: ${sizeMB.toFixed(2)} MB`);
+
+    const mime = String(file?.mimeType || "").toLowerCase();
+    const name = String(file?.name || "").toLowerCase();
+    const esPdf = mime.includes("pdf") || name.endsWith(".pdf");
+
+    const limiteMB = esPdf ? MAX_PDF_MB : MAX_SIZE_MB;
+    const limiteBytes = esPdf ? MAX_PDF_BYTES : MAX_SIZE_BYTES;
+
+    // SOLO bloquear imágenes, no PDF
+    if (!esPdf && info.size > limiteBytes) {
+      throw new Error(
+        `El archivo ${file.name} pesa ${sizeMB.toFixed(
+          1,
+        )} MB. Debe ser menor a ${limiteMB} MB.`,
+      );
+    }
+
+    return {
+      ...file,
+      size: info.size,
+    };
+  };
 
   const convertirArchivoABase64 = async (file) => {
     try {
+      const info = await FileSystem.getInfoAsync(file.uri);
+      const sizeReal = Number(info?.size || file?.size || 0);
+      const sizeMB = sizeReal / (1024 * 1024);
+
+      if (
+        !file.name.toLowerCase().endsWith(".pdf") &&
+        sizeReal > MAX_SIZE_BYTES
+      ) {
+        throw new Error(
+          `El archivo ${file?.name || ""} pesa ${sizeMB.toFixed(
+            1,
+          )} MB. Usa archivos menores a ${MAX_SIZE_MB} MB.`,
+        );
+      }
+
+      console.log(
+        `[EVIDENCIA] Convirtiendo a Base64: ${file?.name} - ${sizeMB.toFixed(
+          2,
+        )} MB`,
+      );
+
       const base64 = await FileSystem.readAsStringAsync(file.uri, {
         encoding: FileSystem.EncodingType.Base64,
       });
@@ -302,31 +682,37 @@ export default function EvidenciaOrden() {
         file?.name,
         error,
       );
-      throw new Error(`No se pudo convertir el archivo ${file?.name || ""}`);
+      throw error;
     }
   };
 
-  const construirPayload = async () => {
+  const construirAttachments = async () => {
     const attachments = [];
 
     for (const file of archivos) {
-      const base64 = await convertirArchivoABase64(file);
+      let fileProcesado = file;
+
+      // 1. Si es imagen o foto tomada, se comprime
+      fileProcesado = await comprimirImagenSiAplica(fileProcesado);
+
+      // 2. Valida que el archivo final pese menos de 3 MB
+      // PDF y otros archivos NO se comprimen aquí, solo se bloquean si pesan más
+      fileProcesado = await validarPesoArchivo(fileProcesado);
+
+      // 3. Convierte el archivo ya validado a base64
+      const base64 = await convertirArchivoABase64(fileProcesado);
+
+      const extension = getExtensionFromName(fileProcesado?.name);
 
       attachments.push({
         DocId: orderIdLimpio,
-        FileName: construirNombreArchivo(file),
-        MimeType: getExtensionFromName(file?.name),
-        Base64: base64,
+        FileName: construirNombreArchivo(fileProcesado),
+        MimeType: extension,
+        Base64: String(base64 || "").trim(),
       });
     }
 
-    return {
-      WorkOrderHeader: {
-        Orderid: orderIdLimpio,
-      },
-      Attachments: attachments,
-      Return: [],
-    };
+    return attachments;
   };
 
   const getDurationMinutes = () => {
@@ -339,9 +725,69 @@ export default function EvidenciaOrden() {
     return hh * 60 + mm;
   };
 
+  const tieneArchivoFinalizacion = () => {
+    return archivos.some((file) => {
+      const tipo = String(file?.tipoEnvio || "")
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toUpperCase()
+        .trim();
+
+      return tipo === "FINALIZACION";
+    });
+  };
+
+  const enviarFinalizacion0300ConEvidencias = async (attachments) => {
+    const currentStatusCode = getCurrentOrderStatusFor0300(ordenDetalle);
+
+    console.log("========================================");
+    console.log("[DEBUG] ORDEN DETALLE COMPLETO:");
+    console.log(JSON.stringify(ordenDetalle, null, 2));
+    console.log("[DEBUG] STATUS DETECTADO:", currentStatusCode);
+    console.log("========================================");
+
+    const payloadBase = buildPayloadFinalizacion0300({
+      orderId: orderIdLimpio,
+      currentStatusCode,
+    });
+
+    const payloadFinalizacionConEvidencias = {
+      ...payloadBase,
+      Attachments: Array.isArray(attachments) ? attachments : [],
+    };
+
+    logPayloadSinBase64(
+      "[EVIDENCIA] JSON FINALIZACION 0300 + ATTACHMENTS:",
+      payloadFinalizacionConEvidencias,
+    );
+
+    const responseFinalizacion = await api.post(
+      "/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet",
+      payloadFinalizacionConEvidencias,
+      { timeout: 300000 },
+    );
+
+    console.log(
+      "[EVIDENCIA] RESPONSE FINALIZACION 0300 + ATTACHMENTS:",
+      responseFinalizacion?.data,
+    );
+
+    await validarErroresSapEnRespuesta(responseFinalizacion);
+
+    return true;
+  };
+
   const enviarEvidencia = async () => {
     if (!orderIdLimpio) {
       Alert.alert("Error", "No se encontró el número de orden.");
+      return;
+    }
+
+    if (esFinalizada0300) {
+      Alert.alert(
+        "Orden finalizada",
+        "Esta orden ya está finalizada. No se puede enviar evidencia, tiempos ni actividades.",
+      );
       return;
     }
 
@@ -350,69 +796,105 @@ export default function EvidenciaOrden() {
       return;
     }
 
-    if (!Array.isArray(operaciones) || operaciones.length === 0) {
+    const hayFinalizacion = tieneArchivoFinalizacion();
+
+    if (!hayFinalizacion) {
       Alert.alert(
         "Validación",
-        "No se encontraron operaciones para esta orden.",
+        "Debes marcar al menos un archivo como Finalización.",
       );
       return;
     }
 
+    const operacionesSeleccionadas = Object.keys(checkedMap || {}).length;
     const durationMinutes = getDurationMinutes();
-    if (!Number.isFinite(durationMinutes) || durationMinutes <= 0) {
-      Alert.alert(
-        "Validación",
-        "Debes capturar un tiempo de ejecución válido en horas y/o minutos.",
-      );
-      return;
+
+    if (!esPendienteFirma0400) {
+      if (operacionesSeleccionadas === 0) {
+        Alert.alert(
+          "Validación",
+          "Debes marcar al menos una actividad realizada.",
+        );
+        return;
+      }
+
+      if (!Number.isFinite(durationMinutes) || durationMinutes <= 0) {
+        Alert.alert(
+          "Validación",
+          "Debes capturar un tiempo de ejecución válido en horas y/o minutos.",
+        );
+        return;
+      }
     }
 
     try {
       setGuardando(true);
 
-      const payloadEvidencia = await construirPayload();
+      const attachments = await construirAttachments();
 
-      const payloadConfirmaciones = buildSupervisorConfirmationPayload({
-        orderId: orderIdLimpio,
-        opsAll: operaciones,
-        durationMinutes,
+      if (!attachments.length) {
+        throw new Error("No se pudieron construir los archivos adjuntos.");
+      }
+
+      logPayloadSinBase64("[EVIDENCIA] ATTACHMENTS A ENVIAR:", {
+        WorkOrderHeader: { Orderid: orderIdLimpio },
+        Attachments: attachments,
+        Return: [],
       });
 
-      if (!payloadConfirmaciones) {
-        throw new Error(
-          "No se pudo construir el payload de confirmaciones de operaciones.",
+      if (!esPendienteFirma0400) {
+        const payloadConfirmaciones = buildSupervisorConfirmationPayload({
+          orderId: orderIdLimpio,
+          opsAll: operaciones,
+          durationMinutes,
+          selectedIds: checkedMap,
+        });
+
+        if (!payloadConfirmaciones) {
+          throw new Error(
+            "No se pudo construir el payload de confirmaciones de operaciones.",
+          );
+        }
+
+        console.log("========================================");
+        console.log("[EVIDENCIA] JSON CONFIRMATIONS:");
+        console.log(JSON.stringify(payloadConfirmaciones, null, 2));
+        console.log("========================================");
+
+        const responseConfirm = await api.post(
+          "/api/odata/ZCS_CREATE_CONFIRMATION_SRV/ConfirmationHeaderSet",
+          payloadConfirmaciones,
+          { timeout: 300000 },
+        );
+
+        await validarErroresSapEnRespuesta(responseConfirm);
+
+        console.log(
+          "[EVIDENCIA] RESPONSE CONFIRMATIONS:",
+          responseConfirm?.data,
+        );
+      } else {
+        console.log(
+          "[EVIDENCIA] Orden 0400 detectada: NO se mandan tiempos ni confirmaciones. Solo archivo de finalización.",
         );
       }
 
-      console.log(
-        "[EVIDENCIA] JSON ATTACHMENTS:",
-        JSON.stringify(payloadEvidencia, null, 2),
-      );
-
-      console.log(
-        "[EVIDENCIA] JSON CONFIRMATIONS:",
-        JSON.stringify(payloadConfirmaciones, null, 2),
-      );
-
-      const responseEvidencia = await api.post(
-        "/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet",
-        payloadEvidencia,
-      );
-
-      console.log("[EVIDENCIA] RESPONSE ATTACHMENTS:", responseEvidencia?.data);
-
-      const responseConfirm = await api.post(
-        "/api/odata/ZCS_CREATE_CONFIRMATION_SRV/ConfirmationHeaderSet",
-        payloadConfirmaciones,
-      );
-
-      console.log("[EVIDENCIA] RESPONSE CONFIRMATIONS:", responseConfirm?.data);
+      await enviarFinalizacion0300ConEvidencias(attachments);
 
       Alert.alert(
         "Éxito",
-        "La evidencia y las operaciones confirmadas se enviaron correctamente.",
+        esPendienteFirma0400
+          ? "El archivo de finalización se envió correctamente."
+          : "Las confirmaciones, evidencias y finalización de la orden se enviaron correctamente.",
+        [
+          {
+            text: "OK",
+            onPress: () => {
+              router.replace("/supervisor/ordenes");
+            },
+          },
+        ],
       );
-      router.back();
     } catch (error) {
       console.log(
         "[EVIDENCIA] Error completo:",
@@ -430,6 +912,31 @@ export default function EvidenciaOrden() {
     }
   };
 
+  const operacionesAgrupadas = useMemo(() => {
+    return operaciones.reduce((acc, op, index) => {
+      const grupo = String(
+        op?.Usr02 ||
+          op?.usr02 ||
+          op?.ubicacion ||
+          op?.Ubicacion ||
+          op?.workcenter ||
+          op?.WorkCntr ||
+          "SIN UBICACIÓN",
+      )
+        .trim()
+        .toUpperCase();
+
+      if (!acc[grupo]) acc[grupo] = [];
+
+      acc[grupo].push({
+        ...op,
+        __index: index,
+      });
+
+      return acc;
+    }, {});
+  }, [operaciones]);
+
   return (
     <View style={styles.container}>
       <Header title={`Evidencia Orden ${orderIdLimpio}`} />
@@ -441,33 +948,39 @@ export default function EvidenciaOrden() {
             Selecciona archivos desde tu teléfono para esta orden.
           </Text>
 
-          <Text style={styles.label}>Tiempo total de ejecución de la orden</Text>
+          {!esPendienteFirma0400 && !esFinalizada0300 && (
+            <>
+              <Text style={styles.label}>
+                Tiempo total de ejecución de la orden
+              </Text>
 
-          <View style={styles.timeRow}>
-            <View style={styles.timeInputWrap}>
-              <Text style={styles.smallLabel}>Horas</Text>
-              <TextInput
-                value={horasEjecucion}
-                onChangeText={setHorasEjecucion}
-                placeholder="0"
-                keyboardType="numeric"
-                placeholderTextColor={COLORS.muted}
-                style={styles.timeInput}
-              />
-            </View>
+              <View style={styles.timeRow}>
+                <View style={styles.timeInputWrap}>
+                  <Text style={styles.smallLabel}>Horas</Text>
+                  <TextInput
+                    value={horasEjecucion}
+                    onChangeText={setHorasEjecucion}
+                    placeholder="0"
+                    keyboardType="numeric"
+                    placeholderTextColor={COLORS.muted}
+                    style={styles.timeInput}
+                  />
+                </View>
 
-            <View style={styles.timeInputWrap}>
-              <Text style={styles.smallLabel}>Minutos</Text>
-              <TextInput
-                value={minutosEjecucion}
-                onChangeText={setMinutosEjecucion}
-                placeholder="0"
-                keyboardType="numeric"
-                placeholderTextColor={COLORS.muted}
-                style={styles.timeInput}
-              />
-            </View>
-          </View>
+                <View style={styles.timeInputWrap}>
+                  <Text style={styles.smallLabel}>Minutos</Text>
+                  <TextInput
+                    value={minutosEjecucion}
+                    onChangeText={setMinutosEjecucion}
+                    placeholder="0"
+                    keyboardType="numeric"
+                    placeholderTextColor={COLORS.muted}
+                    style={styles.timeInput}
+                  />
+                </View>
+              </View>
+            </>
+          )}
 
           <View style={styles.opsInfoBox}>
             <Text style={styles.opsInfoTitle}>Operaciones a confirmar</Text>
@@ -479,61 +992,104 @@ export default function EvidenciaOrden() {
               </View>
             ) : (
               <Text style={styles.opsInfoText}>
-                Se enviarán automáticamente todas las operaciones de la orden:{" "}
+                Marca las operaciones realizadas. Total disponibles:{" "}
                 <Text style={styles.opsInfoCount}>{operaciones.length}</Text>
               </Text>
             )}
           </View>
 
-          <Text style={styles.label}>Tipo que se asignará al seleccionar</Text>
-
-          <View style={styles.typeRow}>
-            <TouchableOpacity
-              style={[
-                styles.typeBtn,
-                tipoEnvio === "TBM" && styles.typeBtnActive,
-              ]}
-              onPress={() => setTipoEnvio("TBM")}
-              activeOpacity={0.85}
-            >
-              <Text
-                style={[
-                  styles.typeBtnText,
-                  tipoEnvio === "TBM" && styles.typeBtnTextActive,
-                ]}
-              >
-                TBM
+          {!esPendienteFirma0400 ? (
+            <>
+              <Text style={styles.label}>
+                Tipo que se asignará al seleccionar
               </Text>
-            </TouchableOpacity>
 
-            <TouchableOpacity
-              style={[
-                styles.typeBtn,
-                tipoEnvio === "FINALIZACION" && styles.typeBtnActive,
-              ]}
-              onPress={() => setTipoEnvio("FINALIZACION")}
-              activeOpacity={0.85}
-            >
-              <Text
-                style={[
-                  styles.typeBtnText,
-                  tipoEnvio === "FINALIZACION" && styles.typeBtnTextActive,
-                ]}
-              >
-                Finalización
+              <View style={styles.typeRow}>
+                <TouchableOpacity
+                  style={[
+                    styles.typeBtn,
+                    tipoEnvio === "TBM" && styles.typeBtnActive,
+                  ]}
+                  onPress={() => {
+                    if (esFinalizada0300) return;
+                    setTipoEnvio("TBM");
+                  }}
+                  activeOpacity={0.85}
+                >
+                  <Text
+                    style={[
+                      styles.typeBtnText,
+                      tipoEnvio === "TBM" && styles.typeBtnTextActive,
+                    ]}
+                  >
+                    TBM
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[
+                    styles.typeBtn,
+                    tipoEnvio === "FINALIZACION" && styles.typeBtnActive,
+                  ]}
+                  onPress={() => setTipoEnvio("FINALIZACION")}
+                  activeOpacity={0.85}
+                >
+                  <Text
+                    style={[
+                      styles.typeBtnText,
+                      tipoEnvio === "FINALIZACION" && styles.typeBtnTextActive,
+                    ]}
+                  >
+                    Finalización
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </>
+          ) : (
+            <View style={styles.onlyFinalizacionBox}>
+              <Ionicons
+                name="lock-closed-outline"
+                size={16}
+                color={COLORS.accent}
+              />
+              <Text style={styles.onlyFinalizacionText}>
+                Orden pendiente de firma: solo se permite cargar archivo de
+                finalización.
               </Text>
-            </TouchableOpacity>
-          </View>
+            </View>
+          )}
 
           <TouchableOpacity
-            style={styles.pickBtn}
-            onPress={seleccionarArchivo}
-            activeOpacity={0.85}
+            style={[
+              styles.pickBtn,
+              esFinalizada0300 && { backgroundColor: "#ccc" },
+            ]}
+            onPress={() => {
+              if (esFinalizada0300) return;
+              seleccionarArchivo();
+            }}
+            disabled={esFinalizada0300}
           >
             <Ionicons name="document-attach-outline" size={18} color="#fff" />
             <Text style={styles.pickBtnText}>Seleccionar archivo</Text>
           </TouchableOpacity>
         </View>
+        <TouchableOpacity
+          style={[
+            styles.pickBtn,
+            { marginTop: 10, backgroundColor: COLORS.success },
+            esFinalizada0300 && { backgroundColor: "#ccc" },
+          ]}
+          onPress={() => {
+            if (esFinalizada0300) return;
+            tomarFoto();
+          }}
+          activeOpacity={0.85}
+          disabled={esFinalizada0300}
+        >
+          <Ionicons name="camera-outline" size={18} color="#fff" />
+          <Text style={styles.pickBtnText}>Tomar foto</Text>
+        </TouchableOpacity>
 
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>
@@ -570,49 +1126,55 @@ export default function EvidenciaOrden() {
                   </Text>
 
                   <Text style={styles.fileMeta}>
+                    MimeType: {getExtensionFromName(file?.name)}
+                  </Text>
+
+                  <Text style={styles.fileMeta}>
                     Tamaño: {formatearTamano(file.size)}
                   </Text>
 
-                  <View style={styles.inlineTypeRow}>
-                    <TouchableOpacity
-                      style={[
-                        styles.smallTypeBtn,
-                        file.tipoEnvio === "TBM" && styles.smallTypeBtnActive,
-                      ]}
-                      onPress={() => cambiarTipoArchivo(file.uri, "TBM")}
-                    >
-                      <Text
+                  {!esPendienteFirma0400 && (
+                    <View style={styles.inlineTypeRow}>
+                      <TouchableOpacity
                         style={[
-                          styles.smallTypeBtnText,
-                          file.tipoEnvio === "TBM" &&
-                            styles.smallTypeBtnTextActive,
+                          styles.smallTypeBtn,
+                          file.tipoEnvio === "TBM" && styles.smallTypeBtnActive,
                         ]}
+                        onPress={() => cambiarTipoArchivo(file.uri, "TBM")}
                       >
-                        TBM
-                      </Text>
-                    </TouchableOpacity>
+                        <Text
+                          style={[
+                            styles.smallTypeBtnText,
+                            file.tipoEnvio === "TBM" &&
+                              styles.smallTypeBtnTextActive,
+                          ]}
+                        >
+                          TBM
+                        </Text>
+                      </TouchableOpacity>
 
-                    <TouchableOpacity
-                      style={[
-                        styles.smallTypeBtn,
-                        file.tipoEnvio === "FINALIZACION" &&
-                          styles.smallTypeBtnActive,
-                      ]}
-                      onPress={() =>
-                        cambiarTipoArchivo(file.uri, "FINALIZACION")
-                      }
-                    >
-                      <Text
+                      <TouchableOpacity
                         style={[
-                          styles.smallTypeBtnText,
+                          styles.smallTypeBtn,
                           file.tipoEnvio === "FINALIZACION" &&
-                            styles.smallTypeBtnTextActive,
+                            styles.smallTypeBtnActive,
                         ]}
+                        onPress={() =>
+                          cambiarTipoArchivo(file.uri, "FINALIZACION")
+                        }
                       >
-                        Finalización
-                      </Text>
-                    </TouchableOpacity>
-                  </View>
+                        <Text
+                          style={[
+                            styles.smallTypeBtnText,
+                            file.tipoEnvio === "FINALIZACION" &&
+                              styles.smallTypeBtnTextActive,
+                          ]}
+                        >
+                          Finalización
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+                  )}
                 </View>
 
                 <TouchableOpacity
@@ -627,16 +1189,127 @@ export default function EvidenciaOrden() {
           )}
         </View>
 
+        <View style={styles.finalizeBox}>
+          <View style={styles.finalizeHeader}>
+            <Ionicons name="checkbox-outline" size={18} color={COLORS.accent} />
+            <Text style={styles.finalizeTitle}>
+              Marca las actividades realizadas
+            </Text>
+          </View>
+
+          {loadingOperaciones ? (
+            <ActivityIndicator color={COLORS.accent} />
+          ) : operaciones.length === 0 ? (
+            <Text style={styles.emptyText}>
+              No hay operaciones para mostrar.
+            </Text>
+          ) : (
+            Object.entries(operacionesAgrupadas).map(([grupo, opsGrupo]) => {
+              const isOpen = !!expandedGroups[grupo];
+
+              return (
+                <View key={grupo} style={styles.groupBox}>
+                  <TouchableOpacity
+                    style={styles.groupHeader}
+                    activeOpacity={0.85}
+                    onPress={() => {
+                      setExpandedGroups((prev) => ({
+                        ...prev,
+                        [grupo]: !prev[grupo],
+                      }));
+                    }}
+                  >
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.groupTitle}>{grupo}</Text>
+                      <Text style={styles.groupSubtitle}>
+                        {opsGrupo.length} operación
+                        {opsGrupo.length === 1 ? "" : "es"}
+                      </Text>
+                    </View>
+
+                    <Ionicons
+                      name={isOpen ? "chevron-up" : "chevron-down"}
+                      size={18}
+                      color={COLORS.muted}
+                    />
+                  </TouchableOpacity>
+
+                  {isOpen && (
+                    <View style={styles.groupContent}>
+                      {opsGrupo.map((op) => {
+                        const index = op.__index;
+                        const opId = getOpId(orderIdLimpio, op, index);
+                        const checked = !!checkedMap[opId];
+
+                        return (
+                          <TouchableOpacity
+                            key={opId}
+                            style={[
+                              styles.opCheckItem,
+                              checked && styles.opCheckItemActive,
+                            ]}
+                            activeOpacity={0.85}
+                            onPress={() => {
+                              if (esPendienteFirma0400 || esFinalizada0300)
+                                return;
+
+                              setCheckedMap((prev) => {
+                                const next = { ...(prev || {}) };
+
+                                if (next[opId]) delete next[opId];
+                                else next[opId] = true;
+
+                                return next;
+                              });
+                            }}
+                          >
+                            {!esPendienteFirma0400 && !esFinalizada0300 && (
+                              <Ionicons
+                                name={checked ? "checkbox" : "square-outline"}
+                                size={22}
+                                color={checked ? COLORS.accent : COLORS.muted}
+                              />
+                            )}
+
+                            <View style={{ flex: 1 }}>
+                              <Text style={styles.opCheckText}>
+                                {getOpText(op)}
+                              </Text>
+
+                              {esPendienteFirma0400 && (
+                                <Text style={styles.opStatusText}>
+                                  Estatus: pendiente de firma
+                                </Text>
+                              )}
+                            </View>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
+                  )}
+                </View>
+              );
+            })
+          )}
+        </View>
+
         <TouchableOpacity
-          style={[styles.saveBtn, guardando && styles.saveBtnDisabled]}
+          style={[
+            styles.saveBtn,
+            (guardando || esFinalizada0300) && styles.saveBtnDisabled,
+          ]}
+          disabled={guardando || esFinalizada0300}
           onPress={enviarEvidencia}
           activeOpacity={0.9}
-          disabled={guardando}
         >
           {guardando ? (
             <ActivityIndicator color="#fff" />
           ) : (
-            <Text style={styles.saveText}>Enviar Evidencia</Text>
+            <Text style={styles.saveText}>
+              {esPendienteFirma0400
+                ? "Enviar archivo de finalización"
+                : "Enviar Evidencias y Finalizar"}
+            </Text>
           )}
         </TouchableOpacity>
       </ScrollView>
@@ -906,5 +1579,112 @@ const styles = StyleSheet.create({
     color: "#fff",
     fontSize: 15,
     fontWeight: "800",
+  },
+
+  finalizeBox: {
+    backgroundColor: "#F8FAFC",
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 14,
+  },
+
+  finalizeHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginBottom: 10,
+  },
+
+  finalizeTitle: {
+    fontSize: 13,
+    fontWeight: "900",
+    color: COLORS.title,
+  },
+
+  groupBox: {
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderRadius: 12,
+    marginBottom: 10,
+    overflow: "hidden",
+  },
+
+  groupHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: 13,
+    paddingHorizontal: 14,
+    backgroundColor: "#FFFFFF",
+  },
+
+  groupTitle: {
+    fontSize: 14,
+    fontWeight: "900",
+    color: COLORS.title,
+  },
+
+  groupSubtitle: {
+    marginTop: 2,
+    fontSize: 11,
+    fontWeight: "700",
+    color: COLORS.muted,
+  },
+
+  groupContent: {
+    paddingHorizontal: 10,
+    paddingBottom: 10,
+  },
+
+  opCheckItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    backgroundColor: "#FFFFFF",
+    borderRadius: 10,
+    padding: 10,
+    marginBottom: 8,
+  },
+
+  opCheckItemActive: {
+    borderColor: COLORS.accent,
+    backgroundColor: "#EAF4FF",
+  },
+
+  opCheckText: {
+    flex: 1,
+    fontSize: 13,
+    fontWeight: "700",
+    color: COLORS.title,
+  },
+  onlyFinalizacionBox: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    backgroundColor: "#EAF4FF",
+    borderWidth: 1,
+    borderColor: "#8EC5FF",
+    borderRadius: 10,
+    padding: 12,
+    marginBottom: 14,
+  },
+
+  onlyFinalizacionText: {
+    flex: 1,
+    fontSize: 12,
+    fontWeight: "700",
+    color: COLORS.title,
+  },
+
+  opStatusText: {
+    marginTop: 4,
+    fontSize: 11,
+    fontWeight: "700",
+    color: COLORS.accent,
   },
 });

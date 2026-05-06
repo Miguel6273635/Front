@@ -2238,7 +2238,77 @@ export default function DetalleOrden() {
       setSavingPending0400(false);
     }
   };
+  const generarVistaPreviaPdfAntesFirma = async () => {
+    try {
+      const orderId = String(orden?.Orderid || id || "").trim();
 
+      if (!orderId) {
+        Alert.alert("Error", "No se encontró el número de orden.");
+        return;
+      }
+
+      const selectedIds = Object.keys(checkedMap || {});
+
+      if (!selectedIds.length) {
+        Alert.alert(
+          "Sin selección",
+          "Marca al menos una operación realizada antes de visualizar el PDF.",
+        );
+        return;
+      }
+
+      const draftFinishMs = Date.now();
+      const draftElapsedMs = orderStartedAtMs
+        ? Math.max(0, draftFinishMs - orderStartedAtMs)
+        : null;
+
+      setShowSignModal(false);
+      setMantHtmlPreview(null);
+      setMantPdfUri(null);
+      setShowMantPreview(true);
+
+      const tipo = detectTipoMantenimiento(orden);
+      const opsAll = Array.isArray(orden?.operaciones) ? orden.operaciones : [];
+
+      const html = await buildMantenimientoHtml({
+        tipo,
+        orden,
+        operaciones: opsAll,
+        checkedMap,
+        signatureData,
+        clienteEmail: String(clienteEmail || "").trim(),
+        clienteNombre: String(clienteNombre || "").trim(),
+        clienteCargo: String(clienteCargo || "").trim(),
+        tecnicoNombre: String(
+          user?.nombre ||
+            user?.name ||
+            user?.fullName ||
+            user?.displayName ||
+            user?.username ||
+            "",
+        ).trim(),
+        avisoCliente: String(avisoCliente || "").trim(),
+        notaTecnico: String(notaTecnico || "").trim(),
+        coberturaTipo: coberturaTipo || null,
+        consumibles,
+        startMs: orderStartedAtMs,
+        finishMs: draftFinishMs,
+        elapsedMs: draftElapsedMs,
+      });
+
+      setMantHtmlPreview(String(html || ""));
+
+      const { uri } = await Print.printToFileAsync({
+        html: String(html || ""),
+      });
+
+      setMantPdfUri(uri);
+    } catch (error) {
+      console.log("[PDF PREVIEW] Error:", error);
+      setShowMantPreview(false);
+      Alert.alert("Error", "No se pudo generar la vista previa del PDF.");
+    }
+  };
   const abrirFirmaCliente = async () => {
     const orderId = String(orden?.Orderid || id || "").trim();
     if (!orderId) return;
@@ -3056,7 +3126,9 @@ export default function DetalleOrden() {
                     plant={String(
                       orden?.Plant || orden?.plant || orden?.centro || "",
                     ).trim()}
-                    coberturaTipo={coberturaTipo || orden?.cobertura_tipo || null}
+                    coberturaTipo={
+                      coberturaTipo || orden?.cobertura_tipo || null
+                    }
                     FIORI={FIORI}
                     initialRows={consumibles}
                     onChange={(rows) => setConsumibles(rows)}
@@ -3130,8 +3202,8 @@ export default function DetalleOrden() {
         noMantPdfRawUrl={noMantPdfRawUrl}
         descargarNoMantPdf={descargarNoMantPdf}
         downloadingNoMantPdf={downloadingNoMantPdf}
+        onPreviewPdfAntesFirma={generarVistaPreviaPdfAntesFirma}
       />
-
       <Modal
         visible={!!showMantPreview}
         transparent

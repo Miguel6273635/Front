@@ -59,15 +59,33 @@ function isExpired(expiresAtMs, skewSeconds = 60) {
   return Date.now() >= Number(expiresAtMs) - skewSeconds * 1000;
 }
 
+function uniq(arr) {
+  return [...new Set(arr.filter(Boolean))];
+}
+
+function arrayBufferToBase64(buffer) {
+  let binary = "";
+  const bytes = new Uint8Array(buffer);
+  const chunkSize = 0x8000;
+
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const chunk = bytes.subarray(i, i + chunkSize);
+    binary += String.fromCharCode(...chunk);
+  }
+
+  return btoa(binary);
+}
+
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
-  const [token, setToken] = useState(null); // access_token
+  const [token, setToken] = useState(null);
   const [loading, setLoading] = useState(true);
 
   const extra = Constants.expoConfig?.extra || {};
   const AZURE_TENANT_ID = extra.AZURE_TENANT_ID;
   const AZURE_CLIENT_ID = extra.AZURE_CLIENT_ID;
   const AZURE_API_SCOPE = extra.AZURE_API_SCOPE || "";
+  const AZURE_GRAPH_SCOPE = extra.AZURE_GRAPH_SCOPE || "User.Read";
 
   const ISSUER = useMemo(() => {
     if (!AZURE_TENANT_ID) return "";
@@ -104,10 +122,23 @@ export const AuthProvider = ({ children }) => {
     await authDel(["access_token", "refresh_token", "expires_at", "user_json"]);
   }
 
-  const buildScopes = () => {
-    const scopes = ["openid", "profile", "email", "offline_access"];
-    if (AZURE_API_SCOPE) scopes.push(AZURE_API_SCOPE);
-    return scopes;
+  const buildApiScopes = () => {
+    return uniq(["openid", "profile", "email", "offline_access", AZURE_API_SCOPE]);
+  };
+
+  const buildGraphScopes = () => {
+    return uniq(["openid", "profile", "email", "offline_access", AZURE_GRAPH_SCOPE]);
+  };
+
+  const buildLoginScopes = () => {
+    return uniq([
+      "openid",
+      "profile",
+      "email",
+      "offline_access",
+      AZURE_API_SCOPE,
+      AZURE_GRAPH_SCOPE,
+    ]);
   };
 
   const scheduleRefresh = async () => {
@@ -119,7 +150,6 @@ export const AuthProvider = ({ children }) => {
 
     if (!expAt) return;
 
-    // refrescar 2 minutos antes de vencer (mínimo 5s)
     const msUntil = Math.max(5000, Number(expAt) - Date.now() - 120000);
 
     refreshTimerRef.current = setTimeout(async () => {
@@ -136,7 +166,7 @@ export const AuthProvider = ({ children }) => {
   };
 
   /* =========================
-     REFRESH TOKEN
+     REFRESH TOKEN TU API
      ========================= */
   const refreshAccessToken = async () => {
     const online = await isOnline();
@@ -156,7 +186,7 @@ export const AuthProvider = ({ children }) => {
         {
           clientId: AZURE_CLIENT_ID,
           refreshToken,
-          scopes: buildScopes(),
+          scopes: buildApiScopes(),
         },
         discovery
       );
@@ -185,7 +215,80 @@ export const AuthProvider = ({ children }) => {
 
       return { ok: true, accessToken, expiresAt: expAt };
     } catch (e) {
+      console.log("[REFRESH TOKEN ERROR]", e?.message || e);
       return { ok: false, reason: e?.message || "refresh_failed" };
+    }
+  };
+
+  /* =========================
+     TOKEN GRAPH
+     ========================= */
+  const acquireGraphAccessToken = async () => {
+    const online = await isOnline();
+    if (!online) return null;
+
+    const refreshToken = await authGet("refresh_token");
+    if (!refreshToken) return null;
+
+    if (!ISSUER || !AZURE_CLIENT_ID) return null;
+
+    try {
+      const discovery = await AuthSession.fetchDiscoveryAsync(ISSUER);
+
+      const tokenResult = await AuthSession.refreshAsync(
+        {
+          clientId: AZURE_CLIENT_ID,
+          refreshToken,
+          scopes: buildGraphScopes(),
+        },
+        discovery
+      );
+
+      const graphAccessToken = tokenResult?.accessToken;
+      if (!graphAccessToken) return null;
+
+      if (tokenResult?.refreshToken) {
+        await authSet("refresh_token", tokenResult.refreshToken);
+      }
+
+      return graphAccessToken;
+    } catch (e) {
+      console.log("[GRAPH TOKEN ERROR]", e?.message || e);
+      return null;
+    }
+  };
+
+  const fetchMicrosoftProfilePhoto = async (preferredToken = null) => {
+    try {
+      const graphToken = preferredToken || (await acquireGraphAccessToken());
+      console.log("[GRAPH TOKEN EXISTS]", !!graphToken);
+
+      if (!graphToken) return null;
+
+      const res = await fetch("https://graph.microsoft.com/v1.0/me/photo/$value", {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${graphToken}`,
+        },
+      });
+
+      console.log("[GRAPH PHOTO STATUS]", res.status);
+
+      if (res.status === 404) {
+        return null;
+      }
+
+      if (!res.ok) {
+        return null;
+      }
+
+      const buffer = await res.arrayBuffer();
+      const base64 = arrayBufferToBase64(buffer);
+
+      return `data:image/jpeg;base64,${base64}`;
+    } catch (e) {
+      console.log("[GRAPH PHOTO ERROR]", e?.message || e);
+      return null;
     }
   };
 
@@ -205,7 +308,6 @@ export const AuthProvider = ({ children }) => {
         let finalToken = storedToken;
         let finalExp = storedExp;
 
-        // ✅ Si venció, primero intenta refresh antes de borrar sesión
         if (storedToken && storedExp && isExpired(storedExp, 60)) {
           const refreshed = await refreshAccessToken();
 
@@ -235,7 +337,8 @@ export const AuthProvider = ({ children }) => {
           setToken(null);
           setUser(null);
         }
-      } catch {
+      } catch (e) {
+        console.log("[LOAD STORAGE ERROR]", e?.message || e);
         setToken(null);
         setUser(null);
       } finally {
@@ -244,7 +347,6 @@ export const AuthProvider = ({ children }) => {
     };
 
     loadStorage();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   /* =========================
@@ -257,7 +359,7 @@ export const AuthProvider = ({ children }) => {
     if (!ISSUER) throw new Error("ISSUER vacío. Revisa AZURE_TENANT_ID");
 
     const discovery = await AuthSession.fetchDiscoveryAsync(ISSUER);
-    const scopes = buildScopes();
+    const scopes = buildLoginScopes();
 
     const codeVerifier = await makeCodeVerifier();
     const codeChallenge = await makeCodeChallenge(codeVerifier);
@@ -364,17 +466,35 @@ export const AuthProvider = ({ children }) => {
     const u = meRes?.data?.user;
     if (!u) throw new Error("Respuesta inválida de /api/auth/me (no viene user)");
 
-    setUser(u);
+    let finalUser = { ...u, photo: null };
+
+    try {
+      let photo = await fetchMicrosoftProfilePhoto(accessToken);
+
+      if (!photo) {
+        photo = await fetchMicrosoftProfilePhoto();
+      }
+
+      console.log("[GRAPH PHOTO RESULT]", photo ? "SI LLEGO FOTO" : "NO LLEGO FOTO");
+
+      if (photo) {
+        finalUser.photo = photo;
+      }
+    } catch (e) {
+      console.log("[GRAPH INIT PHOTO ERROR]", e?.message || e);
+    }
+
+    setUser(finalUser);
     setToken(accessToken);
 
-    await AsyncStorage.setItem("user", JSON.stringify(u));
-    await authSet("user_json", JSON.stringify(u));
+    await AsyncStorage.setItem("user", JSON.stringify(finalUser));
+    await authSet("user_json", JSON.stringify(finalUser));
 
     await AsyncStorage.removeItem("sso_code_verifier");
 
     await scheduleRefresh();
 
-    router.replace(pickHomeByRole(u.rol_id));
+    router.replace(pickHomeByRole(finalUser.rol_id));
     return { ok: true };
   };
 
@@ -433,7 +553,6 @@ export const AuthProvider = ({ children }) => {
     });
 
     return () => sub?.remove?.();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
 
   /* =========================

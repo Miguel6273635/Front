@@ -25,6 +25,7 @@ function mapDireccionLikeBackend(addr) {
   const Country = addr.Country ?? "";
 
   const cliente = [Name1, Name2].filter(Boolean).join(" ").trim();
+
   const direccion = [
     `${Street} ${HouseNum1}`.trim(),
     StrSuppl3,
@@ -42,6 +43,7 @@ function mapDireccionLikeBackend(addr) {
 
 function normalizeOpsFromBackend(ops = []) {
   if (!Array.isArray(ops)) return [];
+
   return ops.map((op) => {
     const Activity = op.Activity || op.activity || op.Vornr || "";
     const SubActivity = op.SubActivity || op.subactivity || op.Uvorn || "";
@@ -66,7 +68,9 @@ function normalizeOpsFromBackend(ops = []) {
 // id estable para operaciones
 const opKey = (orderId, op) =>
   `${orderId}-${op.activity || op.Activity || ""}${
-    op.subactivity || op.SubActivity ? `-${op.subactivity || op.SubActivity}` : ""
+    op.subactivity || op.SubActivity
+      ? `-${op.subactivity || op.SubActivity}`
+      : ""
   }`;
 
 // helper para leer results OData
@@ -74,13 +78,9 @@ function odataResults(res) {
   return res?.data?.d?.results || res?.data?.results || [];
 }
 
-// helper para leer entidad OData (WorkOrderHeaderSet('id'))
+// helper para leer entidad OData WorkOrderHeaderSet('id')
 function odataEntity(res) {
   return res?.data?.d || res?.data || {};
-}
-
-function safeStr(v) {
-  return String(v ?? "").trim();
 }
 
 function detectCoberturaFromShortText(shortText) {
@@ -89,24 +89,180 @@ function detectCoberturaFromShortText(shortText) {
   if (idx < 0) return null;
 
   const tail = s.slice(idx);
+
   if (tail.includes("COBERTURABASICA")) return "BASICA";
   if (tail.includes("COBERTURAMEDIA")) return "MEDIA";
   if (tail.includes("COBERTURASEMI")) return "SEMI";
+
   return null;
+}
+
+function pickStartDate(baseOrden) {
+  return (
+    baseOrden?.start_date ||
+    baseOrden?.StartDate ||
+    baseOrden?.BasicStartDate ||
+    baseOrden?.BasicStart ||
+    null
+  );
+}
+
+function pickFinishDate(baseOrden) {
+  return (
+    baseOrden?.finish_date ||
+    baseOrden?.FinishDate ||
+    baseOrden?.BasicFinDate ||
+    baseOrden?.BasicFinish ||
+    null
+  );
+}
+
+async function fetchHeaderDetalle(orderId) {
+  const resOrden = await api.get(
+    `/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet('${orderId}')?$format=json`
+  );
+
+  return odataEntity(resOrden);
+}
+
+async function fetchAddresses(orderIdReal) {
+  try {
+    const resAddr = await api.get(
+      `/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet('${orderIdReal}')/ToAddresses?$format=json`
+    );
+
+    const results = odataResults(resAddr);
+    const chosen = pickSecondAddress(results);
+    const mapped = mapDireccionLikeBackend(chosen);
+
+    return {
+      cliente: mapped.cliente || "",
+      direccion: mapped.direccion || "",
+    };
+  } catch (e) {
+    console.log(
+      "[prefetch][addresses] no se pudieron cargar:",
+      orderIdReal,
+      e?.response?.data || e?.message || e
+    );
+
+    return {
+      cliente: "",
+      direccion: "",
+    };
+  }
+}
+
+async function fetchPartners(orderIdReal) {
+  try {
+    const resPartners = await api.get(
+      `/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet('${orderIdReal}')/ToPartners?$format=json`
+    );
+
+    const partners = odataResults(resPartners);
+
+    const re = (partners || []).find(
+      (p) => String(p?.PartnRoleOld || "").trim() === "RE"
+    );
+
+    const emailFromPartners = String(re?.Mail1 || re?.Mail2 || "").trim();
+
+    return {
+      partners,
+      emailFromPartners,
+    };
+  } catch (e) {
+    console.log(
+      "[prefetch][partners] no se pudieron cargar:",
+      orderIdReal,
+      e?.response?.data || e?.message || e
+    );
+
+    return {
+      partners: [],
+      emailFromPartners: "",
+    };
+  }
+}
+
+async function fetchOperaciones(orderIdReal) {
+  let ops = [];
+
+  try {
+    // ✅ Primero usamos el mismo endpoint que usa la pantalla de detalle.
+    const resOps = await api.get(`/api/operaciones/sap/${String(orderIdReal)}`);
+
+    const rawOps =
+      resOps?.data?.d?.results ||
+      resOps?.data?.results ||
+      resOps?.data?.operaciones ||
+      resOps?.data ||
+      [];
+
+    ops = normalizeOpsFromBackend(rawOps).map((o) => ({
+      ...o,
+      id: o.id || opKey(orderIdReal, o),
+    }));
+
+    console.log("[prefetch][ops] cargadas desde /api/operaciones/sap:", {
+      orderId: orderIdReal,
+      count: ops.length,
+    });
+
+    return ops;
+  } catch (e1) {
+    console.log(
+      "[prefetch][ops] falló /api/operaciones/sap, intentando ToOperations:",
+      orderIdReal,
+      e1?.response?.data || e1?.message || e1
+    );
+  }
+
+  try {
+    // ✅ Fallback al OData original
+    const resOps = await api.get(
+      `/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet('${orderIdReal}')/ToOperations?$format=json`
+    );
+
+    const rawOps = odataResults(resOps);
+
+    ops = normalizeOpsFromBackend(rawOps).map((o) => ({
+      ...o,
+      id: o.id || opKey(orderIdReal, o),
+    }));
+
+    console.log("[prefetch][ops] cargadas desde ToOperations:", {
+      orderId: orderIdReal,
+      count: ops.length,
+    });
+
+    return ops;
+  } catch (e2) {
+    console.log(
+      "[prefetch][ops] no se pudieron cargar operaciones:",
+      orderIdReal,
+      e2?.response?.data || e2?.message || e2
+    );
+
+    return [];
+  }
 }
 
 export async function prefetchOrdenesTecnicoDetalles({
   orderIds = [],
   concurrency = 3,
 }) {
-  const ids = [...new Set(orderIds.map((x) => String(x).trim()).filter(Boolean))];
+  const ids = [
+    ...new Set(orderIds.map((x) => String(x).trim()).filter(Boolean)),
+  ];
+
   if (!ids.length) return { ok: 0, skip: 0, fail: 0 };
 
   const win = buildOfflineWindow(new Date());
 
-  let ok = 0,
-    skip = 0,
-    fail = 0;
+  let ok = 0;
+  let skip = 0;
+  let fail = 0;
   let i = 0;
 
   async function worker() {
@@ -115,25 +271,32 @@ export async function prefetchOrdenesTecnicoDetalles({
       const orderId = ids[idx];
 
       try {
-        // 1) Header detalle (OData)
-        const resOrden = await api.get(
-          `/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet('${orderId}')?$format=json`
-        );
-        const baseOrden = odataEntity(resOrden);
+        // 1) Header detalle
+        const baseOrden = await fetchHeaderDetalle(orderId);
 
-        const orderIdReal = String(baseOrden?.Orderid || orderId).trim();
+        const orderIdReal = String(
+          baseOrden?.Orderid || baseOrden?.OrderId || orderId
+        ).trim();
+
+        const startDate = pickStartDate(baseOrden);
+        const finishDate = pickFinishDate(baseOrden);
 
         const orderLikeForWindow = {
           Orderid: orderIdReal,
-          start_date: baseOrden?.StartDate,
+          start_date: startDate,
         };
 
         if (!shouldCacheDetailByOrder(orderLikeForWindow, new Date())) {
+          console.log("[prefetch][skip fuera ventana]", {
+            orderId: orderIdReal,
+            start_date: startDate,
+          });
+
           skip++;
           continue;
         }
 
-        // ✅ detectar cobertura desde ShortText
+        // 2) ShortText / cobertura
         const shortTextValue =
           baseOrden?.ShortText ??
           baseOrden?.shorttext ??
@@ -144,49 +307,15 @@ export async function prefetchOrdenesTecnicoDetalles({
         const coberturaDetectada =
           detectCoberturaFromShortText(shortTextValue);
 
-        // 2) Addresses (cliente + dirección)
-        let direccionSap = "";
-        let clienteSap = "";
-        try {
-          const resAddr = await api.get(
-            `/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet('${orderIdReal}')/ToAddresses?$format=json`
-          );
-          const results = odataResults(resAddr);
-          const chosen = pickSecondAddress(results);
-          const mapped = mapDireccionLikeBackend(chosen);
-          direccionSap = mapped.direccion || "";
-          clienteSap = mapped.cliente || "";
-        } catch {}
+        // 3) Addresses
+        const { cliente, direccion } = await fetchAddresses(orderIdReal);
 
-        // 3) Partners (OData)
-        let partners = [];
-        let emailFromPartners = "";
-        try {
-          const resPartners = await api.get(
-            `/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet('${orderIdReal}')/ToPartners?$format=json`
-          );
-          partners = odataResults(resPartners);
+        // 4) Partners
+        const { partners, emailFromPartners } =
+          await fetchPartners(orderIdReal);
 
-          const re = (partners || []).find(
-            (p) => String(p?.PartnRoleOld || "").trim() === "RE"
-          );
-          emailFromPartners = String(re?.Mail1 || re?.Mail2 || "").trim();
-        } catch {}
-
-        // 4) Operations (OData)
-        let ops = [];
-        try {
-          const resOps = await api.get(
-            `/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet('${orderIdReal}')/ToOperations?$format=json`
-          );
-          const rawOps = odataResults(resOps);
-          ops = normalizeOpsFromBackend(rawOps).map((o) => ({
-            ...o,
-            id: o.id || opKey(orderIdReal, o),
-          }));
-        } catch {
-          ops = [];
-        }
+        // 5) Operaciones
+        const ops = await fetchOperaciones(orderIdReal);
 
         const userstatusRaw = String(
           baseOrden?.Userstatus ??
@@ -212,18 +341,32 @@ export async function prefetchOrdenesTecnicoDetalles({
 
         const detail = {
           Orderid: orderIdReal,
-          order_type: baseOrden?.OrderType ?? null,
-          equipment: baseOrden?.Equipment ?? null,
-          plant: baseOrden?.Plant ?? null,
 
-          start_date: baseOrden?.StartDate ?? null,
-          finish_date: baseOrden?.FinishDate ?? null,
+          order_type:
+            baseOrden?.order_type ||
+            baseOrden?.OrderType ||
+            baseOrden?.OrderTypeTxt ||
+            null,
 
-          // ✅ guarda ShortText consistente
+          equipment:
+            baseOrden?.equipment ||
+            baseOrden?.Equipment ||
+            null,
+
+          plant:
+            baseOrden?.plant ||
+            baseOrden?.Plant ||
+            null,
+
+          // ✅ Importante para que el cache offline lo acepte
+          start_date: startDate,
+          finish_date: finishDate,
+
+          // ✅ ShortText consistente
           ShortText: shortTextValue || null,
           short_text: shortTextValue || null,
 
-          // ✅ guarda cobertura offline
+          // ✅ Cobertura offline
           cobertura_tipo: coberturaDetectada || null,
 
           userstatus: userstatusRaw || null,
@@ -232,20 +375,36 @@ export async function prefetchOrdenesTecnicoDetalles({
           estatus_tipo: baseOrden?.estatus_tipo ?? null,
           checkin_done: !!baseOrden?.checkin_done,
 
-          cliente: clienteSap || "",
-          direccion: direccionSap || "",
+          cliente: cliente || "",
+          direccion: direccion || "",
           cliente_email: emailFromPartners || "",
 
-          partners,
-          operaciones: ops,
+          partners: Array.isArray(partners) ? partners : [],
+          operaciones: Array.isArray(ops) ? ops : [],
 
           _raw: baseOrden,
         };
 
-        await saveOrdenTecnicoDetail(orderIdReal, detail);
+        const saved = await saveOrdenTecnicoDetail(orderIdReal, detail);
+
+        console.log("[prefetch][detail saved]", {
+          orderId: orderIdReal,
+          saved,
+          operaciones: Array.isArray(detail?.operaciones)
+            ? detail.operaciones.length
+            : "NO_ARRAY",
+          start_date: detail?.start_date,
+          finish_date: detail?.finish_date,
+        });
+
         ok++;
       } catch (e) {
-        console.log("[prefetch] fail order:", orderId, e?.message || e);
+        console.log(
+          "[prefetch] fail order:",
+          orderId,
+          e?.response?.data || e?.message || e
+        );
+
         fail++;
       }
     }
@@ -255,6 +414,7 @@ export async function prefetchOrdenesTecnicoDetalles({
     { length: Math.max(1, Number(concurrency) || 1) },
     () => worker()
   );
+
   await Promise.all(workers);
 
   return { ok, skip, fail, window: win };

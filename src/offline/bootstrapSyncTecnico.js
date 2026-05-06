@@ -9,36 +9,70 @@ import {
 import { prefetchOrdenesTecnicoDetalles } from "./prefetchOrdenesTecnico";
 import api from "../services/api";
 
-// helpers OData datetime
-const odataStart = (ymd) => `datetime'${ymd}T00:00:00'`;
-const odataEnd = (ymd) => `datetime'${ymd}T23:59:59'`;
+function normalizeOrdenFromList(row) {
+  if (!row) return null;
 
-// OData => tu shape (IMPORTANTE: start_date/finish_date)
-function mapHeaderRow(r) {
-  if (!r) return null;
-  const Orderid = String(r.Orderid || "").trim();
+  const Orderid = String(row?.Orderid || row?.OrderId || "").trim();
   if (!Orderid) return null;
 
   return {
+    ...row,
+
     Orderid,
-    order_type: r.OrderType ?? null,
-    equipment: r.Equipment ?? null,
-    plant: r.Plant ?? null,
 
-    // 👇 tu cache usa start_date para filtrar ventana
-    start_date: r.StartDate ?? null,
-    finish_date: r.FinishDate ?? null,
+    order_type:
+      row?.order_type ||
+      row?.OrderType ||
+      row?.OrderTypeTxt ||
+      null,
 
-    short_text: r.ShortText ?? null,
+    equipment:
+      row?.equipment ||
+      row?.Equipment ||
+      null,
 
-    userstatus: r.Userstatus ?? null,
-    SysStatus: r.SysStatus ?? null,
-    UserSt: r.UserSt ?? null,
+    plant:
+      row?.plant ||
+      row?.Plant ||
+      null,
+
+    // ✅ La cache y el filtro offline usan start_date / finish_date
+    start_date:
+      row?.start_date ||
+      row?.StartDate ||
+      row?.BasicStartDate ||
+      null,
+
+    finish_date:
+      row?.finish_date ||
+      row?.FinishDate ||
+      row?.BasicFinDate ||
+      null,
+
+    short_text:
+      row?.short_text ||
+      row?.ShortText ||
+      row?.shorttext ||
+      null,
+
+    userstatus:
+      row?.userstatus ||
+      row?.Userstatus ||
+      row?.UserSt ||
+      null,
+
+    estatus_code:
+      row?.estatus_code ||
+      row?.EstatusCode ||
+      row?.StatusCode ||
+      null,
+
+    estatus_label:
+      row?.estatus_label ||
+      row?.EstatusLabel ||
+      row?.StatusText ||
+      null,
   };
-}
-
-function extractODataResults(res) {
-  return res?.data?.d?.results || res?.data?.results || [];
 }
 
 export async function bootstrapPrefetchOrdenesTecnico(userEmail) {
@@ -49,28 +83,46 @@ export async function bootstrapPrefetchOrdenesTecnico(userEmail) {
   const start = win.startStr;
   const end = win.endStr;
 
-  // ✅ Tu listado real OData (ventana hoy±8)
-  const filter =
-    `StartDate ge ${odataStart(start)} ` +
-    `and FinishDate le ${odataEnd(end)} ` +
-    `and Userstatus eq '${String(userEmail).trim()}'`;
+  const params = new URLSearchParams({
+    start,
+    end,
+    mode: "range",
+  });
 
-  const url =
-    `/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet` +
-    `?$filter=${encodeURIComponent(filter)}` +
-    `&$format=json`;
+  if (userEmail) {
+    params.set("user", String(userEmail).trim());
+  }
 
-  const res = await api.get(url);
+  console.log("[BOOTSTRAP TECNICO] Request list:", {
+    start,
+    end,
+    user: userEmail,
+  });
 
-  const rows = extractODataResults(res).map(mapHeaderRow).filter(Boolean);
+  // ✅ Usamos el mismo endpoint que usa la vista de órdenes del técnico.
+  // Esto evita filtrar mal por Userstatus = correo.
+  const res = await api.get(`/api/ordenes/sap/list?${params.toString()}`);
 
-  // seguridad: aplica ventana con tu helper (por si SAP manda algo raro)
+  const rowsRaw = Array.isArray(res.data) ? res.data : [];
+
+  const rows = rowsRaw
+    .map(normalizeOrdenFromList)
+    .filter(Boolean);
+
+  // Seguridad: aplica ventana con tu helper por si backend/SAP manda algo fuera.
   const inWindow = filterOrdenesByWindow(rows, win.start, win.end);
 
-  // 1) guarda lista offline
+  console.log("[BOOTSTRAP TECNICO] Ordenes en ventana offline:", {
+    totalBackend: rows.length,
+    inWindow: inWindow.length,
+    start,
+    end,
+  });
+
+  // 1) Guarda lista offline
   await saveOrdenesTecnicoList(userEmail, inWindow, win);
 
-  // 2) baja y guarda detalle+addresses+partners+ops para esas órdenes
+  // 2) Baja y guarda detalle + addresses + partners + operaciones
   const orderIds = inWindow
     .map((o) => String(o?.Orderid || "").trim())
     .filter(Boolean);
@@ -80,8 +132,14 @@ export async function bootstrapPrefetchOrdenesTecnico(userEmail) {
     concurrency: 3,
   });
 
-  // 3) limpia detalles de órdenes que ya no están
+  // 3) Limpia detalles de órdenes que ya no están en la ventana
   await pruneDetallesNoUsados(orderIds);
+
+  console.log("[BOOTSTRAP TECNICO] Prefetch terminado:", {
+    count: inWindow.length,
+    orderIds: orderIds.length,
+    details: detailsResult,
+  });
 
   return {
     ok: true,

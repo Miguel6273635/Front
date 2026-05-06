@@ -34,6 +34,97 @@ function normalizeEstatus(op) {
 }
 
 /**
+ * ✅ Detecta la categoría visual de la operación.
+ * Principalmente usa StandardTextKey porque es el texto que ya muestras abajo.
+ * Si no viene, intenta usar otros posibles campos.
+ */
+function normalizeCategoria(op) {
+  const categoria =
+    safeStr(op?.standardTextKey ?? op?.StandardTextKey) ||
+    safeStr(op?.categoria ?? op?.Categoria) ||
+    safeStr(op?.category ?? op?.Category) ||
+    safeStr(op?.controlKey ?? op?.ControlKey) ||
+    "SIN CATEGORÍA";
+
+  return categoria.toUpperCase();
+}
+
+/**
+ * ✅ Paleta suave para categorías.
+ * Son colores ligeros para que el texto siga siendo legible.
+ */
+const CATEGORY_COLORS = [
+  {
+    bg: "#EEF6FF",
+    border: "#B9D9F5",
+    chipBg: "#DCEEFF",
+    text: "#0B4F8A",
+  },
+  {
+    bg: "#F1FAF5",
+    border: "#BFE8D0",
+    chipBg: "#DDF5E7",
+    text: "#0B6B3A",
+  },
+  {
+    bg: "#FFF8E8",
+    border: "#F2D59A",
+    chipBg: "#FFF0C7",
+    text: "#8A5A00",
+  },
+  {
+    bg: "#F7F0FF",
+    border: "#D7C2F0",
+    chipBg: "#EFE1FF",
+    text: "#5A2E91",
+  },
+  {
+    bg: "#FFF0F3",
+    border: "#F2B8C6",
+    chipBg: "#FFE0E7",
+    text: "#9A2F4A",
+  },
+  {
+    bg: "#EFFBFB",
+    border: "#B7E3E3",
+    chipBg: "#D9F4F4",
+    text: "#0B666A",
+  },
+  {
+    bg: "#F4F6FA",
+    border: "#C9D3E3",
+    chipBg: "#E8EDF5",
+    text: "#32445E",
+  },
+  {
+    bg: "#FFF4EC",
+    border: "#F1C4A3",
+    chipBg: "#FFE5D3",
+    text: "#8A3F0B",
+  },
+];
+
+/**
+ * ✅ Convierte texto a un índice estable.
+ * Así, la misma categoría siempre recibe el mismo color.
+ */
+function hashTextToIndex(text, max) {
+  const s = safeStr(text).toUpperCase();
+  let hash = 0;
+
+  for (let i = 0; i < s.length; i++) {
+    hash = (hash * 31 + s.charCodeAt(i)) >>> 0;
+  }
+
+  return hash % max;
+}
+
+function getCategoryColor(categoria) {
+  const idx = hashTextToIndex(categoria || "SIN CATEGORÍA", CATEGORY_COLORS.length);
+  return CATEGORY_COLORS[idx];
+}
+
+/**
  * ✅ ID estable "fallback" si no viene id del backend
  * - Si viene op.id real, se respeta
  * - Si NO viene, genera MISMO FORMATO que tu index:
@@ -100,15 +191,12 @@ export function ListaOperacionesAgrupadas({
   const grouped = useMemo(() => agruparPorUsr02(operaciones), [operaciones]);
 
   /**
-   * ✅ CAMBIO: iniciar TODO cerrado
-   * Antes abrías el primer grupo automáticamente.
+   * ✅ Iniciar TODO cerrado.
    */
   const [groupOpen, setGroupOpen] = useState({});
 
   /**
-   * ✅ CAMBIO: NO reabrir nada cuando cambie la data.
-   * (Si quieres que se mantenga el estado previo cuando llegan nuevas ops,
-   * lo hacemos con "merge" abajo.)
+   * ✅ Mantener estados existentes y agregar nuevos grupos cerrados.
    */
   useEffect(() => {
     const grupos = grouped.grupos || [];
@@ -117,16 +205,17 @@ export function ListaOperacionesAgrupadas({
       return;
     }
 
-    // Mantener estados existentes y agregar nuevos grupos cerrados
     setGroupOpen((prev) => {
       const next = { ...(prev || {}) };
+
       for (const g of grupos) {
-        if (typeof next[g] === "undefined") next[g] = false; // nuevos grupos cerrados
+        if (typeof next[g] === "undefined") next[g] = false;
       }
-      // si desapareció algún grupo, lo quitamos
+
       for (const key of Object.keys(next)) {
         if (!grupos.includes(key)) delete next[key];
       }
+
       return next;
     });
   }, [grouped.grupos]);
@@ -134,7 +223,9 @@ export function ListaOperacionesAgrupadas({
   if (!grouped.grupos?.length) {
     return (
       <View style={{ paddingVertical: 10 }}>
-        <Text style={{ color: FIORI.textMuted }}>No hay operaciones para mostrar.</Text>
+        <Text style={{ color: FIORI.textMuted }}>
+          No hay operaciones para mostrar.
+        </Text>
       </View>
     );
   }
@@ -147,10 +238,12 @@ export function ListaOperacionesAgrupadas({
   const setManyChecked = (opIds, value) => {
     setCheckedMap?.((prev) => {
       const next = { ...(prev || {}) };
+
       for (const id of opIds) {
         if (value) next[id] = true;
         else delete next[id];
       }
+
       return next;
     });
   };
@@ -158,8 +251,10 @@ export function ListaOperacionesAgrupadas({
   const toggleOpChecked = (opId) => {
     setCheckedMap?.((prev) => {
       const next = { ...(prev || {}) };
+
       if (next[opId]) delete next[opId];
       else next[opId] = true;
+
       return next;
     });
   };
@@ -200,7 +295,14 @@ export function ListaOperacionesAgrupadas({
             gap: 10,
           }}
         >
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 8, flex: 1 }}>
+          <View
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              gap: 8,
+              flex: 1,
+            }}
+          >
             <Ionicons name="checkbox-outline" size={18} color={FIORI.brand} />
             <Text style={{ fontWeight: "900", color: FIORI.text }}>
               Modo finalizar: marca las actividades realizadas
@@ -219,7 +321,15 @@ export function ListaOperacionesAgrupadas({
               backgroundColor: "#FFECEC",
             }}
           >
-            <Text style={{ fontWeight: "900", color: FIORI.err, fontSize: 12 }}>Cancelar</Text>
+            <Text
+              style={{
+                fontWeight: "900",
+                color: FIORI.err,
+                fontSize: 12,
+              }}
+            >
+              Cancelar
+            </Text>
           </TouchableOpacity>
         </View>
       ) : null}
@@ -229,7 +339,6 @@ export function ListaOperacionesAgrupadas({
           const isOpen = !!groupOpen?.[grp];
           const opsGroup = grouped.porGrupo?.[grp] || [];
 
-          // IDs consistentes
           const opIds = opsGroup.map((op, idx) => opStableId(orderId, op, idx));
 
           const checkedCount = opIds.filter((id) => isOpChecked(id)).length;
@@ -239,8 +348,8 @@ export function ListaOperacionesAgrupadas({
           const groupCheckIcon = allChecked
             ? "checkbox"
             : someChecked
-            ? "remove-circle-outline"
-            : "square-outline";
+              ? "remove-circle-outline"
+              : "square-outline";
 
           return (
             <View key={grp} style={styles?.grupoCard}>
@@ -252,6 +361,16 @@ export function ListaOperacionesAgrupadas({
               >
                 <View style={{ flex: 1 }}>
                   <Text style={styles?.grupoTitle}>{grp}</Text>
+                  <Text
+                    style={{
+                      color: FIORI.textMuted,
+                      fontWeight: "700",
+                      fontSize: 11,
+                      marginTop: 2,
+                    }}
+                  >
+                    {opsGroup.length} operación{opsGroup.length === 1 ? "" : "es"}
+                  </Text>
                 </View>
 
                 <Ionicons
@@ -265,7 +384,13 @@ export function ListaOperacionesAgrupadas({
                 <View style={{ paddingTop: 10, gap: 10 }}>
                   {/* Botón “marcar todo el grupo” */}
                   {finalizeMode ? (
-                    <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+                    <View
+                      style={{
+                        flexDirection: "row",
+                        alignItems: "center",
+                        gap: 10,
+                      }}
+                    >
                       <TouchableOpacity
                         activeOpacity={0.9}
                         onPress={() => setManyChecked(opIds, !allChecked)}
@@ -278,16 +403,29 @@ export function ListaOperacionesAgrupadas({
                           borderRadius: 10,
                           borderWidth: 1,
                           borderColor: FIORI.borderSoft,
-                          backgroundColor: allChecked ? FIORI.brandSoft : FIORI.surface,
+                          backgroundColor: allChecked
+                            ? FIORI.brandSoft
+                            : FIORI.surface,
                         }}
                       >
                         <Ionicons
                           name={groupCheckIcon}
                           size={20}
-                          color={allChecked || someChecked ? FIORI.brand : FIORI.textMuted}
+                          color={
+                            allChecked || someChecked
+                              ? FIORI.brand
+                              : FIORI.textMuted
+                          }
                         />
-                        <Text style={{ fontWeight: "900", color: FIORI.text, fontSize: 12 }}>
-                          Marcar todas las operaciones ({checkedCount}/{opIds.length})
+                        <Text
+                          style={{
+                            fontWeight: "900",
+                            color: FIORI.text,
+                            fontSize: 12,
+                          }}
+                        >
+                          Marcar todas las operaciones ({checkedCount}/
+                          {opIds.length})
                         </Text>
                       </TouchableOpacity>
                     </View>
@@ -308,6 +446,7 @@ export function ListaOperacionesAgrupadas({
                             subactivity: normalizeSubActivity(op),
                             description: normalizeDescription(op),
                             standardTextKey: normalizeStandardTextKey(op),
+                            categoria: normalizeCategoria(op),
                           }}
                           index={idx}
                           styles={styles}
@@ -347,26 +486,32 @@ export function ItemOperacionDetalle({
   const badgeBg = isFinal
     ? FIORI.brandSoft
     : isProc
-    ? "#E8F5FF"
-    : isPause
-    ? "#FFF4E5"
-    : FIORI.surfaceAlt;
+      ? "#E8F5FF"
+      : isPause
+        ? "#FFF4E5"
+        : FIORI.surfaceAlt;
 
   const badgeText = isFinal ? "FIN" : isProc ? "PROC" : isPause ? "PAUS" : "PEND";
 
   const desc = normalizeDescription(op);
   const stk = normalizeStandardTextKey(op);
+  const categoria = normalizeCategoria(op);
+  const categoryColor = getCategoryColor(categoria);
 
   const descNorm = desc.toLowerCase().trim();
   const stkNorm = stk.toLowerCase().trim();
 
-  const showStkBold = !!stkNorm && !descNorm.includes(stkNorm);
+  /**
+   * Ya no mostramos StandardTextKey como texto suelto abajo,
+   * porque ahora lo mostramos como chip de categoría.
+   */
   const showDesc = !!descNorm;
 
   const act = safeStr(op?.activity ?? op?.Activity) || "—";
   const sub = safeStr(op?.subactivity ?? op?.SubActivity);
 
-  const cardBg = checked ? FIORI.brandSoft : FIORI.surface;
+  const cardBg = checked ? FIORI.brandSoft : categoryColor.bg;
+  const cardBorder = checked ? FIORI.brand : categoryColor.border;
 
   return (
     <View
@@ -374,12 +519,12 @@ export function ItemOperacionDetalle({
         styles.operCardSmall,
         {
           backgroundColor: cardBg,
-          borderColor: checked ? FIORI.brand : FIORI.borderSoft,
-          borderWidth: 1,
+          borderColor: cardBorder,
+          borderWidth: checked ? 1.5 : 1,
         },
       ]}
     >
-      <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+      <View style={{ flexDirection: "row", alignItems: "flex-start", gap: 10 }}>
         {allowChecks ? (
           <TouchableOpacity
             activeOpacity={0.9}
@@ -391,8 +536,9 @@ export function ItemOperacionDetalle({
               alignItems: "center",
               justifyContent: "center",
               borderWidth: 1,
-              borderColor: checked ? FIORI.brand : FIORI.borderSoft,
-              backgroundColor: checked ? FIORI.surface : FIORI.surfaceAlt,
+              borderColor: checked ? FIORI.brand : categoryColor.border,
+              backgroundColor: checked ? FIORI.surface : "rgba(255,255,255,0.65)",
+              marginTop: 2,
             }}
           >
             <Ionicons
@@ -403,7 +549,16 @@ export function ItemOperacionDetalle({
           </TouchableOpacity>
         ) : null}
 
-        <View style={[styles.badgeSmall, { backgroundColor: badgeBg, borderColor: FIORI.borderSoft }]}>
+        <View
+          style={[
+            styles.badgeSmall,
+            {
+              backgroundColor: badgeBg,
+              borderColor: FIORI.borderSoft,
+              marginTop: 2,
+            },
+          ]}
+        >
           <Text style={styles.badgeSmallText}>{badgeText}</Text>
         </View>
 
@@ -419,11 +574,39 @@ export function ItemOperacionDetalle({
             </Text>
           ) : null}
 
-          {showStkBold ? (
-            <Text style={[styles.operDescSmall, { fontWeight: "900" }]} numberOfLines={1}>
-              {stk}
+          {/* ✅ Categoría visual */}
+          <View
+            style={{
+              alignSelf: "flex-start",
+              marginTop: 8,
+              paddingHorizontal: 9,
+              paddingVertical: 5,
+              borderRadius: 999,
+              borderWidth: 1,
+              borderColor: categoryColor.border,
+              backgroundColor: categoryColor.chipBg,
+              flexDirection: "row",
+              alignItems: "center",
+              gap: 5,
+            }}
+          >
+            <Ionicons
+              name="pricetag-outline"
+              size={12}
+              color={categoryColor.text}
+            />
+            <Text
+              numberOfLines={1}
+              style={{
+                maxWidth: 220,
+                color: categoryColor.text,
+                fontWeight: "900",
+                fontSize: 11,
+              }}
+            >
+              {stkNorm ? stk : categoria}
             </Text>
-          ) : null}
+          </View>
         </View>
       </View>
     </View>

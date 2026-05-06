@@ -60,6 +60,7 @@ export default function ModalesDetalleOrden({
   noMantPdfRawUrl,
   descargarNoMantPdf,
   downloadingNoMantPdf,
+  onPreviewPdfAntesFirma,
 }) {
   const safeStr = (v) => String(v ?? "").trim();
   const { height: screenHeight } = useWindowDimensions();
@@ -124,7 +125,11 @@ export default function ModalesDetalleOrden({
             </View>
 
             <ScrollView
-              style={{ maxHeight: 420, paddingHorizontal: 12, paddingVertical: 8 }}
+              style={{
+                maxHeight: 420,
+                paddingHorizontal: 12,
+                paddingVertical: 8,
+              }}
             >
               {!Array.isArray(allMaterials) || allMaterials.length === 0 ? (
                 <Text style={{ color: FIORI.textMuted, marginTop: 8 }}>
@@ -133,7 +138,10 @@ export default function ModalesDetalleOrden({
               ) : (
                 allMaterials.map((m, idx) => {
                   const desc =
-                    m.MatlDesc || m.ShortText || m.Material || "Sin descripción";
+                    m.MatlDesc ||
+                    m.ShortText ||
+                    m.Material ||
+                    "Sin descripción";
                   const qty = m.RequirementQuantity ?? m.Quantity ?? "—";
                   const unit =
                     m.RequirementQuantityUnitIso ||
@@ -203,7 +211,11 @@ export default function ModalesDetalleOrden({
             </View>
 
             <ScrollView
-              style={{ maxHeight: 420, paddingHorizontal: 12, paddingVertical: 8 }}
+              style={{
+                maxHeight: 420,
+                paddingHorizontal: 12,
+                paddingVertical: 8,
+              }}
             >
               {loadingComponents ? (
                 <Text style={{ color: FIORI.textMuted, marginTop: 12 }}>
@@ -216,8 +228,12 @@ export default function ModalesDetalleOrden({
               ) : (
                 compList.map((c, idx) => {
                   const desc =
-                    c.MatlDesc || c.ShortText || c.Material || "Sin descripción";
-                  const qtyAsignada = c.RequirementQuantity ?? c.Quantity ?? "—";
+                    c.MatlDesc ||
+                    c.ShortText ||
+                    c.Material ||
+                    "Sin descripción";
+                  const qtyAsignada =
+                    c.RequirementQuantity ?? c.Quantity ?? "—";
                   const unit =
                     c.RequirementQuantityUnitIso ||
                     c.RequirementQuantityUnit ||
@@ -286,7 +302,10 @@ export default function ModalesDetalleOrden({
 
                 <TouchableOpacity
                   onPress={closeSign}
-                  style={[signStyles.closeBtn, savingSignature && { opacity: 0.7 }]}
+                  style={[
+                    signStyles.closeBtn,
+                    savingSignature && { opacity: 0.7 },
+                  ]}
                   disabled={!!savingSignature}
                   activeOpacity={0.85}
                 >
@@ -300,13 +319,23 @@ export default function ModalesDetalleOrden({
                 contentContainerStyle={signStyles.content}
               >
                 <View style={signStyles.infoBanner}>
-                  <Ionicons name="information-circle-outline" size={18} color="#0A6ED1" />
+                  <Ionicons
+                    name="information-circle-outline"
+                    size={18}
+                    color="#0A6ED1"
+                  />
                   <Text style={signStyles.infoBannerText}>
-                    La firma se captura al tocar el botón <Text style={{ fontWeight: "900" }}>“Abrir recuadro de firma”</Text>.
+                    La firma se captura al tocar el botón{" "}
+                    <Text style={{ fontWeight: "900" }}>
+                      “Abrir recuadro de firma”
+                    </Text>
+                    .
                   </Text>
                 </View>
 
-                <Text style={signStyles.label}>Correo del cliente (opcional)</Text>
+                <Text style={signStyles.label}>
+                  Correo del cliente (opcional)
+                </Text>
                 <TextInput
                   value={String(clienteEmail || "")}
                   onChangeText={setClienteEmail}
@@ -364,18 +393,25 @@ export default function ModalesDetalleOrden({
                 <View style={signStyles.signatureSummaryCard}>
                   <View style={signStyles.signatureSummaryTop}>
                     <View>
-                      <Text style={signStyles.signatureTitle}>Firma del cliente</Text>
-                    
+                      <Text style={signStyles.signatureTitle}>
+                        Firma del cliente
+                      </Text>
                     </View>
 
                     <View
                       style={[
                         signStyles.statusPill,
-                        signatureData ? signStyles.statusPillOk : signStyles.statusPillPending,
+                        signatureData
+                          ? signStyles.statusPillOk
+                          : signStyles.statusPillPending,
                       ]}
                     >
                       <Ionicons
-                        name={signatureData ? "checkmark-circle" : "alert-circle-outline"}
+                        name={
+                          signatureData
+                            ? "checkmark-circle"
+                            : "alert-circle-outline"
+                        }
                         size={14}
                         color={signatureData ? "#0B8457" : "#63718B"}
                       />
@@ -389,6 +425,21 @@ export default function ModalesDetalleOrden({
                       </Text>
                     </View>
                   </View>
+                  <TouchableOpacity
+                    style={signStyles.previewPdfBtn}
+                    activeOpacity={0.9}
+                    onPress={onPreviewPdfAntesFirma}
+                    disabled={!!savingSignature}
+                  >
+                    <Ionicons
+                      name="document-text-outline"
+                      size={18}
+                      color="#0A6ED1"
+                    />
+                    <Text style={signStyles.previewPdfBtnText}>
+                      Visualizar PDF antes de firmar
+                    </Text>
+                  </TouchableOpacity>
 
                   <TouchableOpacity
                     style={signStyles.openSignatureBtn}
@@ -398,16 +449,20 @@ export default function ModalesDetalleOrden({
                   >
                     <Ionicons name="create-outline" size={18} color="#fff" />
                     <Text style={signStyles.openSignatureBtnText}>
-                      {signatureData ? "Volver a firmar" : "Abrir recuadro de firma"}
+                      {signatureData
+                        ? "Volver a firmar"
+                        : "Abrir recuadro de firma"}
                     </Text>
                   </TouchableOpacity>
-
                 </View>
               </ScrollView>
 
               <View style={signStyles.footer}>
                 <TouchableOpacity
-                  style={[signStyles.secondaryBtn, savingSignature && { opacity: 0.7 }]}
+                  style={[
+                    signStyles.secondaryBtn,
+                    savingSignature && { opacity: 0.7 },
+                  ]}
                   onPress={closeSign}
                   disabled={!!savingSignature}
                   activeOpacity={0.9}
@@ -416,7 +471,10 @@ export default function ModalesDetalleOrden({
                 </TouchableOpacity>
 
                 <TouchableOpacity
-                  style={[signStyles.primaryBtn, savingSignature && { opacity: 0.7 }]}
+                  style={[
+                    signStyles.primaryBtn,
+                    savingSignature && { opacity: 0.7 },
+                  ]}
                   activeOpacity={0.9}
                   onPress={confirmarFinalizarConFirma}
                   disabled={!!savingSignature}
@@ -461,7 +519,9 @@ export default function ModalesDetalleOrden({
               </TouchableOpacity>
             </View>
 
-            <View style={[signPadStyles.signatureBox, { height: signatureHeight }]}>
+            <View
+              style={[signPadStyles.signatureBox, { height: signatureHeight }]}
+            >
               <Signature
                 ref={signatureRef}
                 onOK={(sig) => {
@@ -839,6 +899,25 @@ const signStyles = StyleSheet.create({
 
   openSignatureBtnText: {
     color: "#fff",
+    fontWeight: "900",
+    fontSize: 14,
+  },
+  previewPdfBtn: {
+    marginTop: 10,
+    backgroundColor: "#EAF4FF",
+    borderWidth: 1,
+    borderColor: "#0A6ED1",
+    borderRadius: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+  },
+
+  previewPdfBtnText: {
+    color: "#0A6ED1",
     fontWeight: "900",
     fontSize: 14,
   },
