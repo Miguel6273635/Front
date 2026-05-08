@@ -74,61 +74,77 @@ const atStartOfDay = (d) => {
   x.setHours(0, 0, 0, 0);
   return x;
 };
+
 const atEndOfDay = (d) => {
   const x = new Date(d);
   x.setHours(23, 59, 59, 999);
   return x;
 };
+
 const startOfMonth = (d) =>
   new Date(d.getFullYear(), d.getMonth(), 1, 0, 0, 0, 0);
+
 const endOfMonth = (d) =>
   new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59, 999);
+
 const startOfYear = (y) => new Date(y, 0, 1, 0, 0, 0, 0);
+
 const endOfYear = (y) => new Date(y, 11, 31, 23, 59, 59, 999);
 
 const parseSapDate = (value) => {
   if (!value) return null;
+
   if (typeof value === "string" && value.startsWith("/Date(")) {
     const ms = parseInt(value.replace("/Date(", "").replace(")/", ""), 10);
     if (!Number.isNaN(ms)) return new Date(ms);
     return null;
   }
+
   const d = new Date(value);
   return isNaN(d.getTime()) ? null : d;
 };
 
 const getUtcYmd = (d) => {
   if (!d) return null;
+
   const yyyy = d.getUTCFullYear();
   const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
   const dd = String(d.getUTCDate()).padStart(2, "0");
+
   return `${yyyy}-${mm}-${dd}`;
 };
 
 const formatLocalYmd = (d) => {
   if (!d) return null;
+
   const yyyy = d.getFullYear();
   const mm = String(d.getMonth() + 1).padStart(2, "0");
   const dd = String(d.getDate()).padStart(2, "0");
+
   return `${yyyy}-${mm}-${dd}`;
 };
 
 const formatDateDMY = (value) => {
   const d = parseSapDate(value);
   if (!d) return "—";
+
   const dd = String(d.getUTCDate()).padStart(2, "0");
   const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
   const yyyy = d.getUTCFullYear();
+
   return `${dd}/${mm}/${yyyy}`;
 };
 
 const isWithin = (date, start, end) => {
   if (!date) return false;
+
   const dStr = getUtcYmd(date);
   const sStr = start ? getUtcYmd(start) : null;
   const eStr = end ? getUtcYmd(end) : null;
+
   if (sStr && dStr < sStr) return false;
   if (eStr && dStr > eStr) return false;
+
   return true;
 };
 
@@ -152,38 +168,77 @@ const MONTHS = [
    ========================= */
 function normalizeCode(code) {
   if (code === null || code === undefined) return "";
+
   const s = String(code).trim();
   if (!s) return "";
+
   const n = parseInt(s, 10);
   if (Number.isNaN(n)) return s;
-  return String(n).padStart(4, "0");
-}
 
-function isNoManttoCode(code) {
-  if (!code) return false;
-  const n = parseInt(code, 10);
-  return !Number.isNaN(n) && n >= 1 && n <= 11;
+  return String(n).padStart(4, "0");
 }
 
 function extractCodes(raw) {
   if (!raw) return [];
+
   const s = String(raw).trim();
   if (!s) return [];
+
   const matches = s.match(/\d{1,4}/g) || [];
+
   const codes = matches
     .map((x) => normalizeCode(x))
     .filter((x) => /^\d{4}$/.test(x));
+
   return Array.from(new Set(codes));
 }
 
-function allAreNoMantto(codes) {
-  if (!codes.length) return false;
-  return codes.every((c) => isNoManttoCode(c));
-}
+const STATUS_META = {
+  "0100": {
+    label: "PENDIENTE",
+    type: "pendiente",
+    color: "#D64545",
+    lockActions: false,
+    allowCheckin: false,
+    isNoMantto: false,
+  },
+  "0200": {
+    label: "EN PROCESO",
+    type: "proceso",
+    color: "#D49C00",
+    lockActions: false,
+    allowCheckin: false,
+    isNoMantto: false,
+  },
+  "0300": {
+    label: "FINALIZADA",
+    type: "final",
+    color: "#27AE60",
+    lockActions: true,
+    allowCheckin: false,
+    isNoMantto: false,
+  },
+  "0400": {
+    label: "PENDIENTE DE FIRMA",
+    type: "firma",
+    color: "#2D9CDB",
+    lockActions: false,
+    allowCheckin: false,
+    isNoMantto: false,
+  },
+  "0600": {
+    label: "Carta No Mantto",
+    type: "no_mantto",
+    color: "#9E9E9E",
+    lockActions: true,
+    allowCheckin: false,
+    isNoMantto: true,
+  },
+};
 
-const PRIORITY = ["0500", "0400", "0300", "0200", "0100"];
+const PRIORITY = ["0600", "0400", "0300", "0200", "0100"];
 
-function resolveUserstatus(rawUserstatus, catalogMap = {}, itemFromApi = null) {
+function resolveUserstatus(rawUserstatus, _catalogMap = {}, itemFromApi = null) {
   const rawCodes = extractCodes(rawUserstatus);
   const apiCode = normalizeCode(itemFromApi?.estatus_code);
 
@@ -206,90 +261,12 @@ function resolveUserstatus(rawUserstatus, catalogMap = {}, itemFromApi = null) {
 
   for (const p of PRIORITY) {
     if (codes.includes(p)) {
-      if (p === "0100")
-        return {
-          code: p,
-          label: "PENDIENTE",
-          type: "pendiente",
-          color: "#D64545",
-          lockActions: false,
-          allowCheckin: false,
-          isNoMantto: false,
-          rawCodes: codes,
-        };
-      if (p === "0200")
-        return {
-          code: p,
-          label: "PROCESO",
-          type: "proceso",
-          color: "#D49C00",
-          lockActions: false,
-          allowCheckin: false,
-          isNoMantto: false,
-          rawCodes: codes,
-        };
-      if (p === "0300")
-        return {
-          code: p,
-          label: "FINALIZADA",
-          type: "final",
-          color: "#27AE60",
-          lockActions: true,
-          allowCheckin: false,
-          isNoMantto: false,
-          rawCodes: codes,
-        };
-      if (p === "0400")
-        return {
-          code: p,
-          label: "PENDIENTE DE FIRMA",
-          type: "firma",
-          color: "#2D9CDB",
-          lockActions: false,
-          allowCheckin: false,
-          isNoMantto: false,
-          rawCodes: codes,
-        };
-      if (p === "0500")
-        return {
-          code: p,
-          label: "FINALIZADA C/PENDIENTES",
-          type: "final_pend",
-          color: "#2D9CDB",
-          lockActions: true,
-          allowCheckin: false,
-          isNoMantto: false,
-          rawCodes: codes,
-        };
+      return {
+        code: p,
+        ...STATUS_META[p],
+        rawCodes: codes,
+      };
     }
-  }
-
-  if (codes.includes("0012")) {
-    return {
-      code: "0012",
-      label: "Sin empezar",
-      type: "start",
-      color: "#6A7381",
-      lockActions: false,
-      allowCheckin: true,
-      isNoMantto: false,
-      rawCodes: codes,
-    };
-  }
-
-  if (allAreNoMantto(codes)) {
-    const main = codes[0];
-    const cause = catalogMap?.[main] || `No mantenimiento (${main})`;
-    return {
-      code: main,
-      label: cause,
-      type: "no_mantto",
-      color: "#9E9E9E",
-      lockActions: true,
-      allowCheckin: false,
-      isNoMantto: true,
-      rawCodes: codes,
-    };
   }
 
   return {
@@ -305,20 +282,19 @@ function resolveUserstatus(rawUserstatus, catalogMap = {}, itemFromApi = null) {
 }
 
 /* =========================
-   ✅ Search
+   Search
    ========================= */
 const matchesQuery = (item, q) => {
   if (!q) return true;
+
   const needle = q.toLowerCase().trim();
+
   const fields = [
     item?.Orderid?.toString?.() ?? "",
     item?.order_type ?? "",
     item?.equipment ?? "",
     item?.partner_name ?? "",
     item?.partner_address ?? "",
-    //item?.nombre_mecanico ?? "",
-    //item?.id_mecanico ?? "",
-    //item?.nombre_cliente ?? "",
     item?.userstatus ?? "",
     item?.estatus_label ?? "",
     item?.estatus_code ?? "",
@@ -326,6 +302,7 @@ const matchesQuery = (item, q) => {
     .filter(Boolean)
     .join(" ")
     .toLowerCase();
+
   return fields.includes(needle);
 };
 
@@ -337,6 +314,7 @@ function makeQueueKey(userEmail) {
     String(userEmail || "anon")
       .toLowerCase()
       .trim() || "anon";
+
   return `checkin_queue_v1_${safe}`;
 }
 
@@ -345,6 +323,7 @@ async function loadCheckinQueue(userEmail) {
     const key = makeQueueKey(userEmail);
     const raw = await AsyncStorage.getItem(key);
     const arr = raw ? JSON.parse(raw) : [];
+
     return Array.isArray(arr) ? arr : [];
   } catch {
     return [];
@@ -353,6 +332,7 @@ async function loadCheckinQueue(userEmail) {
 
 async function saveCheckinQueue(userEmail, arr) {
   const key = makeQueueKey(userEmail);
+
   await AsyncStorage.setItem(
     key,
     JSON.stringify(Array.isArray(arr) ? arr : []),
@@ -361,18 +341,24 @@ async function saveCheckinQueue(userEmail, arr) {
 
 async function enqueueCheckin(userEmail, item) {
   const q = await loadCheckinQueue(userEmail);
+
   // evita duplicados por OrderId
   const exists = q.some((x) => String(x?.orderId) === String(item?.orderId));
   if (exists) return q;
-  const next = [{ ...item }, ...q].slice(0, 50); // límite defensivo
+
+  const next = [{ ...item }, ...q].slice(0, 50);
+
   await saveCheckinQueue(userEmail, next);
+
   return next;
 }
 
 async function removeFromQueue(userEmail, orderId) {
   const q = await loadCheckinQueue(userEmail);
   const next = q.filter((x) => String(x?.orderId) !== String(orderId));
+
   await saveCheckinQueue(userEmail, next);
+
   return next;
 }
 
@@ -399,10 +385,12 @@ export default function ListaOrdenesTecnico() {
   const [showWeekEndPicker, setShowWeekEndPicker] = useState(false);
 
   const now = new Date();
+
   const [monthYear, setMonthYear] = useState({
     month: now.getMonth(),
     year: now.getFullYear(),
   });
+
   const [showMonthModal, setShowMonthModal] = useState(false);
 
   const [yearOnly, setYearOnly] = useState(now.getFullYear());
@@ -420,14 +408,16 @@ export default function ListaOrdenesTecnico() {
 
   // estado red + cola
   const [isOnline, setIsOnline] = useState(true);
-  const [checkinQueue, setCheckinQueue] = useState([]); // [{orderId, photoBase64, createdAt}]
+  const [checkinQueue, setCheckinQueue] = useState([]);
   const syncingRef = useRef(false);
 
   const pendingSet = useMemo(() => {
     const s = new Set();
+
     (checkinQueue || []).forEach((x) => {
       if (x?.orderId) s.add(String(x.orderId));
     });
+
     return s;
   }, [checkinQueue]);
 
@@ -436,27 +426,32 @@ export default function ListaOrdenesTecnico() {
       const s = atStartOfDay(dayRef);
       return { start: s, end: s };
     }
+
     if (dateMode === "weekRange") {
       return {
         start: weekStart ? atStartOfDay(weekStart) : atStartOfDay(new Date()),
         end: weekEnd ? atEndOfDay(weekEnd) : atEndOfDay(new Date()),
       };
     }
+
     if (dateMode === "month") {
       const ref = new Date(monthYear.year, monthYear.month, 1);
       return { start: startOfMonth(ref), end: endOfMonth(ref) };
     }
+
     if (dateMode === "year") {
       return { start: startOfYear(yearOnly), end: endOfYear(yearOnly) };
     }
+
     // "all" = últimos 90 días
     const e = new Date();
     const s = new Date();
     s.setDate(s.getDate() - 90);
+
     return { start: atStartOfDay(s), end: atEndOfDay(e) };
   }, [dateMode, dayRef, weekStart, weekEnd, monthYear, yearOnly]);
 
-  // define el rango REAL que le vas a pedir a SAP según el filtro (solo para UI ONLINE)
+  // define el rango REAL que le vas a pedir a SAP según el filtro
   const getSapRequestRange = useCallback(() => {
     if (
       dateMode === "all" ||
@@ -466,6 +461,7 @@ export default function ListaOrdenesTecnico() {
     ) {
       const s = atStartOfDay(start);
       const e = atEndOfDay(end);
+
       return {
         startDate: s,
         endDate: e,
@@ -477,6 +473,7 @@ export default function ListaOrdenesTecnico() {
     if (dateMode === "day") {
       const s = atStartOfDay(dayRef);
       const e = atEndOfDay(dayRef);
+
       return {
         startDate: s,
         endDate: e,
@@ -489,6 +486,7 @@ export default function ListaOrdenesTecnico() {
     const s = new Date();
     s.setDate(s.getDate() - 90);
     const ss = atStartOfDay(s);
+
     return {
       startDate: ss,
       endDate: e,
@@ -502,13 +500,17 @@ export default function ListaOrdenesTecnico() {
       const res = await api.get(
         "/api/odata/ZSD_CATALOGOS_SRV/StatusWorkOrderSet?$filter=Stsma%20eq%20%27CS000001%27&$format=json",
       );
+
       const results = res?.data?.d?.results || [];
       const map = {};
+
       results.forEach((r) => {
         const k = normalizeCode(r?.Status1);
         const v = String(r?.Status2 || "").trim();
+
         if (k) map[k] = v;
       });
+
       setStatusCatalogMap(map);
     } catch (e) {
       console.log(
@@ -519,7 +521,6 @@ export default function ListaOrdenesTecnico() {
     }
   };
 
-  // ✅ carga cola al iniciar / al cambiar usuario
   const refreshQueue = useCallback(async () => {
     const q = await loadCheckinQueue(userEmail);
     setCheckinQueue(q);
@@ -529,20 +530,22 @@ export default function ListaOrdenesTecnico() {
     refreshQueue();
   }, [refreshQueue]);
 
-  // escuchar red (para auto-sync)
+  // escuchar red
   useEffect(() => {
     const unsub = NetInfo.addEventListener((state) => {
       const onlineNow = !!(
         state?.isConnected && state?.isInternetReachable !== false
       );
+
       setIsOnline(onlineNow);
     });
+
     return () => unsub();
   }, []);
 
   /**
    * REGLA CLAVE:
-   * - ONLINE: muestra TODO lo que regrese SAP (según filtros)
+   * - ONLINE: muestra TODO lo que regrese SAP según filtros
    * - OFFLINE CACHE: guarda SOLO ventana hoy±8 días
    */
   const fetchOrdenes = useCallback(
@@ -554,6 +557,7 @@ export default function ListaOrdenesTecnico() {
         // 0) Carga rápida desde cache SOLO si NO es refresh
         if (!isRefresh) {
           const cached = await loadOrdenesTecnicoList(userEmail);
+
           if (cached?.data?.length) {
             setAllOrdenes(cached.data);
             setLoading(false);
@@ -565,11 +569,13 @@ export default function ListaOrdenesTecnico() {
         const online = !!(
           net?.isConnected && net?.isInternetReachable !== false
         );
+
         setIsOnline(online);
 
         // 2) OFFLINE: usa cache
         if (!online) {
           const cached = await loadOrdenesTecnicoList(userEmail);
+
           if (!cached?.data?.length) {
             Alert.alert(
               "Sin conexión",
@@ -578,10 +584,11 @@ export default function ListaOrdenesTecnico() {
           } else {
             setAllOrdenes(cached.data);
           }
+
           return;
         }
 
-        // 3) ONLINE: pide rango REAL según filtros (UI)
+        // 3) ONLINE: pide rango REAL según filtros
         const req = getSapRequestRange();
 
         console.log("[ORDENES] Request SAP range:", {
@@ -596,6 +603,7 @@ export default function ListaOrdenesTecnico() {
           end: req.endStr,
           mode: "range",
         });
+
         if (userEmail) params.set("user", userEmail);
 
         const okToken = await ensureValidToken();
@@ -604,11 +612,12 @@ export default function ListaOrdenesTecnico() {
         const res = await api.get(`/api/ordenes/sap/list?${params.toString()}`);
         const data = Array.isArray(res.data) ? res.data : [];
 
-        //  4) UI: muestra TODO lo de SAP (según filtros)
+        // 4) UI: muestra TODO lo de SAP
         setAllOrdenes(data);
 
-        // 5) OFFLINE CACHE: guarda SOLO ventana hoy±8 (SIEMPRE)
+        // 5) OFFLINE CACHE: guarda SOLO ventana hoy±8
         const offlineWin = buildOfflineWindow(new Date());
+
         const offlineOnly = filterOrdenesByWindow(
           data,
           offlineWin.start,
@@ -625,6 +634,7 @@ export default function ListaOrdenesTecnico() {
         const MAX_PREFETCH = 12;
 
         const today = new Date();
+
         const distToToday = (order) => {
           const d = parseSapDate(order?.start_date);
           if (!d) return 999999999;
@@ -634,6 +644,7 @@ export default function ListaOrdenesTecnico() {
         const offlineSorted = [...offlineOnly].sort(
           (a, b) => distToToday(a) - distToToday(b),
         );
+
         const idsToPrefetch = offlineSorted
           .map((x) => x?.Orderid)
           .filter(Boolean)
@@ -653,12 +664,14 @@ export default function ListaOrdenesTecnico() {
         );
 
         const cached = await loadOrdenesTecnicoList(userEmail);
+
         if (cached?.data?.length) {
           setAllOrdenes(cached.data);
         } else {
           const serverMsg =
             error?.response?.data?.error ||
             "No se pudieron cargar las órdenes desde SAP";
+
           Alert.alert("Error", serverMsg);
         }
       } finally {
@@ -675,7 +688,7 @@ export default function ListaOrdenesTecnico() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // órdenes (cada vez que cambie filtro)
+  // órdenes cada vez que cambie filtro
   useEffect(() => {
     fetchOrdenes();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -710,9 +723,12 @@ export default function ListaOrdenesTecnico() {
       try {
         const correo = userEmail || "";
         if (!correo) return;
+
         const equipment = String(item?.equipment || "").trim();
         if (!equipment) return;
+
         await AsyncStorage.setItem(ACTIVE_EQUIP_KEY(correo), equipment);
+
         console.log("[ORDENES] active equipment saved:", equipment);
       } catch (e) {
         console.log("[ORDENES] saveActiveEquipment error:", e?.message || e);
@@ -722,12 +738,13 @@ export default function ListaOrdenesTecnico() {
   );
 
   const irADetalles = async (itemOrOrderId) => {
-    // puede venir item o solo orderId
     let orderId = itemOrOrderId;
+
     if (typeof itemOrOrderId === "object" && itemOrOrderId) {
       await saveActiveEquipmentFromItem(itemOrOrderId);
       orderId = itemOrOrderId?.Orderid;
     }
+
     const id = String(orderId);
     router.push(`/tecnico/ordenes/${id}`);
   };
@@ -739,6 +756,7 @@ export default function ListaOrdenesTecnico() {
 
   const irACartaNoMantenimiento = (orderId) => {
     const id = String(orderId);
+
     router.push({
       pathname: "/tecnico/ordenes/[orderid]/carta-no-mantenimiento",
       params: { orderid: id },
@@ -746,7 +764,6 @@ export default function ListaOrdenesTecnico() {
   };
 
   const abrirModalCheckin = (item, orderId) => {
-    // guarda equipo también aquí (por si hacen check-in sin entrar al detalle)
     if (item) saveActiveEquipmentFromItem(item);
 
     setCheckinOrderId(orderId);
@@ -759,6 +776,7 @@ export default function ListaOrdenesTecnico() {
   const takeCheckinPhoto = async () => {
     try {
       const perm = await ImagePicker.requestCameraPermissionsAsync();
+
       if (!perm.granted) {
         Alert.alert(
           "Permiso requerido",
@@ -776,6 +794,7 @@ export default function ListaOrdenesTecnico() {
       if (result.canceled) return;
 
       const asset = result.assets?.[0];
+
       if (!asset?.uri) {
         Alert.alert("Error", "No se pudo obtener la foto.");
         return;
@@ -891,11 +910,15 @@ export default function ListaOrdenesTecnico() {
     if (syncingRef.current) return;
 
     const net = await NetInfo.fetch();
+
     const online = !!(net?.isConnected && net?.isInternetReachable !== false);
+
     setIsOnline(online);
+
     if (!online) return;
 
     syncingRef.current = true;
+
     try {
       const q = await loadCheckinQueue(userEmail);
       if (!q.length) return;
@@ -921,6 +944,7 @@ export default function ListaOrdenesTecnico() {
             orderId,
             b64len: b64.length,
           });
+
           await postCheckinEvidence(orderId, b64);
           await postChangeStatusTo0100(orderId);
           await removeFromQueue(userEmail, orderId);
@@ -955,6 +979,7 @@ export default function ListaOrdenesTecnico() {
       Alert.alert("Error", "No hay orden seleccionada.");
       return;
     }
+
     if (!checkinPhotoBase64) {
       Alert.alert("Falta evidencia", "Primero toma una foto.");
       return;
@@ -967,6 +992,7 @@ export default function ListaOrdenesTecnico() {
 
       const net = await NetInfo.fetch();
       const online = !!(net?.isConnected && net?.isInternetReachable !== false);
+
       setIsOnline(online);
 
       if (!online) {
@@ -975,6 +1001,7 @@ export default function ListaOrdenesTecnico() {
           photoBase64: String(checkinPhotoBase64).trim(),
           createdAt: Date.now(),
         });
+
         setCheckinQueue(nextQueue);
 
         Alert.alert(
@@ -985,6 +1012,7 @@ export default function ListaOrdenesTecnico() {
         setShowCheckinModal(false);
         setCheckinPhotoBase64(null);
         setCheckinPhotoUri(null);
+
         return;
       }
 
@@ -1011,6 +1039,7 @@ export default function ListaOrdenesTecnico() {
       );
 
       const net2 = await NetInfo.fetch();
+
       const online2 = !!(
         net2?.isConnected && net2?.isInternetReachable !== false
       );
@@ -1021,6 +1050,7 @@ export default function ListaOrdenesTecnico() {
           photoBase64: String(checkinPhotoBase64).trim(),
           createdAt: Date.now(),
         });
+
         setCheckinQueue(nextQueue);
 
         Alert.alert(
@@ -1031,6 +1061,7 @@ export default function ListaOrdenesTecnico() {
         setShowCheckinModal(false);
         setCheckinPhotoBase64(null);
         setCheckinPhotoUri(null);
+
         return;
       }
 
@@ -1064,6 +1095,7 @@ export default function ListaOrdenesTecnico() {
     );
 
     const isPendingOffline = pendingSet.has(String(item?.Orderid));
+
     const st = isPendingOffline
       ? {
           ...stBase,
@@ -1088,27 +1120,22 @@ export default function ListaOrdenesTecnico() {
           { borderLeftWidth: 4, borderLeftColor: st.color },
           st.type === "no_mantto" && styles.cardNoMant,
           st.type === "final" && styles.cardFinished,
-          st.type === "final_pend" && styles.cardFinishedPend,
         ]}
-        onPress={() => irADetalles(item)} // ✅ pasa item (guarda equipment)
+        onPress={() => irADetalles(item)}
       >
         <View style={styles.cardContent}>
           <View style={[styles.statusDot, { backgroundColor: st.color }]} />
+
           <View style={{ flex: 1 }}>
             <Text style={styles.title}>
               #{item.Orderid} - {item.order_type}
             </Text>
 
             <Text style={styles.label}>Equipo: {item.equipment}</Text>
-            {/*<Text style={styles.label}>Mecánico: {item.nombre_mecanico || "—"}</Text>
-            <Text style={styles.label}>Nómina: {item.id_mecanico || "—"}</Text>
-            <Text style={styles.label}>Cliente: {item.nombre_cliente || "—"}</Text>*/}
             <Text style={styles.label}>Inicio: {startLabel}</Text>
             <Text style={styles.label}>Fin: {finishLabel}</Text>
 
-            <Text style={styles.label}>
-              Estatus: {st.label} {/*{st.code ? `(${st.code})` : ""}*/}
-            </Text>
+            <Text style={styles.label}>Estatus: {st.label}</Text>
           </View>
         </View>
 
@@ -1131,17 +1158,15 @@ export default function ListaOrdenesTecnico() {
               }}
             >
               {st.type === "no_mantto"
-                ? "Orden NO MANTENIMIENTO. Acciones bloqueadas."
-                : st.code === "0012"
-                  ? "Orden REPROGRAMACIÓN (se muestra como Sin empezar)."
-                  : "Orden bloqueada por estatus."}
+                ? "Orden Carta No Mantto. Acciones bloqueadas."
+                : "Orden bloqueada por estatus."}
             </Text>
           ) : showCheckinBtn ? (
             <TouchableOpacity
               style={[styles.boton, { backgroundColor: FIORI.accent }]}
               onPress={(e) => {
                 e?.stopPropagation?.();
-                abrirModalCheckin(item, item.Orderid); // ✅ pasa item (guarda equipment)
+                abrirModalCheckin(item, item.Orderid);
               }}
             >
               <Text style={styles.botonTexto}>Check-in</Text>
@@ -1152,7 +1177,6 @@ export default function ListaOrdenesTecnico() {
                 style={[styles.boton, { backgroundColor: FIORI.neutralBtn }]}
                 onPress={(e) => {
                   e?.stopPropagation?.();
-                  // también puedes guardar equipment aquí si quieres:
                   saveActiveEquipmentFromItem(item);
                   irAFormularioRiesgos(item.Orderid);
                 }}
@@ -1172,7 +1196,7 @@ export default function ListaOrdenesTecnico() {
                   }}
                 >
                   <Text style={[styles.botonTexto, { color: FIORI.accent }]}>
-                    No mantenimiento
+                    Carta No Mantto
                   </Text>
                 </TouchableOpacity>
               )}
@@ -1195,16 +1219,23 @@ export default function ListaOrdenesTecnico() {
 
   const activeRangeText = useMemo(() => {
     if (dateMode === "all") return "Últimos 90 días";
-    if (dateMode === "day")
+
+    if (dateMode === "day") {
       return `Día: ${atStartOfDay(dayRef).toLocaleDateString()}`;
+    }
+
     if (dateMode === "weekRange") {
       const a = weekStart ? atStartOfDay(weekStart).toLocaleDateString() : "—";
       const b = weekEnd ? atEndOfDay(weekEnd).toLocaleDateString() : "—";
       return `Semana (rango): ${a} → ${b}`;
     }
-    if (dateMode === "month")
+
+    if (dateMode === "month") {
       return `Mes: ${MONTHS[monthYear.month]} ${monthYear.year}`;
+    }
+
     if (dateMode === "year") return `Año: ${yearOnly}`;
+
     return "";
   }, [dateMode, dayRef, weekStart, weekEnd, monthYear, yearOnly]);
 
@@ -1215,7 +1246,9 @@ export default function ListaOrdenesTecnico() {
     to = now.getFullYear() + 2,
   }) => {
     const years = [];
+
     for (let y = to; y >= from; y--) years.push(y);
+
     return (
       <ScrollView style={{ maxHeight: 320 }}>
         {years.map((y) => (
@@ -1356,7 +1389,6 @@ export default function ListaOrdenesTecnico() {
             <Text style={styles.refreshBtnText}>Recargar</Text>
           </TouchableOpacity>
 
-          {/* ✅ Sync pendientes */}
           <TouchableOpacity
             style={[
               styles.syncBtn,
@@ -1390,6 +1422,7 @@ export default function ListaOrdenesTecnico() {
                 setShowDayPicker(false);
                 if (e.type !== "set") return;
               }
+
               if (date) setDayRef(date);
               if (Platform.OS === "ios") setShowDayPicker(true);
             }}
@@ -1406,10 +1439,12 @@ export default function ListaOrdenesTecnico() {
                 setShowWeekStartPicker(false);
                 if (e.type !== "set") return;
               }
+
               if (date) {
                 setWeekStart(date);
                 if (Platform.OS !== "ios") setShowWeekEndPicker(true);
               }
+
               if (Platform.OS === "ios") setShowWeekStartPicker(true);
             }}
           />
@@ -1426,6 +1461,7 @@ export default function ListaOrdenesTecnico() {
                 setShowWeekEndPicker(false);
                 if (e.type !== "set") return;
               }
+
               if (date) setWeekEnd(date);
               if (Platform.OS === "ios") setShowWeekEndPicker(true);
             }}
@@ -1472,7 +1508,9 @@ export default function ListaOrdenesTecnico() {
               >
                 <Text style={styles.modalHeaderBtn}>{"‹"}</Text>
               </TouchableOpacity>
+
               <Text style={styles.modalHeaderTitle}>{monthYear.year}</Text>
+
               <TouchableOpacity
                 onPress={() =>
                   setMonthYear((s) => ({ ...s, year: s.year + 1 }))
@@ -1485,6 +1523,7 @@ export default function ListaOrdenesTecnico() {
             <View style={styles.monthGrid}>
               {MONTHS.map((m, idx) => {
                 const active = idx === monthYear.month && dateMode === "month";
+
                 return (
                   <TouchableOpacity
                     key={m}
@@ -1529,6 +1568,7 @@ export default function ListaOrdenesTecnico() {
             <Text style={[styles.modalHeaderTitle, { marginBottom: 8 }]}>
               Selecciona un año
             </Text>
+
             <YearPickerContent
               selectedYear={yearOnly}
               onSelect={(y) => {
@@ -1538,6 +1578,7 @@ export default function ListaOrdenesTecnico() {
               from={now.getFullYear() - 10}
               to={now.getFullYear() + 2}
             />
+
             <TouchableOpacity
               style={styles.modalClose}
               onPress={() => setShowYearModal(false)}
@@ -1548,7 +1589,7 @@ export default function ListaOrdenesTecnico() {
         </View>
       </Modal>
 
-      {/* ✅ Modal Check-in */}
+      {/* Modal Check-in */}
       <Modal
         visible={showCheckinModal}
         transparent
@@ -1577,6 +1618,7 @@ export default function ListaOrdenesTecnico() {
                   }}
                   resizeMode="cover"
                 />
+
                 <Text
                   style={{ marginTop: 6, color: FIORI.textMuted, fontSize: 12 }}
                 >
@@ -1673,7 +1715,10 @@ export default function ListaOrdenesTecnico() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: FIORI.pageBg },
+  container: {
+    flex: 1,
+    backgroundColor: FIORI.pageBg,
+  },
 
   filtersWrap: {
     paddingHorizontal: 16,
@@ -1689,10 +1734,19 @@ const styles = StyleSheet.create({
         shadowRadius: 6,
         shadowOffset: { width: 0, height: 2 },
       },
-      android: { elevation: 1 },
+      android: {
+        elevation: 1,
+      },
+      default: {},
     }),
   },
-  searchRow: { flexDirection: "row", gap: 8, alignItems: "center" },
+
+  searchRow: {
+    flexDirection: "row",
+    gap: 8,
+    alignItems: "center",
+  },
+
   searchInput: {
     flex: 1,
     backgroundColor: FIORI.cardSubtle,
@@ -1704,6 +1758,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: FIORI.border,
   },
+
   clearBtn: {
     backgroundColor: FIORI.neutralBtn,
     paddingHorizontal: 12,
@@ -1712,14 +1767,23 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: FIORI.border,
   },
-  clearBtnText: { color: FIORI.ink, fontWeight: "600" },
+
+  clearBtnText: {
+    color: FIORI.ink,
+    fontWeight: "600",
+  },
+
   refreshBtn: {
     backgroundColor: FIORI.accent,
     paddingHorizontal: 12,
     paddingVertical: 8,
     borderRadius: 10,
   },
-  refreshBtnText: { color: "#fff", fontWeight: "700" },
+
+  refreshBtnText: {
+    color: "#fff",
+    fontWeight: "700",
+  },
 
   syncBtn: {
     backgroundColor: "#111827",
@@ -1727,9 +1791,19 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     borderRadius: 10,
   },
-  syncBtnText: { color: "#fff", fontWeight: "800" },
 
-  chipsRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 10 },
+  syncBtnText: {
+    color: "#fff",
+    fontWeight: "800",
+  },
+
+  chipsRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    marginTop: 10,
+  },
+
   chip: {
     borderWidth: 1,
     borderColor: FIORI.border,
@@ -1738,12 +1812,33 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     backgroundColor: FIORI.cardBg,
   },
-  chipActive: { backgroundColor: FIORI.accent, borderColor: FIORI.accent },
-  chipText: { color: FIORI.ink, fontWeight: "600" },
-  chipTextActive: { color: "#fff" },
-  activeRangeText: { marginTop: 8, color: FIORI.textMuted, fontSize: 12 },
 
-  rangeButtonsRow: { flexDirection: "row", gap: 10, marginTop: 10 },
+  chipActive: {
+    backgroundColor: FIORI.accent,
+    borderColor: FIORI.accent,
+  },
+
+  chipText: {
+    color: FIORI.ink,
+    fontWeight: "600",
+  },
+
+  chipTextActive: {
+    color: "#fff",
+  },
+
+  activeRangeText: {
+    marginTop: 8,
+    color: FIORI.textMuted,
+    fontSize: 12,
+  },
+
+  rangeButtonsRow: {
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 10,
+  },
+
   smallBtn: {
     paddingHorizontal: 10,
     paddingVertical: 8,
@@ -1752,7 +1847,11 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: FIORI.border,
   },
-  smallBtnText: { color: FIORI.ink, fontWeight: "600" },
+
+  smallBtnText: {
+    color: FIORI.ink,
+    fontWeight: "600",
+  },
 
   card: {
     backgroundColor: FIORI.cardBg,
@@ -1768,14 +1867,40 @@ const styles = StyleSheet.create({
     elevation: 2,
     position: "relative",
   },
-  cardNoMant: { backgroundColor: "#F0F0F0", borderColor: "#D0D0D0" },
-  cardFinished: { backgroundColor: "#EAF7EF", borderColor: "#CFE9D8" },
-  cardFinishedPend: { backgroundColor: "#EAF3FF", borderColor: "#CFE2FF" },
 
-  cardContent: { flexDirection: "row", alignItems: "center" },
-  statusDot: { width: 12, height: 12, borderRadius: 6, marginRight: 10 },
-  title: { fontWeight: "700", fontSize: 16, color: FIORI.ink, marginBottom: 2 },
-  label: { fontSize: 14, color: FIORI.textMuted },
+  cardNoMant: {
+    backgroundColor: "#F0F0F0",
+    borderColor: "#D0D0D0",
+  },
+
+  cardFinished: {
+    backgroundColor: "#EAF7EF",
+    borderColor: "#CFE9D8",
+  },
+
+  cardContent: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+
+  statusDot: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    marginRight: 10,
+  },
+
+  title: {
+    fontWeight: "700",
+    fontSize: 16,
+    color: FIORI.ink,
+    marginBottom: 2,
+  },
+
+  label: {
+    fontSize: 14,
+    color: FIORI.textMuted,
+  },
 
   boton: {
     paddingHorizontal: 12,
@@ -1783,7 +1908,13 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     alignSelf: "flex-end",
   },
-  botonTexto: { color: "#fff", fontWeight: "700", fontSize: 14 },
+
+  botonTexto: {
+    color: "#fff",
+    fontWeight: "700",
+    fontSize: 14,
+  },
+
   botonSecundario: {
     backgroundColor: "#FFFFFF",
     borderWidth: 1,
@@ -1797,6 +1928,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     padding: 16,
   },
+
   modalCard: {
     width: "100%",
     maxWidth: 420,
@@ -1806,13 +1938,20 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: FIORI.border,
   },
+
   modalHeader: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
     marginBottom: 10,
   },
-  modalHeaderTitle: { fontSize: 18, fontWeight: "700", color: FIORI.ink },
+
+  modalHeaderTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: FIORI.ink,
+  },
+
   modalHeaderBtn: {
     fontSize: 22,
     fontWeight: "900",
@@ -1826,6 +1965,7 @@ const styles = StyleSheet.create({
     gap: 8,
     justifyContent: "space-between",
   },
+
   monthCell: {
     width: "31.5%",
     backgroundColor: FIORI.cardSubtle,
@@ -1836,9 +1976,20 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: FIORI.border,
   },
-  monthCellActive: { backgroundColor: FIORI.accent, borderColor: FIORI.accent },
-  monthCellText: { color: FIORI.ink, fontWeight: "600" },
-  monthCellTextActive: { color: "#fff" },
+
+  monthCellActive: {
+    backgroundColor: FIORI.accent,
+    borderColor: FIORI.accent,
+  },
+
+  monthCellText: {
+    color: FIORI.ink,
+    fontWeight: "600",
+  },
+
+  monthCellTextActive: {
+    color: "#fff",
+  },
 
   modalClose: {
     marginTop: 10,
@@ -1848,7 +1999,11 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     borderRadius: 8,
   },
-  modalCloseText: { color: "#fff", fontWeight: "700" },
+
+  modalCloseText: {
+    color: "#fff",
+    fontWeight: "700",
+  },
 
   yearItem: {
     paddingVertical: 10,
@@ -1859,7 +2014,19 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: FIORI.border,
   },
-  yearItemActive: { backgroundColor: FIORI.accent, borderColor: FIORI.accent },
-  yearItemText: { fontSize: 16, color: FIORI.ink, fontWeight: "600" },
-  yearItemTextActive: { color: "#fff" },
+
+  yearItemActive: {
+    backgroundColor: FIORI.accent,
+    borderColor: FIORI.accent,
+  },
+
+  yearItemText: {
+    fontSize: 16,
+    color: FIORI.ink,
+    fontWeight: "600",
+  },
+
+  yearItemTextActive: {
+    color: "#fff",
+  },
 });

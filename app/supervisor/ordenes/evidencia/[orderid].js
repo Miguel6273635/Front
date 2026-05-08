@@ -1,3 +1,4 @@
+// app/supervisor/ordenes/evidencia/[orderid].js
 import React, { useEffect, useMemo, useState } from "react";
 import {
   View,
@@ -19,6 +20,7 @@ import Header from "../../../../src/components/Header";
 import api from "../../../../src/services/api";
 import { fetchOperacionesSupervisor } from "../../../../src/services/operacionesSupervisor";
 import * as ImageManipulator from "expo-image-manipulator";
+
 const COLORS = {
   pageBg: "#F4F6F9",
   cardBg: "#FFFFFF",
@@ -186,7 +188,7 @@ function getBackendMessage(err, fallback) {
 }
 
 /* =========================
-   Estatus 0300
+   Estatus de orden
    ========================= */
 function normalizeStatusCode(value) {
   const s = String(value || "").trim();
@@ -195,10 +197,13 @@ function normalizeStatusCode(value) {
   const matches = s.match(/\d{1,4}/g) || [];
   const codes = matches.map((x) => x.padStart(4, "0"));
 
-  if (codes.includes("0200")) return "0200";
-  if (codes.includes("0100")) return "0100";
+  // Nueva regla:
+  // 0600 = Carta No Mantto. Tiene prioridad para bloquear acciones.
+  if (codes.includes("0600")) return "0600";
   if (codes.includes("0400")) return "0400";
   if (codes.includes("0300")) return "0300";
+  if (codes.includes("0200")) return "0200";
+  if (codes.includes("0100")) return "0100";
 
   return codes[0] || "";
 }
@@ -208,6 +213,7 @@ function getCurrentOrderStatusFor0300(orden) {
     orden?.estatus_code,
     orden?.userstatus,
     orden?.UserStatus,
+    orden?.Userstatus,
     orden?.UserStText,
     orden?.status_code,
     orden?.estatus,
@@ -343,18 +349,24 @@ export default function EvidenciaOrden() {
   const orderIdLimpio = useMemo(() => {
     return String(orderid || "").trim();
   }, [orderid]);
+
   const statusOrden = useMemo(() => {
     return getCurrentOrderStatusFor0300(ordenDetalle);
   }, [ordenDetalle]);
 
+  const esCartaNoMantto0600 = statusOrden === "0600";
   const esFinalizada0300 = statusOrden === "0300";
   const esPendienteFirma0400 = statusOrden === "0400";
   const esProceso0200 = statusOrden === "0200";
+
+  const isLockedByStatus = esFinalizada0300 || esCartaNoMantto0600;
+
   useEffect(() => {
     if (esPendienteFirma0400) {
       setTipoEnvio("FINALIZACION");
     }
   }, [esPendienteFirma0400]);
+
   useEffect(() => {
     let mounted = true;
 
@@ -449,6 +461,16 @@ export default function EvidenciaOrden() {
   };
 
   const seleccionarArchivo = async () => {
+    if (isLockedByStatus) {
+      Alert.alert(
+        esCartaNoMantto0600 ? "Carta No Mantto" : "Orden finalizada",
+        esCartaNoMantto0600
+          ? "Esta orden está marcada como Carta No Mantto. No se puede cargar evidencia."
+          : "Esta orden ya está finalizada. No se puede cargar evidencia.",
+      );
+      return;
+    }
+
     try {
       const result = await DocumentPicker.getDocumentAsync({
         type: ["application/pdf", "image/*"],
@@ -469,7 +491,9 @@ export default function EvidenciaOrden() {
         const sizeMB = sizeReal / (1024 * 1024);
 
         console.log(
-          `[EVIDENCIA] Archivo seleccionado: ${file.name} - ${sizeMB.toFixed(2)} MB`,
+          `[EVIDENCIA] Archivo seleccionado: ${file.name} - ${sizeMB.toFixed(
+            2,
+          )} MB`,
         );
 
         const mime = String(file?.mimeType || "").toLowerCase();
@@ -511,7 +535,18 @@ export default function EvidenciaOrden() {
       Alert.alert("Error", "No se pudo seleccionar el archivo.");
     }
   };
+
   const tomarFoto = async () => {
+    if (isLockedByStatus) {
+      Alert.alert(
+        esCartaNoMantto0600 ? "Carta No Mantto" : "Orden finalizada",
+        esCartaNoMantto0600
+          ? "Esta orden está marcada como Carta No Mantto. No se puede tomar evidencia."
+          : "Esta orden ya está finalizada. No se puede tomar evidencia.",
+      );
+      return;
+    }
+
     try {
       const permiso = await ImagePicker.requestCameraPermissionsAsync();
 
@@ -548,25 +583,30 @@ export default function EvidenciaOrden() {
       Alert.alert("Error", "No se pudo abrir la cámara.");
     }
   };
+
   const eliminarArchivo = (uri) => {
     setArchivos((prev) => prev.filter((file) => file.uri !== uri));
   };
 
   const cambiarTipoArchivo = (uri, nuevoTipo) => {
+    if (isLockedByStatus) return;
+
     setArchivos((prev) =>
       prev.map((file) =>
         file.uri === uri ? { ...file, tipoEnvio: nuevoTipo } : file,
       ),
     );
   };
+
   const MAX_SIZE_MB = 3;
 
   // Para imágenes comprimidas
   const MAX_SIZE_BYTES = MAX_SIZE_MB * 1024 * 1024;
 
   // Para PDF, usamos menos porque Base64 aumenta el tamaño
-  const MAX_PDF_MB = 10; // o 15 si quieres
+  const MAX_PDF_MB = 10;
   const MAX_PDF_BYTES = MAX_PDF_MB * 1024 * 1024;
+
   const comprimirImagenSiAplica = async (file) => {
     const mime = String(file?.mimeType || "").toLowerCase();
     const name = String(file?.name || "").toLowerCase();
@@ -610,7 +650,6 @@ export default function EvidenciaOrden() {
         };
       }
 
-      // bajar más calidad y tamaño
       calidad -= 0.15;
       width -= 200;
     }
@@ -633,7 +672,6 @@ export default function EvidenciaOrden() {
     const limiteMB = esPdf ? MAX_PDF_MB : MAX_SIZE_MB;
     const limiteBytes = esPdf ? MAX_PDF_BYTES : MAX_SIZE_BYTES;
 
-    // SOLO bloquear imágenes, no PDF
     if (!esPdf && info.size > limiteBytes) {
       throw new Error(
         `El archivo ${file.name} pesa ${sizeMB.toFixed(
@@ -692,14 +730,9 @@ export default function EvidenciaOrden() {
     for (const file of archivos) {
       let fileProcesado = file;
 
-      // 1. Si es imagen o foto tomada, se comprime
       fileProcesado = await comprimirImagenSiAplica(fileProcesado);
-
-      // 2. Valida que el archivo final pese menos de 3 MB
-      // PDF y otros archivos NO se comprimen aquí, solo se bloquean si pesan más
       fileProcesado = await validarPesoArchivo(fileProcesado);
 
-      // 3. Convierte el archivo ya validado a base64
       const base64 = await convertirArchivoABase64(fileProcesado);
 
       const extension = getExtensionFromName(fileProcesado?.name);
@@ -739,6 +772,12 @@ export default function EvidenciaOrden() {
 
   const enviarFinalizacion0300ConEvidencias = async (attachments) => {
     const currentStatusCode = getCurrentOrderStatusFor0300(ordenDetalle);
+
+    if (currentStatusCode === "0600") {
+      throw new Error(
+        "La orden está marcada como Carta No Mantto. No se puede finalizar como 0300.",
+      );
+    }
 
     console.log("========================================");
     console.log("[DEBUG] ORDEN DETALLE COMPLETO:");
@@ -780,6 +819,14 @@ export default function EvidenciaOrden() {
   const enviarEvidencia = async () => {
     if (!orderIdLimpio) {
       Alert.alert("Error", "No se encontró el número de orden.");
+      return;
+    }
+
+    if (esCartaNoMantto0600) {
+      Alert.alert(
+        "Carta No Mantto",
+        "Esta orden está marcada como Carta No Mantto. No se puede enviar evidencia, tiempos ni actividades.",
+      );
       return;
     }
 
@@ -942,13 +989,47 @@ export default function EvidenciaOrden() {
       <Header title={`Evidencia Orden ${orderIdLimpio}`} />
 
       <ScrollView contentContainerStyle={styles.content}>
+        {esCartaNoMantto0600 ? (
+          <View style={styles.lockedBox}>
+            <Ionicons
+              name="document-text-outline"
+              size={20}
+              color={COLORS.muted}
+            />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.lockedTitle}>Carta No Mantto</Text>
+              <Text style={styles.lockedText}>
+                Esta orden tiene estatus Carta No Mantto. No se puede cargar
+                evidencia, capturar tiempos, marcar actividades ni finalizar.
+              </Text>
+            </View>
+          </View>
+        ) : null}
+
+        {esFinalizada0300 ? (
+          <View style={styles.lockedBox}>
+            <Ionicons
+              name="checkmark-done-outline"
+              size={20}
+              color={COLORS.success}
+            />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.lockedTitle}>Orden finalizada</Text>
+              <Text style={styles.lockedText}>
+                Esta orden ya está finalizada. No se puede cargar evidencia,
+                tiempos ni actividades.
+              </Text>
+            </View>
+          </View>
+        ) : null}
+
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>Carga de evidencia</Text>
           <Text style={styles.subtitle}>
             Selecciona archivos desde tu teléfono para esta orden.
           </Text>
 
-          {!esPendienteFirma0400 && !esFinalizada0300 && (
+          {!esPendienteFirma0400 && !isLockedByStatus && (
             <>
               <Text style={styles.label}>
                 Tiempo total de ejecución de la orden
@@ -964,6 +1045,7 @@ export default function EvidenciaOrden() {
                     keyboardType="numeric"
                     placeholderTextColor={COLORS.muted}
                     style={styles.timeInput}
+                    editable={!isLockedByStatus}
                   />
                 </View>
 
@@ -976,6 +1058,7 @@ export default function EvidenciaOrden() {
                     keyboardType="numeric"
                     placeholderTextColor={COLORS.muted}
                     style={styles.timeInput}
+                    editable={!isLockedByStatus}
                   />
                 </View>
               </View>
@@ -990,6 +1073,11 @@ export default function EvidenciaOrden() {
                 <ActivityIndicator size="small" color={COLORS.accent} />
                 <Text style={styles.opsInfoText}>Cargando operaciones…</Text>
               </View>
+            ) : isLockedByStatus ? (
+              <Text style={styles.opsInfoText}>
+                Esta orden está bloqueada por estatus. Total disponibles:{" "}
+                <Text style={styles.opsInfoCount}>{operaciones.length}</Text>
+              </Text>
             ) : (
               <Text style={styles.opsInfoText}>
                 Marca las operaciones realizadas. Total disponibles:{" "}
@@ -998,7 +1086,7 @@ export default function EvidenciaOrden() {
             )}
           </View>
 
-          {!esPendienteFirma0400 ? (
+          {!esPendienteFirma0400 && !isLockedByStatus ? (
             <>
               <Text style={styles.label}>
                 Tipo que se asignará al seleccionar
@@ -1011,7 +1099,7 @@ export default function EvidenciaOrden() {
                     tipoEnvio === "TBM" && styles.typeBtnActive,
                   ]}
                   onPress={() => {
-                    if (esFinalizada0300) return;
+                    if (isLockedByStatus) return;
                     setTipoEnvio("TBM");
                   }}
                   activeOpacity={0.85}
@@ -1031,7 +1119,10 @@ export default function EvidenciaOrden() {
                     styles.typeBtn,
                     tipoEnvio === "FINALIZACION" && styles.typeBtnActive,
                   ]}
-                  onPress={() => setTipoEnvio("FINALIZACION")}
+                  onPress={() => {
+                    if (isLockedByStatus) return;
+                    setTipoEnvio("FINALIZACION");
+                  }}
                   activeOpacity={0.85}
                 >
                   <Text
@@ -1045,7 +1136,7 @@ export default function EvidenciaOrden() {
                 </TouchableOpacity>
               </View>
             </>
-          ) : (
+          ) : esPendienteFirma0400 && !isLockedByStatus ? (
             <View style={styles.onlyFinalizacionBox}>
               <Ionicons
                 name="lock-closed-outline"
@@ -1057,35 +1148,30 @@ export default function EvidenciaOrden() {
                 finalización.
               </Text>
             </View>
-          )}
+          ) : null}
 
           <TouchableOpacity
             style={[
               styles.pickBtn,
-              esFinalizada0300 && { backgroundColor: "#ccc" },
+              isLockedByStatus && { backgroundColor: "#ccc" },
             ]}
-            onPress={() => {
-              if (esFinalizada0300) return;
-              seleccionarArchivo();
-            }}
-            disabled={esFinalizada0300}
+            onPress={seleccionarArchivo}
+            disabled={isLockedByStatus}
           >
             <Ionicons name="document-attach-outline" size={18} color="#fff" />
             <Text style={styles.pickBtnText}>Seleccionar archivo</Text>
           </TouchableOpacity>
         </View>
+
         <TouchableOpacity
           style={[
             styles.pickBtn,
             { marginTop: 10, backgroundColor: COLORS.success },
-            esFinalizada0300 && { backgroundColor: "#ccc" },
+            isLockedByStatus && { backgroundColor: "#ccc" },
           ]}
-          onPress={() => {
-            if (esFinalizada0300) return;
-            tomarFoto();
-          }}
+          onPress={tomarFoto}
           activeOpacity={0.85}
-          disabled={esFinalizada0300}
+          disabled={isLockedByStatus}
         >
           <Ionicons name="camera-outline" size={18} color="#fff" />
           <Text style={styles.pickBtnText}>Tomar foto</Text>
@@ -1133,7 +1219,7 @@ export default function EvidenciaOrden() {
                     Tamaño: {formatearTamano(file.size)}
                   </Text>
 
-                  {!esPendienteFirma0400 && (
+                  {!esPendienteFirma0400 && !isLockedByStatus && (
                     <View style={styles.inlineTypeRow}>
                       <TouchableOpacity
                         style={[
@@ -1177,13 +1263,15 @@ export default function EvidenciaOrden() {
                   )}
                 </View>
 
-                <TouchableOpacity
-                  style={styles.deleteBtn}
-                  onPress={() => eliminarArchivo(file.uri)}
-                  activeOpacity={0.8}
-                >
-                  <Ionicons name="trash-outline" size={18} color="#fff" />
-                </TouchableOpacity>
+                {!isLockedByStatus ? (
+                  <TouchableOpacity
+                    style={styles.deleteBtn}
+                    onPress={() => eliminarArchivo(file.uri)}
+                    activeOpacity={0.8}
+                  >
+                    <Ionicons name="trash-outline" size={18} color="#fff" />
+                  </TouchableOpacity>
+                ) : null}
               </View>
             ))
           )}
@@ -1247,11 +1335,17 @@ export default function EvidenciaOrden() {
                             style={[
                               styles.opCheckItem,
                               checked && styles.opCheckItemActive,
+                              isLockedByStatus && styles.opCheckItemDisabled,
                             ]}
                             activeOpacity={0.85}
                             onPress={() => {
-                              if (esPendienteFirma0400 || esFinalizada0300)
+                              if (
+                                esPendienteFirma0400 ||
+                                esFinalizada0300 ||
+                                esCartaNoMantto0600
+                              ) {
                                 return;
+                              }
 
                               setCheckedMap((prev) => {
                                 const next = { ...(prev || {}) };
@@ -1263,7 +1357,7 @@ export default function EvidenciaOrden() {
                               });
                             }}
                           >
-                            {!esPendienteFirma0400 && !esFinalizada0300 && (
+                            {!esPendienteFirma0400 && !isLockedByStatus && (
                               <Ionicons
                                 name={checked ? "checkbox" : "square-outline"}
                                 size={22}
@@ -1281,6 +1375,18 @@ export default function EvidenciaOrden() {
                                   Estatus: pendiente de firma
                                 </Text>
                               )}
+
+                              {esCartaNoMantto0600 && (
+                                <Text style={styles.opStatusText}>
+                                  Estatus: Carta No Mantto
+                                </Text>
+                              )}
+
+                              {esFinalizada0300 && (
+                                <Text style={styles.opStatusText}>
+                                  Estatus: finalizada
+                                </Text>
+                              )}
                             </View>
                           </TouchableOpacity>
                         );
@@ -1296,9 +1402,9 @@ export default function EvidenciaOrden() {
         <TouchableOpacity
           style={[
             styles.saveBtn,
-            (guardando || esFinalizada0300) && styles.saveBtnDisabled,
+            (guardando || isLockedByStatus) && styles.saveBtnDisabled,
           ]}
-          disabled={guardando || esFinalizada0300}
+          disabled={guardando || isLockedByStatus}
           onPress={enviarEvidencia}
           activeOpacity={0.9}
         >
@@ -1306,9 +1412,13 @@ export default function EvidenciaOrden() {
             <ActivityIndicator color="#fff" />
           ) : (
             <Text style={styles.saveText}>
-              {esPendienteFirma0400
-                ? "Enviar archivo de finalización"
-                : "Enviar Evidencias y Finalizar"}
+              {esCartaNoMantto0600
+                ? "Orden Carta No Mantto"
+                : esFinalizada0300
+                  ? "Orden finalizada"
+                  : esPendienteFirma0400
+                    ? "Enviar archivo de finalización"
+                    : "Enviar Evidencias y Finalizar"}
             </Text>
           )}
         </TouchableOpacity>
@@ -1656,12 +1766,18 @@ const styles = StyleSheet.create({
     backgroundColor: "#EAF4FF",
   },
 
+  opCheckItemDisabled: {
+    opacity: 0.75,
+    backgroundColor: "#F3F4F6",
+  },
+
   opCheckText: {
     flex: 1,
     fontSize: 13,
     fontWeight: "700",
     color: COLORS.title,
   },
+
   onlyFinalizacionBox: {
     flexDirection: "row",
     alignItems: "center",
@@ -1686,5 +1802,30 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: "700",
     color: COLORS.accent,
+  },
+
+  lockedBox: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 10,
+    backgroundColor: "#F1F3F5",
+    borderWidth: 1,
+    borderColor: "#C9CED6",
+    borderRadius: 14,
+    padding: 12,
+    marginBottom: 14,
+  },
+
+  lockedTitle: {
+    fontSize: 14,
+    fontWeight: "900",
+    color: COLORS.title,
+    marginBottom: 2,
+  },
+
+  lockedText: {
+    fontSize: 12,
+    color: COLORS.text,
+    lineHeight: 17,
   },
 });

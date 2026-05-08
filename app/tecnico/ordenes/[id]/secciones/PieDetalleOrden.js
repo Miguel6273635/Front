@@ -1,7 +1,36 @@
 // app/ordenes/[id]/secciones/PieDetalleOrden.js
 import React from "react";
-import { View, Text, TouchableOpacity, Alert, StyleSheet, Platform } from "react-native";
+import {
+  View,
+  Text,
+  TouchableOpacity,
+  Alert,
+  StyleSheet,
+  Platform,
+} from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+
+/**
+ * Reglas actuales de estatus:
+ * - Sin código: Sin empezar
+ * - 0100: PENDIENTE
+ * - 0200: EN PROCESO
+ * - 0300: FINALIZADA
+ * - 0400: PENDIENTE DE FIRMA
+ * - 0600: Carta No Mantto
+ */
+
+function normalizeCode(code) {
+  if (code === null || code === undefined) return "";
+
+  const s = String(code).trim();
+  if (!s) return "";
+
+  const n = parseInt(s, 10);
+  if (Number.isNaN(n)) return s;
+
+  return String(n).padStart(4, "0");
+}
 
 export default function PieDetalleOrden({
   FIORI,
@@ -14,30 +43,43 @@ export default function PieDetalleOrden({
 
   statusCode,
 
-  // ✅ finalize mode
   finalizeMode = false,
   onCancelarFinalizacion,
 
-  // ✅ acciones para 0400
   onGuardarPendiente,
   onAgregarFirma,
   hasSelectedOps = false,
 
-  // ✅ NUEVO: para hacerlo sticky desde afuera
   styleOverride,
 }) {
-  if (isNoMant) return null;
+  const status = normalizeCode(statusCode);
 
-  const status = String(statusCode || "").trim();
+  const isCartaNoMantto0600 = status === "0600";
   const isSinEmpezar = !status;
   const isPendiente0100 = status === "0100";
-  const isFinalizadaReal = status === "0300" || status === "0500";
+  const isEnProceso0200 = status === "0200";
+  const isFinalizada0300 = status === "0300";
+  const isPendienteFirma0400 = status === "0400";
 
-  // Solo técnico
-  if (userRolId !== 3) return null;
+  // Carta No Mantto ya solo se identifica con 0600.
+  if (isCartaNoMantto0600) return null;
 
-  // Bloqueos
-  if (isFinalizadaReal || isSinEmpezar || isPendiente0100) return null;
+  // Compatibilidad temporal por si llega cache viejo marcado como NO_MANTENIMIENTO.
+  // Cuando confirmes que todo viene como 0600, puedes quitar esta línea.
+  if (!!isNoMant) return null;
+
+  // Solo técnico.
+  if (Number(userRolId) !== 3) return null;
+
+  // Bloqueos:
+  // - Sin empezar: no puede finalizar.
+  // - Pendiente 0100: todavía no puede finalizar.
+  // - Finalizada 0300: ya no puede modificar.
+  if (isSinEmpezar || isPendiente0100 || isFinalizada0300) return null;
+
+  // Seguridad extra:
+  // Solo debería aparecer para 0200 o 0400.
+  if (!isEnProceso0200 && !isPendienteFirma0400) return null;
 
   const confirmCancel = () => {
     Alert.alert(
@@ -45,24 +87,27 @@ export default function PieDetalleOrden({
       "Se quitarán los checks marcados. El cronómetro seguirá normal. ¿Deseas continuar?",
       [
         { text: "No", style: "cancel" },
-        { text: "Sí, cancelar", style: "destructive", onPress: () => onCancelarFinalizacion?.() },
-      ]
+        {
+          text: "Sí, cancelar",
+          style: "destructive",
+          onPress: () => onCancelarFinalizacion?.(),
+        },
+      ],
     );
   };
 
-  const disabledBySelection = !hasSelectedOps || finishingOrder;
+  const disabledBySelection = !hasSelectedOps || !!finishingOrder;
 
   const finishLabel = finishingOrder
     ? "Preparando…"
-    : status === "0400"
-    ? "Pendiente de firma (continuar)"
-    : "Finalizar orden";
+    : isPendienteFirma0400
+      ? "Pendiente de firma (continuar)"
+      : "Finalizar orden";
 
   return (
     <View style={[local.container, styleOverride]}>
       {finalizeMode ? (
         <View style={{ gap: 10 }}>
-          {/* Guardar pendiente (0400) */}
           <ActionButton
             icon="save-outline"
             label="Guardar pendiente de firma"
@@ -74,17 +119,18 @@ export default function PieDetalleOrden({
             ]}
           />
 
-          {/* Agregar firma */}
           <ActionButton
             icon="create-outline"
             label="Agregar firma del cliente"
             onPress={onAgregarFirma}
             disabled={disabledBySelection}
-            style={[{ backgroundColor: "#0B8457" }, disabledBySelection && local.disabled]}
+            style={[
+              { backgroundColor: "#0B8457" },
+              disabledBySelection && local.disabled,
+            ]}
           />
 
-          {/* Cancelar finalize mode (NO mostrar si ya está en 0400) */}
-          {status !== "0400" ? (
+          {!isPendienteFirma0400 ? (
             <ActionButton
               icon="close-circle-outline"
               label="Cancelar finalización"
@@ -103,7 +149,10 @@ export default function PieDetalleOrden({
           label={finishLabel}
           onPress={onFinalizarOrden}
           disabled={!!finishingOrder}
-          style={[{ backgroundColor: "#0B8457" }, finishingOrder && local.disabled]}
+          style={[
+            { backgroundColor: "#0B8457" },
+            finishingOrder && local.disabled,
+          ]}
         />
       )}
     </View>
@@ -128,7 +177,7 @@ function ActionButton({ icon, label, onPress, disabled, style }) {
 
 const local = StyleSheet.create({
   container: {
-    paddingTop: 8, // ✅ ya no usamos marginBottom porque ahora es sticky
+    paddingTop: 8,
   },
 
   btn: {

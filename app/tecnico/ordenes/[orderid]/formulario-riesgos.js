@@ -418,7 +418,7 @@ export default function FormularioRiesgosScreen() {
   const sanitize = (s) => (s || "").replace(/\s/g, "");
 
   const EQUIPO_TIPO_URL_BASE =
-    "https://my-node-api-qas-01.cfapps.us10-001.hana.ondemand.com";
+    "https://my-node-api-pro-01.cfapps.us10-001.hana.ondemand.com";
 
   function mapEqartToTipo(eqartRaw) {
     const v = String(eqartRaw || "").toUpperCase().trim();

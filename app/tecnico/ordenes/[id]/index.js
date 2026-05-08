@@ -598,11 +598,18 @@ function extractCodes(raw) {
 function pickCurrentStatusCode(orden) {
   const codes = extractCodes(orden?.userstatus ?? "");
   const apiCode = normalizeCode(orden?.estatus_code ?? "");
+
   const all = Array.from(
     new Set([...(codes || []), ...(apiCode ? [apiCode] : [])]),
   );
+
+  // Prioridad de los únicos estatus válidos actuales.
+  if (all.includes("0600")) return "0600";
   if (all.includes("0400")) return "0400";
+  if (all.includes("0300")) return "0300";
   if (all.includes("0200")) return "0200";
+  if (all.includes("0100")) return "0100";
+
   return apiCode || codes[0] || "";
 }
 
@@ -654,13 +661,14 @@ function isValidEmail(email) {
 }
 
 function resolveStatusLabelFromCode(code, fallbackLabel = "") {
-  const c = String(code || "").trim();
+  const c = normalizeCode(code);
 
+  if (!c) return "Sin empezar";
   if (c === "0100") return "PENDIENTE";
-  if (c === "0200") return "PROCESO";
+  if (c === "0200") return "EN PROCESO";
   if (c === "0300") return "FINALIZADA";
   if (c === "0400") return "PENDIENTE DE FIRMA";
-  if (c === "0500") return "FINALIZADA C/PENDIENTES";
+  if (c === "0600") return "Carta No Mantto";
 
   return String(fallbackLabel || c || "—").trim();
 }
@@ -876,11 +884,18 @@ export default function DetalleOrden() {
       );
 
   const statusTipo = String(orden?.estatus_tipo || "").toUpperCase();
-  const isNoMant = statusTipo === "NO_MANTENIMIENTO";
+
+  // Nueva regla:
+  // Carta No Mantto solo debe identificarse por 0600.
+  // Dejamos statusTipo como apoyo temporal por si viene de cache viejo.
+  const isNoMant =
+    statusCode === "0600" || statusTipo === "NO_MANTENIMIENTO";
+
   const isOrderSinEmpezar = !statusCode;
   const isOrderPendiente0100 = statusCode === "0100";
+
   const isOrderFinishedReal =
-    !!orden?.isFinal || ["0300", "0500"].includes(statusCode);
+    statusCode === "0300" || statusCode === "0600" || !!orden?.isFinal;
   const isPending0400 =
     statusCode === "0400" || String(statusCode).includes("0400");
 

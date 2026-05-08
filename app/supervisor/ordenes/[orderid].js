@@ -1,3 +1,4 @@
+// app/supervisor/ordenes/[orderid].js
 import React, { useEffect, useMemo, useState } from "react";
 import {
   View,
@@ -39,9 +40,6 @@ const COLORS = {
   firmaBg: "#EAF4FF",
   firmaBorder: "#8EC5FF",
 
-  finalPendBg: "#EAF4FF",
-  finalPendBorder: "#7FB3FF",
-
   noMantBg: "#F1F3F5",
   noMantBorder: "#C9CED6",
 
@@ -50,7 +48,7 @@ const COLORS = {
 };
 
 /* ======================
-   ✅ Helpers SAP Date (UTC-safe)
+   Helpers SAP Date
    ====================== */
 const sapDateToMs = (value) => {
   if (value === null || value === undefined) return null;
@@ -63,6 +61,7 @@ const sapDateToMs = (value) => {
   if (m) {
     const ms = Number(m[1]);
     const off = m[2];
+
     if (!off) return ms;
 
     const sign = off.startsWith("-") ? -1 : 1;
@@ -87,32 +86,89 @@ const formatDateUTC = (value) => {
   const dd = String(d.getUTCDate()).padStart(2, "0");
   const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
   const yyyy = d.getUTCFullYear();
+
   return `${dd}/${mm}/${yyyy}`;
 };
 
 /* =========================
-   ✅ Reglas Userstatus
+   Reglas Userstatus
    ========================= */
 function normalizeCode(code) {
   if (code === null || code === undefined) return "";
+
   const s = String(code).trim();
   if (!s) return "";
+
   const n = parseInt(s, 10);
   if (Number.isNaN(n)) return s;
+
   return String(n).padStart(4, "0");
 }
 
-function isNoManttoCode(code) {
-  const n = parseInt(code, 10);
-  return !Number.isNaN(n) && n >= 1 && n <= 11;
+function extractCodes(raw) {
+  if (!raw) return [];
+
+  const s = String(raw).trim();
+  if (!s) return [];
+
+  const matches = s.match(/\d{1,4}/g) || [];
+
+  const codes = matches
+    .map((x) => normalizeCode(x))
+    .filter((x) => /^\d{4}$/.test(x));
+
+  return Array.from(new Set(codes));
 }
 
-const PRIORITY = ["0500", "0400", "0300", "0200", "0100"];
+const STATUS_META = {
+  "0100": {
+    label: "PENDIENTE",
+    type: "pendiente",
+    color: "#D64545",
+    bgColor: COLORS.pendienteBg,
+    borderColor: COLORS.pendienteBorder,
+  },
+  "0200": {
+    label: "EN PROCESO",
+    type: "proceso",
+    color: "#D49C00",
+    bgColor: COLORS.procesoBg,
+    borderColor: COLORS.procesoBorder,
+  },
+  "0300": {
+    label: "FINALIZADA",
+    type: "final",
+    color: "#27AE60",
+    bgColor: COLORS.finalBg,
+    borderColor: COLORS.finalBorder,
+  },
+  "0400": {
+    label: "PENDIENTE DE FIRMA",
+    type: "firma",
+    color: "#2D9CDB",
+    bgColor: COLORS.firmaBg,
+    borderColor: COLORS.firmaBorder,
+  },
+  "0600": {
+    label: "Carta No Mantto",
+    type: "no_mantto",
+    color: "#7A869A",
+    bgColor: COLORS.noMantBg,
+    borderColor: COLORS.noMantBorder,
+  },
+};
 
-function resolveUserstatus(rawUserstatus, catalogMap = {}, itemFromApi = null) {
-  const code = normalizeCode(rawUserstatus || itemFromApi?.estatus_code);
+const PRIORITY = ["0600", "0400", "0300", "0200", "0100"];
 
-  if (!code) {
+function resolveUserstatus(rawUserstatus, _catalogMap = {}, itemFromApi = null) {
+  const rawCodes = extractCodes(rawUserstatus);
+  const apiCode = normalizeCode(itemFromApi?.estatus_code);
+
+  const codes = Array.from(
+    new Set([...(rawCodes || []), ...(apiCode ? [apiCode] : [])]),
+  );
+
+  if (!codes.length) {
     return {
       code: "",
       label: "Sin empezar",
@@ -120,109 +176,45 @@ function resolveUserstatus(rawUserstatus, catalogMap = {}, itemFromApi = null) {
       color: "#6A7381",
       bgColor: COLORS.unknownBg,
       borderColor: COLORS.unknownBorder,
+      rawCodes: [],
     };
   }
 
   for (const p of PRIORITY) {
-    if (code === p) {
-      if (p === "0100") {
-        return {
-          code: p,
-          label: "PENDIENTE",
-          type: "pendiente",
-          color: "#D64545",
-          bgColor: COLORS.pendienteBg,
-          borderColor: COLORS.pendienteBorder,
-        };
-      }
-      if (p === "0200") {
-        return {
-          code: p,
-          label: "PROCESO",
-          type: "proceso",
-          color: "#D49C00",
-          bgColor: COLORS.procesoBg,
-          borderColor: COLORS.procesoBorder,
-        };
-      }
-      if (p === "0300") {
-        return {
-          code: p,
-          label: "FINALIZADA",
-          type: "final",
-          color: "#27AE60",
-          bgColor: COLORS.finalBg,
-          borderColor: COLORS.finalBorder,
-        };
-      }
-      if (p === "0400") {
-        return {
-          code: p,
-          label: "PENDIENTE DE FIRMA",
-          type: "firma",
-          color: "#2D9CDB",
-          bgColor: COLORS.firmaBg,
-          borderColor: COLORS.firmaBorder,
-        };
-      }
-      if (p === "0500") {
-        return {
-          code: p,
-          label: "FINALIZADA C/PENDIENTES",
-          type: "final_pend",
-          color: "#2D9CDB",
-          bgColor: COLORS.finalPendBg,
-          borderColor: COLORS.finalPendBorder,
-        };
-      }
+    if (codes.includes(p)) {
+      return {
+        code: p,
+        ...STATUS_META[p],
+        rawCodes: codes,
+      };
     }
   }
 
-  if (code === "0012") {
-    return {
-      code,
-      label: catalogMap?.["0012"] || "Sin empezar",
-      type: "start",
-      color: "#6A7381",
-      bgColor: COLORS.unknownBg,
-      borderColor: COLORS.unknownBorder,
-    };
-  }
-
-  if (isNoManttoCode(code)) {
-    const cause = catalogMap?.[code] || `No mantenimiento (${code})`;
-    return {
-      code,
-      label: cause,
-      type: "no_mantto",
-      color: "#7A869A",
-      bgColor: COLORS.noMantBg,
-      borderColor: COLORS.noMantBorder,
-    };
-  }
-
   return {
-    code,
-    label: catalogMap?.[code] || `Estatus ${code}`,
+    code: codes[0],
+    label: `Estatus ${codes.join(", ")}`,
     type: "unknown",
     color: "#6A7381",
     bgColor: COLORS.unknownBg,
     borderColor: COLORS.unknownBorder,
+    rawCodes: codes,
   };
 }
 
 /* ======================
-   ✅ Normaliza detalle
+   Normaliza detalle
    ====================== */
 function normalizeDetalle(det) {
   if (!det) return null;
 
   const orderid = det.orderid ?? det.Orderid ?? "";
   const equipment = det.equipment ?? det.Equipment ?? "";
+
   const nombre_orden =
     det.nombre_orden ?? det.ShortText ?? det.order_type ?? det.OrderType ?? "";
 
   const userstatus = det.userstatus ?? det.Userstatus ?? "";
+  const estatus_code = det.estatus_code ?? det.EstatusCode ?? "";
 
   const startRaw =
     det.start_date ??
@@ -248,6 +240,7 @@ function normalizeDetalle(det) {
     equipment: String(equipment),
     nombre_orden: String(nombre_orden || "—"),
     userstatus: String(userstatus || ""),
+    estatus_code: String(estatus_code || ""),
     start_date: sapDateToMs(startRaw),
     finish_date: sapDateToMs(finishRaw),
   };
@@ -275,10 +268,12 @@ export default function DetalleOrdenSupervisor() {
       setOperaciones(Array.isArray(ops) ? ops : []);
     } catch (err) {
       console.error("Error supervisor detalle:", err?.response?.data || err);
+
       setErrorMsg(
         err?.response?.data?.error ||
           "No se pudo cargar el detalle de la orden.",
       );
+
       setData(null);
       setOperaciones([]);
     } finally {
@@ -295,12 +290,24 @@ export default function DetalleOrdenSupervisor() {
     return resolveUserstatus(data?.userstatus ?? "", {}, data);
   }, [data]);
 
+  const canSendEvidence = useMemo(() => {
+    if (!headerStatus) return false;
+
+    // No se permite evidencia si ya está finalizada o Carta No Mantto.
+    if (headerStatus.type === "final") return false;
+    if (headerStatus.type === "no_mantto") return false;
+
+    return true;
+  }, [headerStatus]);
+
   if (loading) {
     return (
       <View style={styles.container}>
         <Header title="Detalle de orden" />
+
         <View style={styles.centerBody}>
           <ActivityIndicator size="large" color={COLORS.accent} />
+
           <Text style={{ marginTop: 10, color: COLORS.muted }}>
             Cargando detalle…
           </Text>
@@ -313,6 +320,7 @@ export default function DetalleOrdenSupervisor() {
     return (
       <View style={styles.container}>
         <Header title="Detalle de orden" />
+
         <View style={styles.errorWrap}>
           <Text style={styles.errorText}>
             {errorMsg || "Orden no encontrada."}
@@ -337,11 +345,11 @@ export default function DetalleOrdenSupervisor() {
           <Text style={styles.inlineBackText}>Volver a lista</Text>
         </TouchableOpacity>
 
-        {/* Encabezado */}
         <View style={styles.card}>
           <View style={styles.cardHeaderRow}>
             <View style={{ flex: 1 }}>
               <Text style={styles.orderIdText}>Orden #{data.orderid}</Text>
+
               <Text style={styles.orderTypeText}>
                 {data.nombre_orden || "—"}
               </Text>
@@ -362,12 +370,40 @@ export default function DetalleOrdenSupervisor() {
                   { backgroundColor: headerStatus.color },
                 ]}
               />
-              <Text style={styles.statusPillText}>
-                {headerStatus.label}
-                {headerStatus.code ? ` (${headerStatus.code})` : ""}
-              </Text>
+
+              <Text style={styles.statusPillText}>{headerStatus.label}</Text>
             </View>
           </View>
+
+          {headerStatus.type === "no_mantto" ? (
+            <View style={styles.infoBanner}>
+              <Ionicons
+                name="document-text-outline"
+                size={18}
+                color={headerStatus.color}
+              />
+
+              <Text style={styles.infoBannerText}>
+                Esta orden está marcada como Carta No Mantto. Las operaciones se
+                muestran solo como referencia.
+              </Text>
+            </View>
+          ) : null}
+
+          {headerStatus.type === "final" ? (
+            <View style={styles.infoBanner}>
+              <Ionicons
+                name="checkmark-done-outline"
+                size={18}
+                color={headerStatus.color}
+              />
+
+              <Text style={styles.infoBannerText}>
+                Esta orden ya está finalizada. Las operaciones se muestran solo
+                como referencia.
+              </Text>
+            </View>
+          ) : null}
 
           <View style={styles.row}>
             <Ionicons name="cube-outline" size={16} color={COLORS.muted} />
@@ -392,7 +428,6 @@ export default function DetalleOrdenSupervisor() {
           </View>
         </View>
 
-        {/* Operaciones */}
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>Operaciones</Text>
 
@@ -411,7 +446,9 @@ export default function DetalleOrdenSupervisor() {
                 op?.Userstatus ??
                 op?.estatus_code ??
                 op?.estatus ??
-                "0100";
+                data?.estatus_code ??
+                data?.userstatus ??
+                "";
 
               const opStatus = resolveUserstatus(opRawStatus, {}, op);
 
@@ -434,13 +471,7 @@ export default function DetalleOrdenSupervisor() {
                         {op?.Description || "Sin descripción"}
                       </Text>
 
-                      <View
-                        style={{
-                          marginTop: 6,
-                          flexDirection: "row",
-                          alignItems: "center",
-                        }}
-                      >
+                      <View style={styles.opBadgeRow}>
                         <View
                           style={[
                             styles.opBadge,
@@ -457,7 +488,6 @@ export default function DetalleOrdenSupervisor() {
                             ]}
                           >
                             {opStatus.label}
-                            {opStatus.code ? ` (${opStatus.code})` : ""}
                           </Text>
                         </View>
                       </View>
@@ -475,25 +505,44 @@ export default function DetalleOrdenSupervisor() {
           )}
         </View>
       </ScrollView>
-      {/* 🔥 BOTÓN FLOTANTE EVIDENCIA */}
-      <TouchableOpacity
-        style={styles.fab}
-        onPress={() =>
-          router.push(`/supervisor/ordenes/evidencia/${data.orderid}`)
-        }
-      >
-        <Ionicons name="camera" size={22} color="#fff" />
-      </TouchableOpacity>
+
+      {canSendEvidence ? (
+        <TouchableOpacity
+          style={styles.fab}
+          onPress={() =>
+            router.push(`/supervisor/ordenes/evidencia/${data.orderid}`)
+          }
+          activeOpacity={0.9}
+        >
+          <Ionicons name="camera" size={22} color="#fff" />
+        </TouchableOpacity>
+      ) : null}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: COLORS.pageBg },
-  scrollContent: { padding: 16, paddingBottom: 80 },
+  container: {
+    flex: 1,
+    backgroundColor: COLORS.pageBg,
+  },
 
-  inlineBack: { flexDirection: "row", alignItems: "center", marginBottom: 8 },
-  inlineBackText: { marginLeft: 4, color: COLORS.accent, fontWeight: "600" },
+  scrollContent: {
+    padding: 16,
+    paddingBottom: 80,
+  },
+
+  inlineBack: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 8,
+  },
+
+  inlineBackText: {
+    marginLeft: 4,
+    color: COLORS.accent,
+    fontWeight: "600",
+  },
 
   card: {
     backgroundColor: COLORS.cardBg,
@@ -509,7 +558,9 @@ const styles = StyleSheet.create({
         shadowRadius: 5,
         shadowOffset: { width: 0, height: 2 },
       },
-      android: { elevation: 1 },
+      android: {
+        elevation: 1,
+      },
     }),
   },
 
@@ -518,8 +569,18 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginBottom: 10,
   },
-  orderIdText: { fontSize: 18, fontWeight: "700", color: COLORS.title },
-  orderTypeText: { fontSize: 14, color: COLORS.text, marginTop: 2 },
+
+  orderIdText: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: COLORS.title,
+  },
+
+  orderTypeText: {
+    fontSize: 14,
+    color: COLORS.text,
+    marginTop: 2,
+  },
 
   statusPill: {
     flexDirection: "row",
@@ -528,9 +589,41 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     paddingHorizontal: 10,
     paddingVertical: 4,
+    maxWidth: "45%",
   },
-  statusDot: { width: 10, height: 10, borderRadius: 5, marginRight: 6 },
-  statusPillText: { fontSize: 12, fontWeight: "600", color: COLORS.title },
+
+  statusDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    marginRight: 6,
+  },
+
+  statusPillText: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: COLORS.title,
+    flexShrink: 1,
+  },
+
+  infoBanner: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 8,
+    backgroundColor: "#F8FAFC",
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderRadius: 12,
+    padding: 10,
+    marginBottom: 10,
+  },
+
+  infoBannerText: {
+    flex: 1,
+    color: COLORS.text,
+    fontSize: 12,
+    lineHeight: 17,
+  },
 
   row: {
     flexDirection: "row",
@@ -538,8 +631,18 @@ const styles = StyleSheet.create({
     marginTop: 6,
     columnGap: 6,
   },
-  rowLabel: { fontSize: 13, color: COLORS.muted, fontWeight: "600" },
-  rowValue: { fontSize: 13, color: COLORS.text },
+
+  rowLabel: {
+    fontSize: 13,
+    color: COLORS.muted,
+    fontWeight: "600",
+  },
+
+  rowValue: {
+    fontSize: 13,
+    color: COLORS.text,
+    flexShrink: 1,
+  },
 
   sectionTitle: {
     fontSize: 15,
@@ -569,6 +672,12 @@ const styles = StyleSheet.create({
     color: COLORS.title,
   },
 
+  opBadgeRow: {
+    marginTop: 6,
+    flexDirection: "row",
+    alignItems: "center",
+  },
+
   opBadge: {
     alignSelf: "flex-start",
     borderWidth: 1,
@@ -595,12 +704,14 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     paddingHorizontal: 24,
   },
+
   errorText: {
     textAlign: "center",
     fontSize: 14,
     color: COLORS.danger,
     marginBottom: 12,
   },
+
   backBtn: {
     flexDirection: "row",
     alignItems: "center",
@@ -609,7 +720,12 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     borderRadius: 20,
   },
-  backBtnText: { color: "#fff", marginLeft: 6, fontWeight: "600" },
+
+  backBtnText: {
+    color: "#fff",
+    marginLeft: 6,
+    fontWeight: "600",
+  },
 
   centerBody: {
     flex: 1,
@@ -629,13 +745,14 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
 
-    // sombra iOS
     shadowColor: "#000",
     shadowOpacity: 0.3,
     shadowRadius: 4,
-    shadowOffset: { width: 0, height: 2 },
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
 
-    // sombra Android
     elevation: 6,
   },
 });

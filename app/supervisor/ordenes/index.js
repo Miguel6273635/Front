@@ -93,10 +93,10 @@ const STATUS_FILTER_OPTIONS = [
   { key: "all", label: "Todos" },
   { key: "start", label: "Sin empezar" },
   { key: "pendiente", label: "Pendiente" },
-  { key: "proceso", label: "Proceso" },
+  { key: "proceso", label: "En proceso" },
   { key: "final", label: "Finalizada" },
   { key: "firma", label: "Pendiente de firma" },
-  { key: "no_mantto", label: "No mantenimiento" },
+  { key: "no_mantto", label: "Carta No Mantto" },
 ];
 
 function getStatusFilterLabel(value) {
@@ -151,7 +151,7 @@ async function fetchStatusCatalogMap() {
   const map = {};
 
   for (const r of results) {
-    const code = String(r?.Status1 || "").trim();
+    const code = normalizeCode(r?.Status1 || "");
     const label = String(r?.Status2 || "").trim();
     if (code) map[code] = label || code;
   }
@@ -164,91 +164,95 @@ async function fetchStatusCatalogMap() {
    ========================= */
 function normalizeCode(code) {
   if (code === null || code === undefined) return "";
+
   const s = String(code).trim();
   if (!s) return "";
+
   const n = parseInt(s, 10);
   if (Number.isNaN(n)) return s;
+
   return String(n).padStart(4, "0");
 }
 
-function isNoManttoCode(code) {
-  const n = parseInt(code, 10);
-  return !Number.isNaN(n) && n >= 1 && n <= 11;
+function extractCodes(raw) {
+  if (!raw) return [];
+
+  const s = String(raw).trim();
+  if (!s) return [];
+
+  const matches = s.match(/\d{1,4}/g) || [];
+
+  const codes = matches
+    .map((x) => normalizeCode(x))
+    .filter((x) => /^\d{4}$/.test(x));
+
+  return Array.from(new Set(codes));
 }
 
-const PRIORITY = ["0500", "0400", "0300", "0200", "0100"];
+const STATUS_META = {
+  "0100": {
+    label: "PENDIENTE",
+    type: "pendiente",
+    color: "#D64545",
+  },
+  "0200": {
+    label: "EN PROCESO",
+    type: "proceso",
+    color: "#D9A400",
+  },
+  "0300": {
+    label: "FINALIZADA",
+    type: "final",
+    color: "#28B463",
+  },
+  "0400": {
+    label: "PENDIENTE DE FIRMA",
+    type: "firma",
+    color: "#2D9CDB",
+  },
+  "0600": {
+    label: "Carta No Mantto",
+    type: "no_mantto",
+    color: "#8E8E93",
+  },
+};
 
-function resolveUserstatus(rawUserstatus, catalogMap = {}) {
-  const code = normalizeCode(rawUserstatus);
+const PRIORITY = ["0600", "0400", "0300", "0200", "0100"];
 
-  if (!code) {
-    return { code: "", label: "Sin empezar", type: "start", color: "#95A0AF" };
-  }
+function resolveUserstatus(rawUserstatus, _catalogMap = {}, itemFromApi = null) {
+  const rawCodes = extractCodes(rawUserstatus);
+  const apiCode = normalizeCode(itemFromApi?.estatus_code);
 
-  for (const p of PRIORITY) {
-    if (code === p) {
-      if (p === "0100") {
-        return {
-          code: p,
-          label: "PENDIENTE",
-          type: "pendiente",
-          color: "#D64545",
-        };
-      }
-      if (p === "0200") {
-        return {
-          code: p,
-          label: "PROCESO",
-          type: "proceso",
-          color: "#D9A400",
-        };
-      }
-      if (p === "0300") {
-        return {
-          code: p,
-          label: "FINALIZADA",
-          type: "final",
-          color: "#28B463",
-        };
-      }
-      if (p === "0400") {
-        return {
-          code: p,
-          label: "PENDIENTE DE FIRMA",
-          type: "firma",
-          color: "#2D9CDB",
-        };
-      }
-      if (p === "0500") {
-        return {
-          code: p,
-          label: "FINALIZADA C/PENDIENTES",
-          type: "final_pend",
-          color: "#2D9CDB",
-        };
-      }
-    }
-  }
+  const codes = Array.from(
+    new Set([...(rawCodes || []), ...(apiCode ? [apiCode] : [])]),
+  );
 
-  if (code === "0012") {
+  if (!codes.length) {
     return {
-      code,
-      label: catalogMap?.["0012"] || "Sin empezar",
+      code: "",
+      label: "Sin empezar",
       type: "start",
       color: "#95A0AF",
+      rawCodes: [],
     };
   }
 
-  if (isNoManttoCode(code)) {
-    const cause = catalogMap?.[code] || "NO MANTENIMIENTO";
-    return { code, label: cause, type: "no_mantto", color: "#8E8E93" };
+  for (const p of PRIORITY) {
+    if (codes.includes(p)) {
+      return {
+        code: p,
+        ...STATUS_META[p],
+        rawCodes: codes,
+      };
+    }
   }
 
   return {
-    code,
-    label: catalogMap?.[code] || `Estatus ${code}`,
+    code: codes[0],
+    label: `Estatus ${codes.join(", ")}`,
     type: "unknown",
     color: "#95A0AF",
+    rawCodes: codes,
   };
 }
 
@@ -273,6 +277,7 @@ function mapOrdenSapToUi(o) {
     id_mecanico: String(o?.IdMecanico ?? ""),
     nombre_mecanico: String(o?.NombreMec ?? ""),
     nombre_cliente: String(o?.NombreCliente ?? ""),
+    estatus_code: String(o?.estatus_code ?? o?.EstatusCode ?? ""),
     _raw: o,
   };
 }
@@ -308,6 +313,7 @@ function normalizeOrdenItem(item) {
       id_mecanico: String(item.id_mecanico ?? item.IdMecanico ?? ""),
       nombre_mecanico: String(item.nombre_mecanico ?? item.NombreMec ?? ""),
       nombre_cliente: String(item.nombre_cliente ?? item.NombreCliente ?? ""),
+      estatus_code: String(item.estatus_code ?? item.EstatusCode ?? ""),
     };
   }
 
@@ -330,10 +336,12 @@ async function prefetchDetallesDeOrdenes(orderIds = []) {
   const ids = unique.slice(0, PREFETCH_LIMIT);
 
   let i = 0;
+
   const worker = async () => {
     while (i < ids.length) {
       const idx = i++;
       const id = ids[idx];
+
       try {
         await fetchOrdenDetalleSupervisor(id);
         await fetchOperacionesSupervisor(id);
@@ -370,10 +378,17 @@ function getCardToneByStatus(st) {
     };
   }
 
-  if (st.type === "firma" || st.type === "final_pend") {
+  if (st.type === "firma") {
     return {
       bg: "#EDF7FF",
       border: "#B8DDF8",
+    };
+  }
+
+  if (st.type === "no_mantto") {
+    return {
+      bg: "#F1F3F5",
+      border: "#C9CED6",
     };
   }
 
@@ -386,7 +401,7 @@ function getCardToneByStatus(st) {
 export default function ListaOrdenesSupervisor() {
   const currentYear = new Date().getFullYear();
 
-  const [yearOptions, setYearOptions] = useState(() => {
+  const [yearOptions] = useState(() => {
     const arr = [];
     for (let y = currentYear + 2; y >= currentYear - 10; y--) {
       arr.push(y);
@@ -459,6 +474,7 @@ export default function ListaOrdenesSupervisor() {
 
     if (dateMode === "weekRange") {
       if (!weekStart || !weekEnd) return { start: null, end: null };
+
       return {
         start: atStartOfDay(weekStart),
         end: atEndOfDay(weekEnd),
@@ -467,6 +483,7 @@ export default function ListaOrdenesSupervisor() {
 
     if (dateMode === "month") {
       const ref = new Date(monthYear.year, monthYear.month, 1);
+
       return {
         start: startOfMonth(ref),
         end: endOfMonth(ref),
@@ -490,16 +507,23 @@ export default function ListaOrdenesSupervisor() {
 
   const activeRangeText = useMemo(() => {
     if (dateMode === "all") return `Todas del año ${yearOnly}`;
-    if (dateMode === "day")
+
+    if (dateMode === "day") {
       return `Día: ${atStartOfDay(dayRef).toLocaleDateString()}`;
+    }
+
     if (dateMode === "weekRange") {
       const a = weekStart ? atStartOfDay(weekStart).toLocaleDateString() : "—";
       const b = weekEnd ? atEndOfDay(weekEnd).toLocaleDateString() : "—";
       return `Semana (rango): ${a} → ${b}`;
     }
-    if (dateMode === "month")
+
+    if (dateMode === "month") {
       return `Mes: ${MONTHS[monthYear.month]} ${monthYear.year}`;
+    }
+
     if (dateMode === "year") return `Año: ${yearOnly}`;
+
     return "";
   }, [dateMode, dayRef, weekStart, weekEnd, monthYear, yearOnly]);
 
@@ -513,6 +537,7 @@ export default function ListaOrdenesSupervisor() {
 
         setLoadingCatalog(true);
         const map = await fetchStatusCatalogMap();
+
         if (mounted) setStatusCatalog(map || {});
       } catch (e) {
         console.log("[CATALOGO STATUS ERROR]", e?.message || e);
@@ -527,6 +552,7 @@ export default function ListaOrdenesSupervisor() {
   }, []);
 
   const didPrefetchRef = useRef(false);
+
   useEffect(() => {
     if (didPrefetchRef.current) return;
     didPrefetchRef.current = true;
@@ -534,10 +560,11 @@ export default function ListaOrdenesSupervisor() {
     (async () => {
       try {
         const t = new Date();
-        const currentYear = t.getFullYear();
+        const currentYearNow = t.getFullYear();
+
         await fetchOrdenesSupervisor(
-          ymd(startOfYear(currentYear)),
-          ymd(endOfYear(currentYear)),
+          ymd(startOfYear(currentYearNow)),
+          ymd(endOfYear(currentYearNow)),
           "range",
         );
       } catch {}
@@ -572,10 +599,13 @@ export default function ListaOrdenesSupervisor() {
       setOrdenes(normalized);
 
       const online = await isOnline();
+
       if (online && normalized.length) {
         const prefetchKey = `${sStr}|${eStr}|yearload|${normalized.length}`;
+
         if (lastPrefetchKeyRef.current !== prefetchKey) {
           lastPrefetchKeyRef.current = prefetchKey;
+
           const ids = normalized.map((x) => x?.orderid).filter(Boolean);
           prefetchDetallesDeOrdenes(ids);
         }
@@ -587,6 +617,7 @@ export default function ListaOrdenesSupervisor() {
         "Error al cargar órdenes supervisor:",
         error?.message || error,
       );
+
       setOrdenes([]);
     } finally {
       if (currentRequestId === requestIdRef.current) {
@@ -616,7 +647,9 @@ export default function ListaOrdenesSupervisor() {
       const st = resolveUserstatus(
         o?.userstatus ?? o?.Userstatus,
         statusCatalog,
+        o,
       );
+
       const stLabel = String(st?.label ?? "").toLowerCase();
       const stCode = String(st?.code ?? "").toLowerCase();
 
@@ -674,6 +707,7 @@ export default function ListaOrdenesSupervisor() {
     const st = resolveUserstatus(
       item?.userstatus ?? item?.Userstatus,
       statusCatalog,
+      item,
     );
 
     const startMs =
@@ -690,7 +724,6 @@ export default function ListaOrdenesSupervisor() {
 
     const showBlockedMessage =
       st.type === "final" ||
-      st.type === "final_pend" ||
       st.type === "firma" ||
       st.type === "pendiente" ||
       st.type === "no_mantto";
@@ -951,6 +984,7 @@ export default function ListaOrdenesSupervisor() {
                 setShowDayPicker(false);
                 return;
               }
+
               if (date) setDayRef(date);
               setShowDayPicker(Platform.OS === "ios");
             }}
@@ -967,10 +1001,12 @@ export default function ListaOrdenesSupervisor() {
                 setShowWeekStartPicker(false);
                 return;
               }
+
               if (date) {
                 setWeekStart(date);
                 if (Platform.OS !== "ios") setShowWeekEndPicker(true);
               }
+
               setShowWeekStartPicker(Platform.OS === "ios");
             }}
           />
@@ -987,6 +1023,7 @@ export default function ListaOrdenesSupervisor() {
                 setShowWeekEndPicker(false);
                 return;
               }
+
               if (date) setWeekEnd(date);
               setShowWeekEndPicker(Platform.OS === "ios");
             }}
@@ -1615,42 +1652,6 @@ const styles = StyleSheet.create({
 
   monthCellTextActive: {
     color: "#fff",
-  },
-
-  yearRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-  },
-
-  yearNav: {
-    width: 44,
-    height: 36,
-    borderRadius: 10,
-    backgroundColor: "#FFFFFF",
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-
-  yearNavText: {
-    fontSize: 18,
-    fontWeight: "900",
-    color: COLORS.accent,
-  },
-
-  doneBtn: {
-    marginTop: 10,
-    backgroundColor: COLORS.accent,
-    paddingVertical: 10,
-    borderRadius: 10,
-    alignItems: "center",
-  },
-
-  doneBtnText: {
-    color: "#fff",
-    fontWeight: "900",
   },
 
   yearListModalCard: {

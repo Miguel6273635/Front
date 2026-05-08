@@ -1,3 +1,4 @@
+// app/tecnico/no_mantenimiento/detalles.js
 import React, { useEffect, useMemo, useState, useCallback } from "react";
 import {
   View,
@@ -15,7 +16,6 @@ import Header from "../../../src/components/Header";
 import api from "../../../src/services/api";
 import { useAuth } from "../../../src/context/AuthContext";
 
-// ✅ reutilizamos servicios YA EXISTENTES
 import {
   fetchOperacionesSupervisor,
   fetchComponentesPorOperacion,
@@ -32,16 +32,62 @@ const COLORS = {
   muted: "#9AA5B1",
 };
 
+const ESTATUS_CARTA_NO_MANTTO = "0600";
+const ESTATUS_CARTA_NO_MANTTO_LABEL = "Carta No Mantto";
+
 const safeStr = (v) => (v == null ? "" : String(v));
 
 const parseSapDate = (v) => {
   if (!v) return null;
+
   const m = String(v).match(/\/Date\((\-?\d+)\)\//);
   if (!m) return null;
+
   const ms = Number(m[1]);
   if (!Number.isFinite(ms)) return null;
+
   return new Date(ms);
 };
+
+function normalizeCode(code) {
+  const s = safeStr(code).trim();
+  if (!s) return "";
+
+  const n = parseInt(s, 10);
+  if (Number.isNaN(n)) return s;
+
+  return String(n).padStart(4, "0");
+}
+
+function extractStatusCodes(userstatusRaw) {
+  const s = safeStr(userstatusRaw).trim();
+  if (!s) return [];
+
+  const matches = s.match(/\d{1,4}/g) || [];
+
+  const codes = matches
+    .map((x) => normalizeCode(x))
+    .filter((x) => /^\d{4}$/.test(x));
+
+  return Array.from(new Set(codes));
+}
+
+function isCartaNoMantto(userstatusRaw, estatusCodeRaw) {
+  const codes = extractStatusCodes(userstatusRaw);
+  const apiCode = normalizeCode(estatusCodeRaw);
+
+  return (
+    codes.includes(ESTATUS_CARTA_NO_MANTTO) ||
+    apiCode === ESTATUS_CARTA_NO_MANTTO
+  );
+}
+
+function formatDateTime(value) {
+  const d = parseSapDate(value);
+  if (!d) return "—";
+
+  return d.toLocaleString();
+}
 
 /* ===================== Screen ===================== */
 export default function TecnicoNoMantenimientoDetalle() {
@@ -49,14 +95,16 @@ export default function TecnicoNoMantenimientoDetalle() {
   const id = safeStr(params?.id).trim();
 
   const { user } = useAuth();
+
   const correo = useMemo(() => {
-    return safeStr(user?.email || user?.correo || user?.upn || user?.username).trim();
+    return safeStr(
+      user?.email || user?.correo || user?.upn || user?.username,
+    ).trim();
   }, [user]);
 
   const [loading, setLoading] = useState(true);
   const [wo, setWo] = useState(null);
 
-  // 🔹 NUEVO: operaciones
   const [operaciones, setOperaciones] = useState([]);
   const [openOps, setOpenOps] = useState({});
   const [componentsByOp, setComponentsByOp] = useState({});
@@ -68,16 +116,26 @@ export default function TecnicoNoMantenimientoDetalle() {
     try {
       setLoading(true);
 
-      // === TU LÓGICA EXISTENTE (NO TOCADA) ===
-      const url = `/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet('${encodeURIComponent(id)}')`;
-      const { data } = await api.get(url, { params: { $format: "json" } });
+      const url = `/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet('${encodeURIComponent(
+        id,
+      )}')`;
+
+      const { data } = await api.get(url, {
+        params: {
+          $format: "json",
+        },
+      });
+
       setWo(data?.d || null);
 
-      // === NUEVO: cargar operaciones ===
       const ops = await fetchOperacionesSupervisor(id);
       setOperaciones(Array.isArray(ops) ? ops : []);
     } catch (e) {
-      console.error("Error detalle No mantenimiento (técnico):", e?.response?.data || e?.message);
+      console.error(
+        "Error detalle Carta No Mantto (técnico):",
+        e?.response?.data || e?.message,
+      );
+
       setWo(null);
       setOperaciones([]);
     } finally {
@@ -90,29 +148,51 @@ export default function TecnicoNoMantenimientoDetalle() {
   }, [fetchDetalle]);
 
   const toggleOperacion = async (op, idx) => {
-    const activity = String(op?.Activity || "").padStart(4, "0");
-    const opId = `${activity}-${idx}`;
+    const activity = String(op?.Activity || op?.activity || "").padStart(
+      4,
+      "0",
+    );
 
+    const opId = `${activity}-${idx}`;
     const willOpen = !openOps[opId];
-    setOpenOps((p) => ({ ...p, [opId]: willOpen }));
+
+    setOpenOps((p) => ({
+      ...p,
+      [opId]: willOpen,
+    }));
 
     if (!willOpen || componentsByOp[activity]) return;
 
     try {
-      setLoadingComponents((p) => ({ ...p, [activity]: true }));
+      setLoadingComponents((p) => ({
+        ...p,
+        [activity]: true,
+      }));
+
       const comps = await fetchComponentesPorOperacion(id, activity);
-      setComponentsByOp((p) => ({ ...p, [activity]: Array.isArray(comps) ? comps : [] }));
+
+      setComponentsByOp((p) => ({
+        ...p,
+        [activity]: Array.isArray(comps) ? comps : [],
+      }));
     } catch (e) {
-      setComponentsByOp((p) => ({ ...p, [activity]: [] }));
+      setComponentsByOp((p) => ({
+        ...p,
+        [activity]: [],
+      }));
     } finally {
-      setLoadingComponents((p) => ({ ...p, [activity]: false }));
+      setLoadingComponents((p) => ({
+        ...p,
+        [activity]: false,
+      }));
     }
   };
 
   if (loading) {
     return (
       <View style={styles.container}>
-        <Header title="Detalle No mantenimiento" />
+        <Header title="Detalle Carta No Mantto" />
+
         <View style={styles.center}>
           <ActivityIndicator size="large" color={COLORS.accent} />
           <Text style={{ marginTop: 8, color: COLORS.text }}>Cargando…</Text>
@@ -124,7 +204,8 @@ export default function TecnicoNoMantenimientoDetalle() {
   if (!wo) {
     return (
       <View style={styles.container}>
-        <Header title="Detalle No mantenimiento" />
+        <Header title="Detalle Carta No Mantto" />
+
         <View style={styles.center}>
           <Text style={{ color: COLORS.text }}>No se encontró la orden.</Text>
         </View>
@@ -132,21 +213,57 @@ export default function TecnicoNoMantenimientoDetalle() {
     );
   }
 
-  const startDate = parseSapDate(wo?.StartDate);
-  const finishDate = parseSapDate(wo?.FinishDate);
+  const startLabel = formatDateTime(wo?.StartDate);
+  const finishLabel = formatDateTime(wo?.FinishDate);
+
+  const userstatus = wo?.Userstatus || wo?.UserStatus || "";
+  const estatusCode =
+    wo?.estatus_code || wo?.EstatusCode || wo?.StatusCode || wo?.Status || "";
+
+  const is0600 = isCartaNoMantto(userstatus, estatusCode);
 
   return (
     <View style={styles.container}>
       <Header title={`Orden ${id}`} />
 
-      <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 110 }}>
-        {/* === TU HEADER EXISTENTE === */}
+      <ScrollView contentContainerStyle={styles.scroll}>
         <Pressable onPress={() => router.back()} style={styles.backRow}>
           <Ionicons name="chevron-back" size={20} color={COLORS.accent} />
           <Text style={styles.backText}>Volver</Text>
         </Pressable>
 
-        {/* === DATOS DE LA ORDEN (NO TOCADO) === */}
+        {!is0600 ? (
+          <View style={styles.warningCard}>
+            <Ionicons name="warning-outline" size={20} color="#B45309" />
+
+            <View style={{ flex: 1 }}>
+              <Text style={styles.warningTitle}>
+                Esta orden no está marcada como Carta No Mantto
+              </Text>
+
+              <Text style={styles.warningText}>
+                Esta vista es solo para órdenes con estatus Carta No Mantto.
+              </Text>
+            </View>
+          </View>
+        ) : (
+          <View style={styles.okCard}>
+            <Ionicons
+              name="document-text-outline"
+              size={20}
+              color="#0B8457"
+            />
+
+            <View style={{ flex: 1 }}>
+              <Text style={styles.okTitle}>{ESTATUS_CARTA_NO_MANTTO_LABEL}</Text>
+
+              <Text style={styles.okText}>
+                Esta orden está marcada como Carta No Mantto.
+              </Text>
+            </View>
+          </View>
+        )}
+
         <View style={styles.card}>
           <Text style={styles.h}>Datos de la orden</Text>
 
@@ -161,21 +278,16 @@ export default function TecnicoNoMantenimientoDetalle() {
           </Text>
 
           <Text style={styles.line}>
-            <Text style={styles.b}>Texto: </Text>
-            {wo?.ShortText || "—"}
-          </Text>
-
-          <Text style={styles.line}>
-            <Text style={styles.b}>Userstatus: </Text>
-            {wo?.Userstatus || "—"}
+            <Text style={styles.b}>Estatus: </Text>
+            {ESTATUS_CARTA_NO_MANTTO_LABEL}
           </Text>
 
           <Text style={[styles.line, { fontSize: 12, marginTop: 8 }]}>
             <Text style={styles.b}>Inicio: </Text>
-            {startDate ? startDate.toLocaleString() : "—"}
+            {startLabel}
             {"  ·  "}
             <Text style={styles.b}>Fin: </Text>
-            {finishDate ? finishDate.toLocaleString() : "—"}
+            {finishLabel}
           </Text>
 
           <Text style={[styles.line, { fontSize: 12, marginTop: 8 }]}>
@@ -184,7 +296,6 @@ export default function TecnicoNoMantenimientoDetalle() {
           </Text>
         </View>
 
-        {/* ===================== NUEVO: OPERACIONES ===================== */}
         <View style={styles.card}>
           <Text style={styles.h}>Operaciones</Text>
 
@@ -194,7 +305,13 @@ export default function TecnicoNoMantenimientoDetalle() {
             </Text>
           ) : (
             operaciones.map((op, idx) => {
-              const activity = String(op?.Activity || "").padStart(4, "0");
+              const activity = String(
+                op?.Activity || op?.activity || "",
+              ).padStart(4, "0");
+
+              const description =
+                op?.Description || op?.description || "Sin descripción";
+
               const opId = `${activity}-${idx}`;
               const isOpen = !!openOps[opId];
 
@@ -207,8 +324,9 @@ export default function TecnicoNoMantenimientoDetalle() {
                   >
                     <View style={{ flex: 1 }}>
                       <Text style={styles.opTitle}>
-                        {activity} — {op?.Description || "Sin descripción"}
+                        {activity} — {description}
                       </Text>
+
                       <Text style={styles.opSub}>
                         Duración: {op?.DurationNormal ?? "—"}{" "}
                         {op?.DurationNormalUnit || ""}
@@ -237,6 +355,7 @@ export default function TecnicoNoMantenimientoDetalle() {
                               {c.Material || "—"}{" "}
                               {c.MatlDesc ? `- ${c.MatlDesc}` : ""}
                             </Text>
+
                             <Text style={styles.compMeta}>
                               Req: {c.RequirementQuantity ?? 0}{" "}
                               {c.RequirementQuantityUnit || ""}
@@ -258,11 +377,80 @@ export default function TecnicoNoMantenimientoDetalle() {
 
 /* ===================== Styles ===================== */
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: COLORS.pageBg },
-  center: { flex: 1, justifyContent: "center", alignItems: "center" },
+  container: {
+    flex: 1,
+    backgroundColor: COLORS.pageBg,
+  },
 
-  backRow: { flexDirection: "row", alignItems: "center", marginBottom: 12 },
-  backText: { color: COLORS.accent, fontWeight: "900" },
+  center: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+
+  scroll: {
+    padding: 16,
+    paddingBottom: 110,
+  },
+
+  backRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 12,
+  },
+
+  backText: {
+    color: COLORS.accent,
+    fontWeight: "900",
+  },
+
+  warningCard: {
+    flexDirection: "row",
+    gap: 10,
+    alignItems: "flex-start",
+    backgroundColor: "#FEF3C7",
+    borderWidth: 1,
+    borderColor: "#F59E0B",
+    borderRadius: 14,
+    padding: 12,
+    marginBottom: 12,
+  },
+
+  warningTitle: {
+    color: "#92400E",
+    fontWeight: "900",
+    fontSize: 13,
+  },
+
+  warningText: {
+    color: "#92400E",
+    fontSize: 12,
+    marginTop: 2,
+  },
+
+  okCard: {
+    flexDirection: "row",
+    gap: 10,
+    alignItems: "flex-start",
+    backgroundColor: "#ECFDF3",
+    borderWidth: 1,
+    borderColor: "#BBF7D0",
+    borderRadius: 14,
+    padding: 12,
+    marginBottom: 12,
+  },
+
+  okTitle: {
+    color: "#166534",
+    fontWeight: "900",
+    fontSize: 13,
+  },
+
+  okText: {
+    color: "#166534",
+    fontSize: 12,
+    marginTop: 2,
+  },
 
   card: {
     backgroundColor: COLORS.cardBg,
@@ -273,11 +461,23 @@ const styles = StyleSheet.create({
     borderColor: COLORS.border,
   },
 
-  h: { fontSize: 15, fontWeight: "900", color: COLORS.title },
-  line: { color: COLORS.text, marginTop: 6, fontSize: 13 },
-  b: { color: COLORS.title, fontWeight: "900" },
+  h: {
+    fontSize: 15,
+    fontWeight: "900",
+    color: COLORS.title,
+  },
 
-  /* Operaciones */
+  line: {
+    color: COLORS.text,
+    marginTop: 6,
+    fontSize: 13,
+  },
+
+  b: {
+    color: COLORS.title,
+    fontWeight: "900",
+  },
+
   opCard: {
     borderWidth: 1,
     borderColor: COLORS.border,
@@ -285,23 +485,49 @@ const styles = StyleSheet.create({
     marginTop: 10,
     overflow: "hidden",
   },
+
   opHeader: {
     flexDirection: "row",
     alignItems: "center",
     padding: 10,
     backgroundColor: "#F5F7FA",
   },
-  opTitle: { fontSize: 14, fontWeight: "700", color: COLORS.title },
-  opSub: { fontSize: 12, color: COLORS.muted, marginTop: 2 },
 
-  opBody: { padding: 10 },
-  opEmpty: { fontStyle: "italic", color: COLORS.muted },
+  opTitle: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: COLORS.title,
+  },
+
+  opSub: {
+    fontSize: 12,
+    color: COLORS.muted,
+    marginTop: 2,
+  },
+
+  opBody: {
+    padding: 10,
+  },
+
+  opEmpty: {
+    fontStyle: "italic",
+    color: COLORS.muted,
+  },
 
   compRow: {
     paddingVertical: 8,
     borderBottomWidth: 1,
     borderBottomColor: COLORS.border,
   },
-  compTitle: { fontSize: 13, fontWeight: "700", color: COLORS.title },
-  compMeta: { fontSize: 12, color: COLORS.muted },
+
+  compTitle: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: COLORS.title,
+  },
+
+  compMeta: {
+    fontSize: 12,
+    color: COLORS.muted,
+  },
 });

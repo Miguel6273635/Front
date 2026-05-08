@@ -15,14 +15,14 @@ import Header from '../../../src/components/Header';
 
 // ====== Datos del menú (tiles) PARA SUPERVISOR ======
 const TILES = [
-  {
+  /*{
     key: 'no_mantenimiento',
     title: 'No mantenimiento',
     subtitle: 'Reprogramar órdenes con no mantenimiento',
     icon: 'calendar-outline',
     onPress: () => router.push('/supervisor/reprogramacionesPlan/opciones/no_mantenimiento'),
   },
-  /*{
+  {
     key: 'operaciones_pendientes',
     title: 'Operaciones pendientes',
     subtitle: 'Reprogramar operaciones pendientes',

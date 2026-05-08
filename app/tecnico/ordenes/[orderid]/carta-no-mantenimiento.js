@@ -13,9 +13,17 @@ import {
 import Header from "../../../../src/components/Header";
 import { useLocalSearchParams, router } from "expo-router";
 import { useAuth } from "../../../../src/context/AuthContext";
-import api from "../../../../src/services/api";
 
-import { fetchDatosNoMantenimiento, guardarCartaNoMantenimiento } from "../../../../src/services/noMantenimiento";
+import {
+  fetchDatosNoMantenimiento,
+  guardarCartaNoMantenimiento,
+} from "../../../../src/services/noMantenimiento";
+
+import {
+  setLocalStatusPatch,
+  patchCacheOrdenesTecnicoList,
+  patchCacheOrdenTecnicoDetail,
+} from "../../../../src/offline/ordenesTecnicoLocalPatch";
 
 function Row({ label, value }) {
   return (
@@ -28,6 +36,8 @@ function Row({ label, value }) {
   );
 }
 
+const STATUS_CARTA_NO_MANTTO = "0600";
+
 export default function CartaNoMantenimientoForm() {
   const { orderid } = useLocalSearchParams();
   const { user, ensureValidToken } = useAuth();
@@ -35,54 +45,76 @@ export default function CartaNoMantenimientoForm() {
   const [loading, setLoading] = useState(true);
   const [datos, setDatos] = useState(null);
 
-  // Editable
   const [mesAfecto, setMesAfecto] = useState("");
   const [descripcion, setDescripcion] = useState("");
 
-  // Status/cause code a mandar (por ahora fijo 0011)
-  // Si luego quieres selector, aquí lo cambiamos por un dropdown.
-  const CAUSA_CODE = "0011";
-
   const [saving, setSaving] = useState(false);
+
+  const userEmail = String(
+    user?.correo ||
+      user?.email ||
+      user?.username ||
+      user?.preferred_username ||
+      "unknown",
+  ).trim();
 
   const fechaProgramadaDDMMYYYY = useMemo(() => {
     if (!datos?.StartDate) return "";
+
     const d = new Date(datos.StartDate);
     const dd = String(d.getDate()).padStart(2, "0");
     const mm = String(d.getMonth() + 1).padStart(2, "0");
     const yyyy = d.getFullYear();
+
     return `${dd}/${mm}/${yyyy}`;
   }, [datos]);
 
-  // ✅ Nombre técnico asignado (prioridad: user del login)
   const tecnicoAsignado = useMemo(() => {
     const nomina = user?.nomina || datos?.nomina || "";
+
     const nombre =
       user?.nombre ||
       user?.name ||
       datos?.nombre ||
       datos?.Nombre ||
       "";
+
     const full = `${nomina ? nomina + " - " : ""}${nombre}`.trim();
+
     return full || "—";
   }, [user, datos]);
 
   useEffect(() => {
     let alive = true;
+
     (async () => {
       try {
         setLoading(true);
+
         const d = await fetchDatosNoMantenimiento(String(orderid));
+
         if (!alive) return;
+
         setDatos(d);
 
-        // Prellenar "mes afecto" con StartDate
         if (d?.StartDate) {
           const dt = new Date(d.StartDate);
+
           const meses = [
-            "ENERO","FEBRERO","MARZO","ABRIL","MAYO","JUNIO",
-            "JULIO","AGOSTO","SEPTIEMBRE","OCTUBRE","NOVIEMBRE","DICIEMBRE",
+            "ENERO",
+            "FEBRERO",
+            "MARZO",
+            "ABRIL",
+            "MAYO",
+            "JUNIO",
+            "JULIO",
+            "AGOSTO",
+            "SEPTIEMBRE",
+            "OCTUBRE",
+            "NOVIEMBRE",
+            "DICIEMBRE",
           ];
+
           setMesAfecto(`${meses[dt.getMonth()]} ${dt.getFullYear()}`);
         }
       } catch (e) {
@@ -92,107 +124,128 @@ export default function CartaNoMantenimientoForm() {
         if (alive) setLoading(false);
       }
     })();
+
     return () => {
       alive = false;
     };
   }, [orderid]);
 
-  // ✅ Notificar SAP: activar causa 0011 + desactivar 0100
-  const notificarSapNoMantenimiento = async (orderId) => {
-    const payloadSap = {
-      OrderId: String(orderId),
-      WorkOrderHeader: {
-        Orderid: String(orderId),
-      },
-      WorkOrderUserStatusSet: [
-        {
-          UserStText: CAUSA_CODE, // ✅ causa (ej. 0011)
-          Langu: "ES",
-          Inactive: "",
-        },
-        {
-          UserStText: "0100", // ✅ quitar pendiente
-          Langu: "ES",
-          Inactive: "X",
-        },
-      ],
-      Return: [],
-    };
-
-    // OJO: usamos tu BTP API (baseURL ya apunta a CF)
-    await api.post(
-      `/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet?sap-client=400&sap-language=ES`,
-      payloadSap,
-      { headers: { "Content-Type": "application/json" } }
-    );
+  const patchLocalStatus0600 = async (orderId) => {
+    try {
+      await setLocalStatusPatch(userEmail, orderId, STATUS_CARTA_NO_MANTTO);
+      await patchCacheOrdenesTecnicoList(
+        userEmail,
+        orderId,
+        STATUS_CARTA_NO_MANTTO,
+      );
+      await patchCacheOrdenTecnicoDetail(orderId, STATUS_CARTA_NO_MANTTO);
+    } catch (e) {
+      console.log(
+        "[CARTA NO MANTTO] Error actualizando cache local:",
+        e?.message || e,
+      );
+    }
   };
 
   const onGuardar = async () => {
     if (saving) return;
     if (!datos) return;
 
-    if (!descripcion.trim()) {
-      return Alert.alert("Falta información", "Captura la causa / descripción concreta.");
+    const descripcionTrim = descripcion.trim();
+
+    if (!descripcionTrim) {
+      return Alert.alert(
+        "Falta información",
+        "Captura la causa / descripción concreta.",
+      );
     }
 
-    const payloadLocal = {
-      orderid: datos.Orderid,
+    const orderId = String(datos.Orderid || orderid || "").trim();
+
+    if (!orderId) {
+      return Alert.alert("Error", "No se pudo determinar el número de orden.");
+    }
+
+    const payload = {
+      orderid: orderId,
+      Orderid: orderId,
+
       equipment: datos.Equipment,
       fecha_programada: datos.StartDate,
       razon_social: datos.razon_social,
       direccion: datos.direccion,
 
-      // guardamos mecánico asignado (del user si existe, si no del backend)
       mecanico: {
         nomina: user?.nomina ?? datos.nomina,
         nombre: user?.nombre ?? user?.name ?? datos.nombre,
       },
 
       mes_afecto: mesAfecto,
-      descripcion_concreta: descripcion,
-      causa_code: CAUSA_CODE, // opcional para tu backend/local
+      descripcion_concreta: descripcionTrim,
+
+      // Nueva regla:
+      // Carta No Mantto únicamente se identifica con 0600.
+      estatus_code: STATUS_CARTA_NO_MANTTO,
+      userstatus: STATUS_CARTA_NO_MANTTO,
+      causa_code: STATUS_CARTA_NO_MANTTO,
+      motivo_no_mantenimiento: descripcionTrim,
     };
 
     try {
       setSaving(true);
 
-      // 1) Guardar local (tu backend)
-      await guardarCartaNoMantenimiento(payloadLocal);
+      const okToken = await ensureValidToken?.();
 
-      // 2) Notificar a SAP (update estatus)
-      try {
-        const ok = await ensureValidToken?.();
-        if (ok === false) throw new Error("Token inválido");
+      if (okToken === false) {
+        throw new Error("Token inválido");
+      }
 
-        await notificarSapNoMantenimiento(datos.Orderid);
+      /**
+       * IMPORTANTE:
+       * Ya NO hacemos POST directo a /api/odata desde aquí.
+       * El backend /api/carta-no-mantenimiento debe ser quien mande el 0600 a SAP.
+       */
+      const result = await guardarCartaNoMantenimiento(payload);
+
+      const sapOk = result?.sap?.ok !== false;
+
+      if (sapOk) {
+        await patchLocalStatus0600(orderId);
 
         Alert.alert(
           "Listo",
-          `Notificación enviada a SAP para la orden #${datos.Orderid} ✅`,
+          `La orden #${orderId} fue marcada como NO MANTENIMIENTO`,
           [
             {
               text: "OK",
               onPress: () => router.replace("/tecnico/ordenes"),
             },
-          ]
+          ],
         );
-      } catch (sapErr) {
-        console.log("SAP notify error:", sapErr?.response?.data || sapErr?.message || sapErr);
+      } else {
+        console.log("[CARTA NO MANTTO] SAP respondió error:", result?.sap);
 
         Alert.alert(
-          "Guardado local",
-          `La carta se guardó, pero no se pudo notificar SAP para la orden #${datos.Orderid}. Intenta más tarde o avisa al supervisor.`,
+          "Guardado con observación",
+          `La carta se guardó, pero SAP no confirmó el cambio a 0600 para la orden #${orderId}. Revisa logs o intenta más tarde.`,
           [
             {
               text: "OK",
               onPress: () => router.replace("/tecnico/ordenes"),
             },
-          ]
+          ],
         );
       }
     } catch (e) {
-      console.error(e);
-      Alert.alert("Error", "No se pudo guardar la carta.");
+      console.error(
+        "[CARTA NO MANTTO] Error guardar:",
+        e?.response?.data || e?.message || e,
+      );
+
+      Alert.alert(
+        "Error",
+        "No se pudo guardar la carta de no mantenimiento.",
+      );
     } finally {
       setSaving(false);
     }
@@ -200,7 +253,7 @@ export default function CartaNoMantenimientoForm() {
 
   if (loading) {
     return (
-      <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
+      <View style={styles.center}>
         <ActivityIndicator />
       </View>
     );
@@ -208,52 +261,74 @@ export default function CartaNoMantenimientoForm() {
 
   if (!datos) {
     return (
-      <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
+      <View style={styles.center}>
         <Text>No hay datos para la orden.</Text>
       </View>
     );
   }
 
   return (
-    <View style={{ flex: 1, backgroundColor: "#F5F7FB" }}>
-      <Header title="Carta de no mantenimiento" />
+    <View style={styles.page}>
+      <Header title="Carta No Mantto" />
 
-      <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 120 }}>
+      <ScrollView contentContainerStyle={styles.scroll}>
         <Text style={styles.section}>Datos de la orden</Text>
+
         <View style={styles.cardCompact}>
           <Row label="No. de orden" value={datos.Orderid} />
           <Row label="Equipo No" value={datos.Equipment} />
           <Row label="Fecha programada" value={fechaProgramadaDDMMYYYY} />
           <Row label="Razón social" value={datos.razon_social} />
           <Row label="Dirección" value={datos.direccion} />
-
-          {/* ✅ AQUÍ mostramos el técnico asignado */}
           <Row label="Técnico asignado" value={tecnicoAsignado} />
 
-          {/* opcional: mostrar causa que se notificará */}
-          <Row label="Causa (clave)" value={CAUSA_CODE} />
+          <Row label="Estatus que se enviará" value="Carta No Mantto" />
         </View>
 
         <Text style={styles.section}>Mes afectado</Text>
+
         <View style={styles.card}>
-          <Text style={styles.label}>Afectó al mantenimiento correspondiente al mes de:</Text>
-          <TextInput style={[styles.input, styles.inputReadonly]} value={mesAfecto} editable={false} />
+          <Text style={styles.label}>
+            Afectó al mantenimiento correspondiente al mes de:
+          </Text>
+
+          <TextInput
+            style={[styles.input, styles.inputReadonly]}
+            value={mesAfecto}
+            editable={false}
+          />
         </View>
 
-        <Text style={styles.section}>Causa (descripción concreta)</Text>
+        <Text style={styles.section}>Causa / descripción concreta</Text>
+
         <View style={styles.card}>
-          <Text style={styles.label}>Describe la causa por la cual no se realizó el mantenimiento:</Text>
+          <Text style={styles.label}>
+            Describe la causa por la cual no se realizó el mantenimiento:
+          </Text>
+
           <TextInput
-            style={[styles.input, { height: 160, textAlignVertical: "top" }]}
+            style={[styles.input, styles.textArea]}
             placeholder="Escribe aquí la causa / descripción concreta..."
+            placeholderTextColor="#9CA3AF"
             value={descripcion}
             onChangeText={setDescripcion}
             multiline
           />
         </View>
 
-        <TouchableOpacity style={[styles.primary, saving && styles.primaryDisabled]} onPress={onGuardar} disabled={saving}>
-          {saving ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryText}>Guardar</Text>}
+        <TouchableOpacity
+          style={[styles.primary, saving && styles.primaryDisabled]}
+          onPress={onGuardar}
+          disabled={saving}
+          activeOpacity={0.9}
+        >
+          {saving ? (
+            <ActivityIndicator color="#fff" />
+          ) : (
+            <Text style={styles.primaryText}>
+              ENVIAR
+            </Text>
+          )}
         </TouchableOpacity>
       </ScrollView>
     </View>
@@ -261,12 +336,29 @@ export default function CartaNoMantenimientoForm() {
 }
 
 const styles = StyleSheet.create({
+  page: {
+    flex: 1,
+    backgroundColor: "#F5F7FB",
+  },
+
+  center: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+
+  scroll: {
+    padding: 16,
+    paddingBottom: 120,
+  },
+
   section: {
     marginTop: 16,
     fontSize: 16,
     fontWeight: "800",
     color: "#1f2937",
   },
+
   cardCompact: {
     backgroundColor: "#fff",
     borderRadius: 12,
@@ -279,6 +371,7 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     elevation: 1,
   },
+
   card: {
     backgroundColor: "#fff",
     borderRadius: 14,
@@ -291,11 +384,13 @@ const styles = StyleSheet.create({
     shadowRadius: 6,
     elevation: 1,
   },
+
   label: {
     fontSize: 11,
     color: "#6b7280",
     marginBottom: 4,
   },
+
   readonly: {
     borderWidth: 1,
     borderColor: "#e5e7eb",
@@ -304,10 +399,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     backgroundColor: "#f9fafb",
   },
+
   readonlyText: {
     fontSize: 13,
     color: "#111827",
   },
+
   input: {
     borderWidth: 1,
     borderColor: "#d1d5db",
@@ -318,10 +415,17 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: "#111827",
   },
+
   inputReadonly: {
     backgroundColor: "#f3f4f6",
     color: "#4b5563",
   },
+
+  textArea: {
+    height: 160,
+    textAlignVertical: "top",
+  },
+
   primary: {
     marginTop: 20,
     backgroundColor: "#16a34a",
@@ -329,9 +433,11 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     alignItems: "center",
   },
+
   primaryDisabled: {
     opacity: 0.6,
   },
+
   primaryText: {
     color: "#fff",
     fontWeight: "900",
