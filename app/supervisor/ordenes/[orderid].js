@@ -142,6 +142,13 @@ const STATUS_META = {
     bgColor: COLORS.finalBg,
     borderColor: COLORS.finalBorder,
   },
+  "0301": {
+    label: "FINALIZADA SUPER",
+    type: "final",
+    color: "#024d21",
+    bgColor: COLORS.finalBg,
+    borderColor: COLORS.finalBorder,
+  },
   "0400": {
     label: "PENDIENTE DE FIRMA",
     type: "firma",
@@ -152,15 +159,19 @@ const STATUS_META = {
   "0600": {
     label: "Carta No Mantto",
     type: "no_mantto",
-    color: "#7A869A",
+    color: "#b90909",
     bgColor: COLORS.noMantBg,
     borderColor: COLORS.noMantBorder,
   },
 };
 
-const PRIORITY = ["0600", "0400", "0300", "0200", "0100"];
+const PRIORITY = ["0600", "0400", "0300", "0200", "0100", "0301"];
 
-function resolveUserstatus(rawUserstatus, _catalogMap = {}, itemFromApi = null) {
+function resolveUserstatus(
+  rawUserstatus,
+  _catalogMap = {},
+  itemFromApi = null,
+) {
   const rawCodes = extractCodes(rawUserstatus);
   const apiCode = normalizeCode(itemFromApi?.estatus_code);
 
@@ -506,17 +517,34 @@ export default function DetalleOrdenSupervisor() {
         </View>
       </ScrollView>
 
-      {canSendEvidence ? (
+      <View style={styles.fabContainer}>
+        {canSendEvidence ? (
+          <TouchableOpacity
+            style={styles.fab}
+            onPress={() =>
+              router.push(`/supervisor/ordenes/evidencia/${data.orderid}`)
+            }
+            activeOpacity={0.9}
+          >
+            <Ionicons name="camera" size={22} color="#fff" />
+          </TouchableOpacity>
+        ) : null}
+
         <TouchableOpacity
-          style={styles.fab}
+          style={styles.fabNoMantto}
           onPress={() =>
-            router.push(`/supervisor/ordenes/evidencia/${data.orderid}`)
+            router.push({
+              pathname: "/supervisor/no_mantenimiento/Carta_no_mantto/",
+              params: {
+                orderid: data.orderid,
+              },
+            })
           }
           activeOpacity={0.9}
         >
-          <Ionicons name="camera" size={22} color="#fff" />
+          <Ionicons name="document-text" size={22} color="#fff" />
         </TouchableOpacity>
-      ) : null}
+      </View>
     </View>
   );
 }
@@ -735,10 +763,33 @@ const styles = StyleSheet.create({
   },
 
   fab: {
+    backgroundColor: "#0A6ED1",
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    alignItems: "center",
+    justifyContent: "center",
+
+    shadowColor: "#000",
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+
+    elevation: 6,
+  },
+  fabContainer: {
     position: "absolute",
     bottom: 20,
     right: 20,
-    backgroundColor: "#0A6ED1",
+    alignItems: "center",
+    gap: 12,
+  },
+
+  fabNoMantto: {
+    backgroundColor: "#b90909",
     width: 56,
     height: 56,
     borderRadius: 28,

@@ -238,7 +238,7 @@ function buildPayloadFinalizacion0300SinStatus({ orderId }) {
     },
     WorkOrderUserStatusSet: [
       {
-        UserStText: "0300",
+        UserStText: "0301",
         Langu: "ES",
         Inactive: "",
       },
@@ -258,7 +258,7 @@ function buildPayloadFinalizacion0300ConStatus({ orderId, currentStatusCode }) {
     },
     WorkOrderUserStatusSet: [
       {
-        UserStText: "0300",
+        UserStText: "0301",
         Langu: "ES",
         Inactive: "",
       },

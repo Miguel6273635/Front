@@ -127,8 +127,7 @@ const EPP_ICONS_MDI = {
   "L. VIDA VERTICAL": "tune-vertical",
 };
 
-const getMdiIconName = (key) =>
-  EPP_ICONS_MDI[key] || "help-circle-outline";
+const getMdiIconName = (key) => EPP_ICONS_MDI[key] || "help-circle-outline";
 
 /* ✅ Helpers ToAddresses */
 function buildRazonSocial(a) {
@@ -169,7 +168,7 @@ function buildDireccion(a) {
 /* ✅ Helpers ToPartners */
 function pickPartnerOldByRole(results, roleOld) {
   const node = (results || []).find(
-    (x) => String(x?.PartnRoleOld || "").trim() === roleOld
+    (x) => String(x?.PartnRoleOld || "").trim() === roleOld,
   );
 
   return String(node?.PartnerOld || "").trim();
@@ -184,10 +183,7 @@ function parseSapDate(value) {
   if (!value) return null;
 
   if (typeof value === "string" && value.startsWith("/Date(")) {
-    const ms = parseInt(
-      value.replace("/Date(", "").replace(")/", ""),
-      10
-    );
+    const ms = parseInt(value.replace("/Date(", "").replace(")/", ""), 10);
 
     if (!Number.isNaN(ms)) return new Date(ms);
 
@@ -251,7 +247,7 @@ async function saveTbmkyJsonOffline(orderId, payload) {
   try {
     await AsyncStorage.setItem(
       TBMKY_JSON_KEY(orderId),
-      JSON.stringify(payload)
+      JSON.stringify(payload),
     );
 
     return true;
@@ -326,8 +322,7 @@ export default function FormularioRiesgosScreen() {
   const [rutinaria, setRutinaria] = useState(false);
 
   // ✅ Equipo dinámico
-  const [equipoSeleccionado, setEquipoSeleccionado] =
-    useState("elevadores");
+  const [equipoSeleccionado, setEquipoSeleccionado] = useState("elevadores");
   const [equipoLabel, setEquipoLabel] = useState("ELEVADORES");
   const [loadingEquipoTipo, setLoadingEquipoTipo] = useState(false);
 
@@ -354,14 +349,9 @@ export default function FormularioRiesgosScreen() {
   const [herramientas, setHerramientas] = useState("");
 
   const [riesgosBD] = useState(RIESGOS_POSIBLES);
-  const [riesgosSeleccionadosIds, setRiesgosSeleccionadosIds] =
-    useState([]);
+  const [riesgosSeleccionadosIds, setRiesgosSeleccionadosIds] = useState([]);
 
-  const [topSeleccionIds, setTopSeleccionIds] = useState([
-    null,
-    null,
-    null,
-  ]);
+  const [topSeleccionIds, setTopSeleccionIds] = useState([null, null, null]);
 
   const [riesgosTopText, setRiesgosTopText] = useState(["", "", ""]);
   const [causasTop, setCausasTop] = useState(["", "", ""]);
@@ -421,7 +411,9 @@ export default function FormularioRiesgosScreen() {
     "https://my-node-api-pro-01.cfapps.us10-001.hana.ondemand.com";
 
   function mapEqartToTipo(eqartRaw) {
-    const v = String(eqartRaw || "").toUpperCase().trim();
+    const v = String(eqartRaw || "")
+      .toUpperCase()
+      .trim();
 
     if (v.includes("ELEV")) {
       return { tipo: "elevadores", label: "ELEVADORES" };
@@ -440,7 +432,7 @@ export default function FormularioRiesgosScreen() {
     if (!eq) return null;
 
     const url = `${EQUIPO_TIPO_URL_BASE}/api/odata/ZCS_GET_EQUIPMENT_SRV/EquipmentHeaderSet('${encodeURIComponent(
-      eq
+      eq,
     )}')?$format=json`;
 
     const r = await fetch(url);
@@ -490,7 +482,7 @@ export default function FormularioRiesgosScreen() {
         label: a.label,
         value: a.id,
       })),
-    []
+    [],
   );
 
   const selectedAreasLabels = useMemo(() => {
@@ -517,7 +509,7 @@ export default function FormularioRiesgosScreen() {
       if (currentAuxCount >= MAX_AUXILIARES) {
         Alert.alert(
           "Límite alcanzado",
-          `Solo puedes agregar hasta ${MAX_AUXILIARES} técnicos auxiliares.`
+          `Solo puedes agregar hasta ${MAX_AUXILIARES} técnicos auxiliares.`,
         );
 
         return normalized;
@@ -870,7 +862,7 @@ export default function FormularioRiesgosScreen() {
           setCentroTrabajo("TLP1");
 
           const fechaCached = formatSapDateDMY(
-            cachedData?.start_date || cachedData?.StartDate || new Date()
+            cachedData?.start_date || cachedData?.StartDate || new Date(),
           );
 
           if (!fecha) setFecha(fechaCached);
@@ -879,7 +871,7 @@ export default function FormularioRiesgosScreen() {
             cachedData?.order_type ||
               cachedData?.OrderType ||
               cachedData?.orderType ||
-              ""
+              "",
           ).trim();
 
           setRutinaria(esRutinaria(otCached));
@@ -917,7 +909,7 @@ export default function FormularioRiesgosScreen() {
           }
 
           const { z1, z2 } = getCachedNominasFromPartners(
-            cachedData?.partners || []
+            cachedData?.partners || [],
           );
 
           setNominaTecnico((prev) => (safeStr(prev) ? prev : z1));
@@ -944,7 +936,7 @@ export default function FormularioRiesgosScreen() {
           if (!cachedData?.Orderid) {
             Alert.alert(
               "Error",
-              "No se pudieron cargar los datos offline de la orden."
+              "No se pudieron cargar los datos offline de la orden.",
             );
           }
 
@@ -996,7 +988,7 @@ export default function FormularioRiesgosScreen() {
 
           console.log(
             "[TBMKY] Error consultando tipo de equipo:",
-            e?.message || e
+            e?.message || e,
           );
         } finally {
           if (alive) setLoadingEquipoTipo(false);
@@ -1012,7 +1004,7 @@ export default function FormularioRiesgosScreen() {
         if (!fecha) setFecha(fechaSap);
 
         const ot = String(
-          ord?.order_type || ord?.OrderType || ord?.orderType || ""
+          ord?.order_type || ord?.OrderType || ord?.orderType || "",
         ).trim();
 
         setRutinaria(esRutinaria(ot));
@@ -1040,7 +1032,7 @@ export default function FormularioRiesgosScreen() {
         // ✅ ToAddresses
         try {
           const addrRes = await api.get(
-            `/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet('${orderid}')/ToAddresses?$format=json`
+            `/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet('${orderid}')/ToAddresses?$format=json`,
           );
 
           const results = addrRes?.data?.d?.results || [];
@@ -1080,7 +1072,7 @@ export default function FormularioRiesgosScreen() {
 
               console.log(
                 "[TBMKY] ToAddresses sin 2do nodo. results length =",
-                results?.length || 0
+                results?.length || 0,
               );
             }
           }
@@ -1101,7 +1093,7 @@ export default function FormularioRiesgosScreen() {
         // ✅ ToPartners
         try {
           const partRes = await api.get(
-            `/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet('${orderid}')/ToPartners?$format=json`
+            `/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet('${orderid}')/ToPartners?$format=json`,
           );
 
           const results = partRes?.data?.d?.results || [];
@@ -1110,9 +1102,7 @@ export default function FormularioRiesgosScreen() {
           const z2 = normalizeNomina(pickPartnerOldByRole(results, "Z2"));
 
           if (alive) {
-            setNominaTecnico((prev) =>
-              String(prev || "").trim() ? prev : z1
-            );
+            setNominaTecnico((prev) => (String(prev || "").trim() ? prev : z1));
 
             setTrabajadores((prev) => {
               const copy = normalizeTrabajadoresForState(prev);
@@ -1133,12 +1123,10 @@ export default function FormularioRiesgosScreen() {
         } catch (e) {
           if (alive) {
             const { z1, z2 } = getCachedNominasFromPartners(
-              cachedData?.partners || []
+              cachedData?.partners || [],
             );
 
-            setNominaTecnico((prev) =>
-              String(prev || "").trim() ? prev : z1
-            );
+            setNominaTecnico((prev) => (String(prev || "").trim() ? prev : z1));
 
             setTrabajadores((prev) => {
               const copy = normalizeTrabajadoresForState(prev);
@@ -1153,11 +1141,14 @@ export default function FormularioRiesgosScreen() {
 
           console.log(
             "[TBMKY] ToPartners error:",
-            e?.response?.data || e?.message || e
+            e?.response?.data || e?.message || e,
           );
         }
       } catch (err) {
-        console.error("Error cargando datos TBMKY:", err?.response?.data || err);
+        console.error(
+          "Error cargando datos TBMKY:",
+          err?.response?.data || err,
+        );
 
         try {
           const cached = await loadOrdenTecnicoDetail(orderid);
@@ -1168,7 +1159,7 @@ export default function FormularioRiesgosScreen() {
             setCentroTrabajo("TLP1");
 
             const fechaCached = formatSapDateDMY(
-              cachedData?.start_date || cachedData?.StartDate || new Date()
+              cachedData?.start_date || cachedData?.StartDate || new Date(),
             );
 
             if (!fecha) setFecha(fechaCached);
@@ -1177,7 +1168,7 @@ export default function FormularioRiesgosScreen() {
               cachedData?.order_type ||
                 cachedData?.OrderType ||
                 cachedData?.orderType ||
-                ""
+                "",
             ).trim();
 
             setRutinaria(esRutinaria(otCached));
@@ -1215,7 +1206,7 @@ export default function FormularioRiesgosScreen() {
             }
 
             const { z1, z2 } = getCachedNominasFromPartners(
-              cachedData?.partners || []
+              cachedData?.partners || [],
             );
 
             setNominaTecnico((prev) => (safeStr(prev) ? prev : z1));
@@ -1235,7 +1226,10 @@ export default function FormularioRiesgosScreen() {
             setEquipoSeleccionado(tipoLocal.tipo);
             setEquipoLabel(tipoLocal.label);
           } else {
-            Alert.alert("Error", "No se pudieron cargar los datos de la orden.");
+            Alert.alert(
+              "Error",
+              "No se pudieron cargar los datos de la orden.",
+            );
           }
         } catch {
           Alert.alert("Error", "No se pudieron cargar los datos de la orden.");
@@ -1319,10 +1313,10 @@ export default function FormularioRiesgosScreen() {
       nuevosRiesgos,
       firmaTecnico,
       pdfLocalUri,
-    ]
+    ],
   );
 
-    useEffect(() => {
+  useEffect(() => {
     if (!orderid) return;
     if (!didHydrateRef.current) return;
 
@@ -1361,7 +1355,7 @@ export default function FormularioRiesgosScreen() {
     setSintomas((prev) =>
       prev.includes(sintoma)
         ? prev.filter((s) => s !== sintoma)
-        : [...prev, sintoma]
+        : [...prev, sintoma],
     );
   };
 
@@ -1385,7 +1379,7 @@ export default function FormularioRiesgosScreen() {
     if (lockedAfterPdf) return;
 
     setRiesgosSeleccionadosIds((prev) =>
-      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
     );
   };
 
@@ -1394,7 +1388,7 @@ export default function FormularioRiesgosScreen() {
       riesgosBD
         .filter((r) => riesgosSeleccionadosIds.includes(r.id))
         .map((r) => ({ label: r.riesgo, value: r.id })),
-    [riesgosBD, riesgosSeleccionadosIds]
+    [riesgosBD, riesgosSeleccionadosIds],
   );
 
   const opcionesTop2 = useMemo(() => {
@@ -1402,28 +1396,26 @@ export default function FormularioRiesgosScreen() {
 
     return riesgosBD
       .filter(
-        (r) => riesgosSeleccionadosIds.includes(r.id) && !usados.has(r.id)
+        (r) => riesgosSeleccionadosIds.includes(r.id) && !usados.has(r.id),
       )
       .map((r) => ({ label: r.riesgo, value: r.id }));
   }, [riesgosBD, riesgosSeleccionadosIds, topSeleccionIds]);
 
   const opcionesTop3 = useMemo(() => {
     const usados = new Set(
-      [topSeleccionIds[0], topSeleccionIds[1]].filter(Boolean)
+      [topSeleccionIds[0], topSeleccionIds[1]].filter(Boolean),
     );
 
     return riesgosBD
       .filter(
-        (r) => riesgosSeleccionadosIds.includes(r.id) && !usados.has(r.id)
+        (r) => riesgosSeleccionadosIds.includes(r.id) && !usados.has(r.id),
       )
       .map((r) => ({ label: r.riesgo, value: r.id }));
   }, [riesgosBD, riesgosSeleccionadosIds, topSeleccionIds]);
 
   useEffect(() => {
     setTopSeleccionIds((prev) =>
-      prev.map((v) =>
-        v && !riesgosSeleccionadosIds.includes(v) ? null : v
-      )
+      prev.map((v) => (v && !riesgosSeleccionadosIds.includes(v) ? null : v)),
     );
   }, [riesgosSeleccionadosIds]);
 
@@ -1433,34 +1425,34 @@ export default function FormularioRiesgosScreen() {
     if (!topSeleccionIds[0] || !topSeleccionIds[1] || !topSeleccionIds[2]) {
       Alert.alert(
         "TOP 3 incompleto",
-        "Elige TOP 1, TOP 2 y TOP 3 sin repetir."
+        "Elige TOP 1, TOP 2 y TOP 3 sin repetir.",
       );
       return;
     }
 
     const nombres = topSeleccionIds.map(
-      (id) => riesgosBD.find((x) => x.id === id)?.riesgo || ""
+      (id) => riesgosBD.find((x) => x.id === id)?.riesgo || "",
     );
 
     setCausasTop((prev) =>
-      prev.map((c, i) => (riesgosTopText[i] !== nombres[i] ? "" : c))
+      prev.map((c, i) => (riesgosTopText[i] !== nombres[i] ? "" : c)),
     );
 
     setMedidasTop((prev) =>
       prev.map((fila, i) =>
-        riesgosTopText[i] !== nombres[i] ? ["", "", ""] : fila
-      )
+        riesgosTopText[i] !== nombres[i] ? ["", "", ""] : fila,
+      ),
     );
 
     setAcciones((prev) =>
-      prev.map((a, i) => (riesgosTopText[i] !== nombres[i] ? "" : a))
+      prev.map((a, i) => (riesgosTopText[i] !== nombres[i] ? "" : a)),
     );
 
     setRiesgosTopText(nombres);
 
     Alert.alert(
       "TOP 3 aplicado",
-      "Listo ✅\n\nAhora abajo se autollenarán los bloques de TOP 1/2/3 para que captures causas, medidas y acciones."
+      "Listo ✅\n\nAhora abajo se autollenarán los bloques de TOP 1/2/3 para que captures causas, medidas y acciones.",
     );
   };
 
@@ -1553,7 +1545,7 @@ export default function FormularioRiesgosScreen() {
       console.error(e);
       Alert.alert(
         "No se pudo abrir",
-        "Instala un visor de PDF como Adobe, Drive u otro lector."
+        "Instala un visor de PDF como Adobe, Drive u otro lector.",
       );
     } finally {
       setDownloadingPdf(false);
@@ -1596,25 +1588,22 @@ export default function FormularioRiesgosScreen() {
   const paso2Ok = useMemo(() => true, []);
 
   const topAplicadoOk = useMemo(
-    () => !!riesgosTopText?.[0] && !!riesgosTopText?.[1] && !!riesgosTopText?.[2],
-    [riesgosTopText]
+    () =>
+      !!riesgosTopText?.[0] && !!riesgosTopText?.[1] && !!riesgosTopText?.[2],
+    [riesgosTopText],
   );
 
   const nuevosRiesgosOk = useMemo(() => {
     if (!detectaNuevoRiesgo) return true;
 
     return (nuevosRiesgos || []).some(
-      (r) =>
-        String(r?.riesgo || "").trim() &&
-        String(r?.medida || "").trim()
+      (r) => String(r?.riesgo || "").trim() && String(r?.medida || "").trim(),
     );
   }, [detectaNuevoRiesgo, nuevosRiesgos]);
 
   const paso3Ok = useMemo(() => {
     const selOk = riesgosSeleccionadosIds.length >= 3;
-    const accionesOk = acciones.every(
-      (a) => String(a || "").trim().length > 0
-    );
+    const accionesOk = acciones.every((a) => String(a || "").trim().length > 0);
 
     return selOk && topAplicadoOk && accionesOk && nuevosRiesgosOk;
   }, [riesgosSeleccionadosIds, topAplicadoOk, acciones, nuevosRiesgosOk]);
@@ -1635,7 +1624,7 @@ export default function FormularioRiesgosScreen() {
     if (!canNext) {
       Alert.alert(
         "Falta información",
-        "Completa los campos requeridos para continuar."
+        "Completa los campos requeridos para continuar.",
       );
       return;
     }
@@ -1663,7 +1652,7 @@ export default function FormularioRiesgosScreen() {
     if (!Array.isArray(selectedAreas) || selectedAreas.length === 0) {
       return Alert.alert(
         "Falta información",
-        "Selecciona al menos un área de trabajo."
+        "Selecciona al menos un área de trabajo.",
       );
     }
 
@@ -1678,21 +1667,21 @@ export default function FormularioRiesgosScreen() {
     if (!topAplicadoOk) {
       return Alert.alert(
         "TOP 3 incompleto",
-        "Selecciona y aplica TOP 1, TOP 2 y TOP 3."
+        "Selecciona y aplica TOP 1, TOP 2 y TOP 3.",
       );
     }
 
     if (!acciones.every((a) => String(a || "").trim())) {
       return Alert.alert(
         "Acciones incompletas",
-        "Escribe las 3 acciones, una por cada TOP."
+        "Escribe las 3 acciones, una por cada TOP.",
       );
     }
 
     if (!nuevosRiesgosOk) {
       return Alert.alert(
         "Nuevo riesgo incompleto",
-        "Marcaste que detectaste un nuevo riesgo. Escribe al menos 1 riesgo y su medida de control."
+        "Marcaste que detectaste un nuevo riesgo. Escribe al menos 1 riesgo y su medida de control.",
       );
     }
 
@@ -1761,7 +1750,8 @@ export default function FormularioRiesgosScreen() {
           orden?.partner_name ||
           orden?.cliente ||
           "",
-        direccion: direccion || orden?.direccion || orden?.partner_address || "",
+        direccion:
+          direccion || orden?.direccion || orden?.partner_address || "",
         order_type: orden?.order_type || orden?.OrderType || "",
       };
 
@@ -1791,7 +1781,7 @@ export default function FormularioRiesgosScreen() {
           await patchCacheOrdenesTecnicoList(
             userEmail,
             payload.orderid,
-            newStatus
+            newStatus,
           );
           await patchCacheOrdenTecnicoDetail(payload.orderid, newStatus);
         } catch (e) {
@@ -1827,7 +1817,7 @@ export default function FormularioRiesgosScreen() {
               text: "Ir a órdenes",
               onPress: () => router.replace("/tecnico/ordenes"),
             },
-          ]
+          ],
         );
 
         return;
@@ -1851,13 +1841,13 @@ export default function FormularioRiesgosScreen() {
       } catch (sendErr) {
         console.log(
           "[TBMKY] enviar submit error:",
-          sendErr?.response?.data || sendErr
+          sendErr?.response?.data || sendErr,
         );
 
         Alert.alert(
           "Guardado local",
           `Se generó el PDF, pero no se pudo enviar a SAP para la orden #${payload.orderid}.`,
-          [{ text: "Opciones de PDF", onPress: openPdfModal }]
+          [{ text: "Opciones de PDF", onPress: openPdfModal }],
         );
 
         return;
@@ -1867,7 +1857,7 @@ export default function FormularioRiesgosScreen() {
         Alert.alert(
           "Guardado local",
           `Se generó el PDF, pero SAP no confirmó el envío para la orden #${payload.orderid}.`,
-          [{ text: "Opciones de PDF", onPress: openPdfModal }]
+          [{ text: "Opciones de PDF", onPress: openPdfModal }],
         );
 
         return;
@@ -1898,7 +1888,7 @@ export default function FormularioRiesgosScreen() {
             text: "Ir a órdenes",
             onPress: () => router.replace("/tecnico/ordenes"),
           },
-        ]
+        ],
       );
     } catch (e) {
       console.error("TBMKY error:", e?.response?.data || e);
@@ -1908,7 +1898,7 @@ export default function FormularioRiesgosScreen() {
     }
   };
 
-    if (loading) {
+  if (loading) {
     return (
       <View style={{ flex: 1, backgroundColor: FIORI.pageBg }}>
         <Header title="Predicción de riesgos (TBM/KY)" />
@@ -2008,9 +1998,7 @@ export default function FormularioRiesgosScreen() {
                 <HeaderRow
                   label="Equipo"
                   value={
-                    loadingEquipoTipo
-                      ? "Consultando…"
-                      : equipoLabel || "—"
+                    loadingEquipoTipo ? "Consultando…" : equipoLabel || "—"
                   }
                 />
                 <HeaderRow
@@ -2107,9 +2095,7 @@ export default function FormularioRiesgosScreen() {
                 />
 
                 <Text style={{ fontWeight: "900", color: FIORI.ink }}>
-                  {loadingEquipoTipo
-                    ? "Consultando…"
-                    : equipoLabel || "EQUIPO"}
+                  {loadingEquipoTipo ? "Consultando…" : equipoLabel || "EQUIPO"}
                 </Text>
 
                 <Text style={{ color: FIORI.textMuted, fontSize: 12 }}>
@@ -2157,7 +2143,9 @@ export default function FormularioRiesgosScreen() {
                 <LabeledInput label="Fecha" value={fecha} editable={false} />
               </View>
 
-              <SectionSubTitle text={`Técnicos auxiliares opcionales máximo ${MAX_AUXILIARES}`} />
+              <SectionSubTitle
+                text={`Técnicos auxiliares opcionales máximo ${MAX_AUXILIARES}`}
+              />
 
               <View style={styles.card}>
                 {auxiliares.map((aux, auxIndex) => {
@@ -2396,7 +2384,9 @@ export default function FormularioRiesgosScreen() {
                     disabled={lockedAfterPdf}
                   >
                     <Ionicons
-                      name={sintomas.includes(s) ? "checkbox" : "square-outline"}
+                      name={
+                        sintomas.includes(s) ? "checkbox" : "square-outline"
+                      }
                       size={20}
                       color={FIORI.accent}
                     />
@@ -2629,9 +2619,7 @@ export default function FormularioRiesgosScreen() {
                         onPress={aplicarTop}
                         disabled={lockedAfterPdf}
                       >
-                        <Text
-                          style={[styles.smallBtnText, { color: "#fff" }]}
-                        >
+                        <Text style={[styles.smallBtnText, { color: "#fff" }]}>
                           Aplicar TOP 3
                         </Text>
                       </TouchableOpacity>
@@ -2687,9 +2675,7 @@ export default function FormularioRiesgosScreen() {
                           }
                         />
 
-                        <Text style={styles.miniLabel}>
-                          Medidas de control
-                        </Text>
+                        <Text style={styles.miniLabel}>Medidas de control</Text>
 
                         {[0, 1, 2].map((idxM) => (
                           <TextInput
@@ -2782,9 +2768,7 @@ export default function FormularioRiesgosScreen() {
                     >
                       <Ionicons
                         name={
-                          detectaNuevoRiesgo
-                            ? "checkbox"
-                            : "square-outline"
+                          detectaNuevoRiesgo ? "checkbox" : "square-outline"
                         }
                         size={20}
                         color={FIORI.accent}
@@ -2820,9 +2804,7 @@ export default function FormularioRiesgosScreen() {
                               }
                               onBlur={() => setActiveField(null)}
                               inputAccessoryViewID={
-                                Platform.OS === "ios"
-                                  ? ACCESSORY_ID
-                                  : undefined
+                                Platform.OS === "ios" ? ACCESSORY_ID : undefined
                               }
                               placeholderTextColor="#9CA3AF"
                             />
@@ -2846,9 +2828,7 @@ export default function FormularioRiesgosScreen() {
                               }
                               onBlur={() => setActiveField(null)}
                               inputAccessoryViewID={
-                                Platform.OS === "ios"
-                                  ? ACCESSORY_ID
-                                  : undefined
+                                Platform.OS === "ios" ? ACCESSORY_ID : undefined
                               }
                               placeholderTextColor="#9CA3AF"
                             />
@@ -2873,8 +2853,8 @@ export default function FormularioRiesgosScreen() {
                   {!paso3Ok && (
                     <Text style={{ color: FIORI.textMuted, fontSize: 12 }}>
                       Para continuar: selecciona mínimo 3 riesgos, aplica TOP 3,
-                      escribe las 3 acciones, y si marcaste nuevo riesgo llena al
-                      menos un renglón.
+                      escribe las 3 acciones, y si marcaste nuevo riesgo llena
+                      al menos un renglón.
                     </Text>
                   )}
                 </>
@@ -2887,8 +2867,8 @@ export default function FormularioRiesgosScreen() {
                       marginTop: 6,
                     }}
                   >
-                    Selecciona TOP 1/2/3 y presiona Aplicar TOP 3 para
-                    habilitar las tareas 3 y 4.
+                    Selecciona TOP 1/2/3 y presiona Aplicar TOP 3 para habilitar
+                    las tareas 3 y 4.
                   </Text>
                 )
               )}
@@ -2916,10 +2896,7 @@ export default function FormularioRiesgosScreen() {
 
                 <View style={styles.firmaBtnRow}>
                   <TouchableOpacity
-                    style={[
-                      styles.smallBtn,
-                      { backgroundColor: FIORI.accent },
-                    ]}
+                    style={[styles.smallBtn, { backgroundColor: FIORI.accent }]}
                     onPress={() =>
                       setModalFirma({ open: true, tipo: "tecnico" })
                     }
@@ -2932,10 +2909,7 @@ export default function FormularioRiesgosScreen() {
 
                   {firmaTecnico && (
                     <TouchableOpacity
-                      style={[
-                        styles.smallBtn,
-                        { backgroundColor: "#6b7280" },
-                      ]}
+                      style={[styles.smallBtn, { backgroundColor: "#6b7280" }]}
                       onPress={() => !lockedAfterPdf && setFirmaTecnico(null)}
                       disabled={lockedAfterPdf}
                     >
@@ -3028,7 +3002,10 @@ export default function FormularioRiesgosScreen() {
                 setModalFirma({ open: false, tipo: null });
               }}
               onEmpty={() => {
-                Alert.alert("Sin trazo", "Dibuja tu firma dentro del recuadro.");
+                Alert.alert(
+                  "Sin trazo",
+                  "Dibuja tu firma dentro del recuadro.",
+                );
               }}
               descriptionText="Firme dentro del recuadro"
               autoClear={false}
@@ -3122,10 +3099,7 @@ export default function FormularioRiesgosScreen() {
                 </TouchableOpacity>
 
                 <TouchableOpacity
-                  style={[
-                    styles.bigActionBtn,
-                    { backgroundColor: "#111827" },
-                  ]}
+                  style={[styles.bigActionBtn, { backgroundColor: "#111827" }]}
                   onPress={compartirPdf}
                   disabled={downloadingPdf}
                 >
@@ -3140,10 +3114,7 @@ export default function FormularioRiesgosScreen() {
                 </TouchableOpacity>
 
                 <TouchableOpacity
-                  style={[
-                    styles.bigActionBtn,
-                    { backgroundColor: "#F3F4F6" },
-                  ]}
+                  style={[styles.bigActionBtn, { backgroundColor: "#F3F4F6" }]}
                   onPress={closePdfModal}
                 >
                   <Ionicons
@@ -3151,9 +3122,7 @@ export default function FormularioRiesgosScreen() {
                     size={18}
                     color={FIORI.ink}
                   />
-                  <Text
-                    style={[styles.bigActionText, { color: FIORI.ink }]}
-                  >
+                  <Text style={[styles.bigActionText, { color: FIORI.ink }]}>
                     Cerrar
                   </Text>
                 </TouchableOpacity>

@@ -205,6 +205,11 @@ const STATUS_META = {
     type: "final",
     color: "#28B463",
   },
+  "0301": {
+    label: "FINALIZADA SUPER",
+    type: "final",
+    color: "#025f29",
+  },
   "0400": {
     label: "PENDIENTE DE FIRMA",
     type: "firma",
@@ -213,13 +218,17 @@ const STATUS_META = {
   "0600": {
     label: "Carta No Mantto",
     type: "no_mantto",
-    color: "#8E8E93",
+    color: "#b90909",
   },
 };
 
-const PRIORITY = ["0600", "0400", "0300", "0200", "0100"];
+const PRIORITY = ["0600", "0400", "0300", "0200", "0100", "0301"];
 
-function resolveUserstatus(rawUserstatus, _catalogMap = {}, itemFromApi = null) {
+function resolveUserstatus(
+  rawUserstatus,
+  _catalogMap = {},
+  itemFromApi = null,
+) {
   const rawCodes = extractCodes(rawUserstatus);
   const apiCode = normalizeCode(itemFromApi?.estatus_code);
 
