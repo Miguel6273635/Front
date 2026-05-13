@@ -873,23 +873,27 @@ export default function DetalleOrden() {
   ).trim();
 
   const baseStatusCode = pickCurrentStatusCode(orden);
-  const statusCode = hasPendingOfflineCheckin ? "0100" : baseStatusCode;
-  const statusLabel = hasPendingOfflineCheckin
-    ? "CHECK-IN PENDIENTE (OFFLINE)"
-    : resolveStatusLabelFromCode(
-        statusCode,
-        String(
-          orden?.estatus_label || orden?.estatus || orden?.status || "",
-        ).trim(),
-      );
+
+  const statusCode =
+    hasPendingOfflineCheckin && baseStatusCode !== "0200"
+      ? "0100"
+      : baseStatusCode;
+  const statusLabel =
+    hasPendingOfflineCheckin && statusCode !== "0200"
+      ? "CHECK-IN PENDIENTE (OFFLINE)"
+      : resolveStatusLabelFromCode(
+          statusCode,
+          String(
+            orden?.estatus_label || orden?.estatus || orden?.status || "",
+          ).trim(),
+        );
 
   const statusTipo = String(orden?.estatus_tipo || "").toUpperCase();
 
   // Nueva regla:
   // Carta No Mantto solo debe identificarse por 0600.
   // Dejamos statusTipo como apoyo temporal por si viene de cache viejo.
-  const isNoMant =
-    statusCode === "0600" || statusTipo === "NO_MANTENIMIENTO";
+  const isNoMant = statusCode === "0600" || statusTipo === "NO_MANTENIMIENTO";
 
   const isOrderSinEmpezar = !statusCode;
   const isOrderPendiente0100 = statusCode === "0100";
@@ -915,18 +919,16 @@ export default function DetalleOrden() {
     .toUpperCase();
 
   const checkinDone =
-    !hasPendingOfflineCheckin &&
-    (!!orden?.checkin_done ||
-      !!orden?.checkin ||
-      !!orden?.checked_in ||
-      statusCode === "0200");
+    statusCode === "0200" ||
+    (!hasPendingOfflineCheckin &&
+      (!!orden?.checkin_done || !!orden?.checkin || !!orden?.checked_in));
 
   const isOpsLocked =
     isNoMant ||
     isOrderSinEmpezar ||
     isOrderPendiente0100 ||
     isOrderFinishedReal ||
-    !checkinDone;
+    (!checkinDone && statusCode !== "0200");
 
   const canStartTimer =
     isOrderEnProceso && !isNoMant && !isOrderFinishedReal && !!checkinDone;
@@ -955,6 +957,9 @@ export default function DetalleOrden() {
       await setLocalStatusPatch(userEmail, orderId, statusCodeStr);
       await patchCacheOrdenesTecnicoList(userEmail, orderId, statusCodeStr);
       await patchCacheOrdenTecnicoDetail(orderId, statusCodeStr);
+      if (statusCodeStr !== "0200") {
+        await AsyncStorage.removeItem(`tbmky_status_${String(orderId).trim()}`);
+      }
     } catch (e) {
       console.log("[DETALLE] applyLocalOrderStatus error:", e?.message || e);
     }
@@ -1017,6 +1022,8 @@ export default function DetalleOrden() {
       ...(prev || {}),
       estatus_code: "0300",
       userstatus: "0300",
+      UserStatus: "0300",
+      UserStText: "0300",
       estatus_label: "FINALIZADA",
       isFinal: true,
     }));
@@ -1024,14 +1031,24 @@ export default function DetalleOrden() {
     try {
       const cached = await loadOrdenTecnicoDetail(orderId);
       const base = cached?.data || orden || {};
+
       await safeSaveDetailIfWindow(orderId, {
         ...(base || {}),
         estatus_code: "0300",
         userstatus: "0300",
+        UserStatus: "0300",
+        UserStText: "0300",
         estatus_label: "FINALIZADA",
         isFinal: true,
       });
-    } catch {}
+
+      await setLocalStatusPatch(userEmail, orderId, "0300");
+      await patchCacheOrdenesTecnicoList(userEmail, orderId, "0300");
+      await patchCacheOrdenTecnicoDetail(orderId, "0300");
+      await AsyncStorage.removeItem(`tbmky_status_${String(orderId).trim()}`);
+    } catch (e) {
+      console.log("[FINALIZAR][0300][LOCAL] error:", e?.message || e);
+    }
   };
 
   const enqueueSap = async ({

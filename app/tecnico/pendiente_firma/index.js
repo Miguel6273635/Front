@@ -1,4 +1,10 @@
-import React, { useEffect, useMemo, useState, useCallback, useRef } from "react";
+import React, {
+  useEffect,
+  useMemo,
+  useState,
+  useCallback,
+  useRef,
+} from "react";
 import {
   View,
   Text,
@@ -88,8 +94,10 @@ const atEndOfDay = (d) => {
   return x;
 };
 
-const startOfMonth = (d) => new Date(d.getFullYear(), d.getMonth(), 1, 0, 0, 0, 0);
-const endOfMonth = (d) => new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59, 999);
+const startOfMonth = (d) =>
+  new Date(d.getFullYear(), d.getMonth(), 1, 0, 0, 0, 0);
+const endOfMonth = (d) =>
+  new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59, 999);
 const startOfYear = (y) => new Date(y, 0, 1, 0, 0, 0, 0);
 const endOfYear = (y) => new Date(y, 11, 31, 23, 59, 59, 999);
 
@@ -211,7 +219,11 @@ function CheckBox({ checked, disabled, onPress }) {
   return (
     <Pressable
       onPress={disabled ? null : onPress}
-      style={[styles.cbBox, checked && styles.cbBoxChecked, disabled && { opacity: 0.5 }]}
+      style={[
+        styles.cbBox,
+        checked && styles.cbBoxChecked,
+        disabled && { opacity: 0.5 },
+      ]}
       hitSlop={10}
     >
       {checked ? <Ionicons name="checkmark" size={16} color="#fff" /> : null}
@@ -335,12 +347,16 @@ async function fetchOrdenFullForPdf({ apiClient, token, orderId }) {
 
   const headers = token ? { Authorization: `Bearer ${token}` } : undefined;
 
-  const resOrden = await apiClient.get(`/api/ordenes/sap/${orderId}`, { headers });
+  const resOrden = await apiClient.get(`/api/ordenes/sap/${orderId}`, {
+    headers,
+  });
   const baseOrden = resOrden?.data || {};
 
   let ops = [];
   try {
-    const resOps = await apiClient.get(`/api/operaciones/sap/${orderId}`, { headers });
+    const resOps = await apiClient.get(`/api/operaciones/sap/${orderId}`, {
+      headers,
+    });
     const rawOps =
       resOps?.data?.d?.results ||
       resOps?.data?.results ||
@@ -357,7 +373,10 @@ async function fetchOrdenFullForPdf({ apiClient, token, orderId }) {
   let direccionSap = "";
   let clienteSap = "";
   try {
-    const resAddr = await apiClient.get(`/api/ordenes/sap/${orderId}/addresses`, { headers });
+    const resAddr = await apiClient.get(
+      `/api/ordenes/sap/${orderId}/addresses`,
+      { headers },
+    );
     const results = resAddr?.data?.results || resAddr?.data?.d?.results || [];
     const chosen = pickSecondAddress(results);
     const mapped = mapDireccionLikeBackend(chosen);
@@ -396,7 +415,8 @@ function logSapPayload(label, payload, { stripBase64 = false } = {}) {
 
     const cloned = JSON.parse(JSON.stringify(payload));
     const att = cloned?.Attachments?.[0];
-    if (att?.Base64) att.Base64 = `<<base64 omitted: ${String(att.Base64).length} chars>>`;
+    if (att?.Base64)
+      att.Base64 = `<<base64 omitted: ${String(att.Base64).length} chars>>`;
     console.log(label);
     console.log(JSON.stringify(cloned, null, 2));
   } catch {
@@ -405,7 +425,9 @@ function logSapPayload(label, payload, { stripBase64 = false } = {}) {
 }
 
 function isValidEmail(email) {
-  const s = String(email || "").trim().toLowerCase();
+  const s = String(email || "")
+    .trim()
+    .toLowerCase();
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
 }
 
@@ -413,7 +435,7 @@ export default function PendienteFirmaIndex() {
   const { user, ensureValidToken, token } = useAuth();
 
   const userEmail = safeStr(
-    user?.correo || user?.email || user?.upn || user?.username
+    user?.correo || user?.email || user?.upn || user?.username,
   ).trim();
 
   const [loading, setLoading] = useState(true);
@@ -435,7 +457,10 @@ export default function PendienteFirmaIndex() {
   const [showWeekEndPicker, setShowWeekEndPicker] = useState(false);
 
   const now = new Date();
-  const [monthYear, setMonthYear] = useState({ month: now.getMonth(), year: now.getFullYear() });
+  const [monthYear, setMonthYear] = useState({
+    month: now.getMonth(),
+    year: now.getFullYear(),
+  });
   const [showMonthModal, setShowMonthModal] = useState(false);
 
   const [yearOnly, setYearOnly] = useState(now.getFullYear());
@@ -454,14 +479,18 @@ export default function PendienteFirmaIndex() {
   const [comentarioCliente, setComentarioCliente] = useState("");
 
   const [sending, setSending] = useState(false);
-  const [sendProgress, setSendProgress] = useState({ done: 0, total: 0, current: "" });
+  const [sendProgress, setSendProgress] = useState({
+    done: 0,
+    total: 0,
+    current: "",
+  });
   const [sendResults, setSendResults] = useState([]);
 
   const signatureRef = useRef(null);
 
   const selectedIds = useMemo(
     () => Object.keys(selectedMap).filter((k) => !!selectedMap[k]),
-    [selectedMap]
+    [selectedMap],
   );
 
   const { start, end } = useMemo(() => {
@@ -498,26 +527,50 @@ export default function PendienteFirmaIndex() {
       const s = new Date();
       s.setDate(s.getDate() - 365);
       const ss = atStartOfDay(s);
-      return { startDate: ss, endDate: e, startStr: formatLocalYmd(ss), endStr: formatLocalYmd(e) };
+      return {
+        startDate: ss,
+        endDate: e,
+        startStr: formatLocalYmd(ss),
+        endStr: formatLocalYmd(e),
+      };
     }
 
     if (dateMode === "day") {
       const s = atStartOfDay(dayRef);
       const e = atEndOfDay(dayRef);
-      return { startDate: s, endDate: e, startStr: formatLocalYmd(s), endStr: formatLocalYmd(e) };
+      return {
+        startDate: s,
+        endDate: e,
+        startStr: formatLocalYmd(s),
+        endStr: formatLocalYmd(e),
+      };
     }
 
-    if (dateMode === "weekRange" || dateMode === "month" || dateMode === "year") {
+    if (
+      dateMode === "weekRange" ||
+      dateMode === "month" ||
+      dateMode === "year"
+    ) {
       const s = atStartOfDay(start);
       const e = atEndOfDay(end);
-      return { startDate: s, endDate: e, startStr: formatLocalYmd(s), endStr: formatLocalYmd(e) };
+      return {
+        startDate: s,
+        endDate: e,
+        startStr: formatLocalYmd(s),
+        endStr: formatLocalYmd(e),
+      };
     }
 
     const e = atEndOfDay(new Date());
     const s = new Date();
     s.setDate(s.getDate() - 365);
     const ss = atStartOfDay(s);
-    return { startDate: ss, endDate: e, startStr: formatLocalYmd(ss), endStr: formatLocalYmd(e) };
+    return {
+      startDate: ss,
+      endDate: e,
+      startStr: formatLocalYmd(ss),
+      endStr: formatLocalYmd(e),
+    };
   }, [dateMode, dayRef, start, end]);
 
   const fetchOrdenes0400 = useCallback(
@@ -527,7 +580,10 @@ export default function PendienteFirmaIndex() {
         else setLoading(true);
 
         if (!userEmail) {
-          Alert.alert("Sin usuario", "No se detectó el correo/usuario del técnico.");
+          Alert.alert(
+            "Sin usuario",
+            "No se detectó el correo/usuario del técnico.",
+          );
           setAllOrdenes([]);
           return;
         }
@@ -541,7 +597,9 @@ export default function PendienteFirmaIndex() {
         }
 
         const net = await NetInfo.fetch();
-        const online = !!(net?.isConnected && net?.isInternetReachable !== false);
+        const online = !!(
+          net?.isConnected && net?.isInternetReachable !== false
+        );
         setIsOnline(online);
 
         if (!online) {
@@ -549,7 +607,7 @@ export default function PendienteFirmaIndex() {
           if (!offlineRows.length) {
             Alert.alert(
               "Sin conexión",
-              "No hay internet y no se encontró una lista offline de órdenes pendientes de firma."
+              "No hay internet y no se encontró una lista offline de órdenes pendientes de firma.",
             );
           } else {
             setAllOrdenes(offlineRows);
@@ -580,7 +638,11 @@ export default function PendienteFirmaIndex() {
         const data = Array.isArray(res.data) ? res.data : [];
 
         const offlineWin = buildOfflineWindow(new Date());
-        const offlineOnly = filterOrdenesByWindow(data, offlineWin.start, offlineWin.end);
+        const offlineOnly = filterOrdenesByWindow(
+          data,
+          offlineWin.start,
+          offlineWin.end,
+        );
         await saveOrdenesTecnicoList(userEmail, offlineOnly, offlineWin);
 
         const only0400 = data.filter((it) => isPending0400(it));
@@ -595,14 +657,17 @@ export default function PendienteFirmaIndex() {
           return next;
         });
       } catch (e) {
-        console.error("fetchOrdenes0400 ERROR:", e?.response?.data || e?.message || e);
+        console.error(
+          "fetchOrdenes0400 ERROR:",
+          e?.response?.data || e?.message || e,
+        );
 
         const offlineRows = await loadPending0400FromOffline(userEmail);
         if (offlineRows.length) {
           setAllOrdenes(offlineRows);
           Alert.alert(
             "Modo offline",
-            "No se pudo actualizar desde SAP, se muestran las órdenes guardadas localmente."
+            "No se pudo actualizar desde SAP, se muestran las órdenes guardadas localmente.",
           );
         } else {
           const serverMsg =
@@ -617,7 +682,15 @@ export default function PendienteFirmaIndex() {
         setRefreshing(false);
       }
     },
-    [ensureValidToken, userEmail, dateMode, dayRef, start, end, getSapRequestRange]
+    [
+      ensureValidToken,
+      userEmail,
+      dateMode,
+      dayRef,
+      start,
+      end,
+      getSapRequestRange,
+    ],
   );
 
   useEffect(() => {
@@ -627,7 +700,7 @@ export default function PendienteFirmaIndex() {
   useFocusEffect(
     useCallback(() => {
       fetchOrdenes0400({ isRefresh: true });
-    }, [fetchOrdenes0400])
+    }, [fetchOrdenes0400]),
   );
 
   useEffect(() => {
@@ -686,7 +759,10 @@ export default function PendienteFirmaIndex() {
 
   const startFirmaFlow = () => {
     if (selectedIds.length === 0) {
-      Alert.alert("Selecciona órdenes", "Selecciona al menos una orden para firmar.");
+      Alert.alert(
+        "Selecciona órdenes",
+        "Selecciona al menos una orden para firmar.",
+      );
       return;
     }
 
@@ -705,7 +781,7 @@ export default function PendienteFirmaIndex() {
 
     Alert.alert(
       "Firma capturada ✅",
-      `Firma lista para ${firmaForOrderIds.length} orden(es).\n\nAhora puedes presionar "Enviar órdenes".`
+      `Firma lista para ${firmaForOrderIds.length} orden(es).\n\nAhora puedes presionar "Enviar órdenes".`,
     );
   };
 
@@ -729,7 +805,10 @@ export default function PendienteFirmaIndex() {
       return;
     }
     if (!isValidEmail(email)) {
-      Alert.alert("Correo inválido", "Escribe un correo válido (ej: nombre@dominio.com).");
+      Alert.alert(
+        "Correo inválido",
+        "Escribe un correo válido (ej: nombre@dominio.com).",
+      );
       return;
     }
     if (!nombre) {
@@ -771,14 +850,22 @@ export default function PendienteFirmaIndex() {
           onPress: async () => {
             setSending(true);
             setSendResults([]);
-            setSendProgress({ done: 0, total: selectedIds.length, current: "" });
+            setSendProgress({
+              done: 0,
+              total: selectedIds.length,
+              current: "",
+            });
 
             const results = [];
 
             try {
               for (let i = 0; i < selectedIds.length; i++) {
                 const orderId = String(selectedIds[i]).trim();
-                setSendProgress({ done: i, total: selectedIds.length, current: orderId });
+                setSendProgress({
+                  done: i,
+                  total: selectedIds.length,
+                  current: orderId,
+                });
 
                 try {
                   const pending = await loadPendingSign(orderId);
@@ -786,7 +873,7 @@ export default function PendienteFirmaIndex() {
 
                   if (!checkedMap || !Object.keys(checkedMap).length) {
                     throw new Error(
-                      "No hay operaciones guardadas (pendingSign) para esta orden. Entra al detalle y marca/guarda primero."
+                      "No hay operaciones guardadas (pendingSign) para esta orden. Entra al detalle y marca/guarda primero.",
                     );
                   }
 
@@ -798,7 +885,9 @@ export default function PendienteFirmaIndex() {
 
                   const tipo = detectTipoMantenimiento(ordenFull);
 
-                  const consumibles = Array.isArray(pending?.consumibles) ? pending.consumibles : [];
+                  const consumibles = Array.isArray(pending?.consumibles)
+                    ? pending.consumibles
+                    : [];
                   const notaTecnico = String(pending?.notaTecnico || "").trim();
 
                   const startedMs = Number.isFinite(pending?.orderStartedAtMs)
@@ -812,8 +901,8 @@ export default function PendienteFirmaIndex() {
                   const elapsedMs = Number.isFinite(pending?.orderElapsedMs)
                     ? pending.orderElapsedMs
                     : Number.isFinite(startedMs) && Number.isFinite(finishedMs)
-                    ? Math.max(0, finishedMs - startedMs)
-                    : null;
+                      ? Math.max(0, finishedMs - startedMs)
+                      : null;
 
                   const tecnicoNombreFinal = String(
                     user?.nombre ||
@@ -821,17 +910,19 @@ export default function PendienteFirmaIndex() {
                       user?.fullName ||
                       user?.displayName ||
                       user?.username ||
-                      ""
+                      "",
                   ).trim();
 
                   const coberturaTipoFinal = String(
-                    ordenFull?.cobertura_tipo || ordenFull?.coberturaTipo || ""
+                    ordenFull?.cobertura_tipo || ordenFull?.coberturaTipo || "",
                   ).trim();
 
                   const html = await buildMantenimientoHtml({
                     tipo,
                     orden: ordenFull,
-                    operaciones: Array.isArray(ordenFull?.operaciones) ? ordenFull.operaciones : [],
+                    operaciones: Array.isArray(ordenFull?.operaciones)
+                      ? ordenFull.operaciones
+                      : [],
                     checkedMap,
                     signatureData: firmaDataUrl,
 
@@ -888,10 +979,17 @@ export default function PendienteFirmaIndex() {
                     Return: [],
                   };
 
-                  logSapPayload("=== SAP PAYLOAD (ATTACHMENT) ===", payloadAttachment, {
-                    stripBase64: true,
-                  });
-                  logSapPayload("=== SAP PAYLOAD (STATUS 0300 / remove 0400) ===", payloadStatus0300);
+                  logSapPayload(
+                    "=== SAP PAYLOAD (ATTACHMENT) ===",
+                    payloadAttachment,
+                    {
+                      stripBase64: true,
+                    },
+                  );
+                  logSapPayload(
+                    "=== SAP PAYLOAD (STATUS 0300 / remove 0400) ===",
+                    payloadStatus0300,
+                  );
 
                   const workOrderEndpoint = `/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet`;
 
@@ -917,14 +1015,22 @@ export default function PendienteFirmaIndex() {
                     });
                   } else {
                     await api.post(workOrderEndpoint, payloadAttachment, {
-                      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+                      headers: token
+                        ? { Authorization: `Bearer ${token}` }
+                        : undefined,
                     });
 
                     await api.post(workOrderEndpoint, payloadStatus0300, {
-                      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+                      headers: token
+                        ? { Authorization: `Bearer ${token}` }
+                        : undefined,
                     });
 
-                    results.push({ orderId, ok: true, msg: "Enviado OK (PDF + 0300)." });
+                    results.push({
+                      orderId,
+                      ok: true,
+                      msg: "Enviado OK (PDF + 0300).",
+                    });
                   }
                 } catch (err) {
                   const msg =
@@ -937,12 +1043,20 @@ export default function PendienteFirmaIndex() {
                 }
 
                 setSendResults([...results]);
-                setSendProgress({ done: i + 1, total: selectedIds.length, current: orderId });
+                setSendProgress({
+                  done: i + 1,
+                  total: selectedIds.length,
+                  current: orderId,
+                });
               }
 
-              const okSet = new Set(results.filter((r) => r.ok).map((r) => r.orderId));
+              const okSet = new Set(
+                results.filter((r) => r.ok).map((r) => r.orderId),
+              );
               if (okSet.size) {
-                setAllOrdenes((prev) => (prev || []).filter((it) => !okSet.has(String(it?.Orderid))));
+                setAllOrdenes((prev) =>
+                  (prev || []).filter((it) => !okSet.has(String(it?.Orderid))),
+                );
                 setSelectedMap((prev) => {
                   const next = { ...(prev || {}) };
                   for (const id of okSet) delete next[id];
@@ -957,7 +1071,7 @@ export default function PendienteFirmaIndex() {
                 "Envío terminado",
                 online
                   ? `Correctas: ${okCount}\nCon error: ${failCount}\n\nRevisa la consola para ver los JSON enviados.`
-                  : `Guardadas/encoladas: ${okCount}\nCon error: ${failCount}\n\nSe enviarán automáticamente cuando vuelva la red.`
+                  : `Guardadas/encoladas: ${okCount}\nCon error: ${failCount}\n\nSe enviarán automáticamente cuando vuelva la red.`,
               );
 
               if (failCount === 0) {
@@ -971,24 +1085,31 @@ export default function PendienteFirmaIndex() {
             }
           },
         },
-      ]
+      ],
     );
   };
 
   const activeRangeText = useMemo(() => {
     if (dateMode === "all") return "Últimos 365 días";
-    if (dateMode === "day") return `Día: ${atStartOfDay(dayRef).toLocaleDateString()}`;
+    if (dateMode === "day")
+      return `Día: ${atStartOfDay(dayRef).toLocaleDateString()}`;
     if (dateMode === "weekRange") {
       const a = weekStart ? atStartOfDay(weekStart).toLocaleDateString() : "—";
       const b = weekEnd ? atEndOfDay(weekEnd).toLocaleDateString() : "—";
       return `Semana (rango): ${a} → ${b}`;
     }
-    if (dateMode === "month") return `Mes: ${MONTHS[monthYear.month]} ${monthYear.year}`;
+    if (dateMode === "month")
+      return `Mes: ${MONTHS[monthYear.month]} ${monthYear.year}`;
     if (dateMode === "year") return `Año: ${yearOnly}`;
     return "";
   }, [dateMode, dayRef, weekStart, weekEnd, monthYear, yearOnly]);
 
-  const YearPickerContent = ({ selectedYear, onSelect, from = 2020, to = now.getFullYear() + 2 }) => {
+  const YearPickerContent = ({
+    selectedYear,
+    onSelect,
+    from = 2020,
+    to = now.getFullYear() + 2,
+  }) => {
     const years = [];
     for (let y = to; y >= from; y--) years.push(y);
 
@@ -997,10 +1118,20 @@ export default function PendienteFirmaIndex() {
         {years.map((y) => (
           <TouchableOpacity
             key={y}
-            style={[styles.yearItem, selectedYear === y && styles.yearItemActive]}
+            style={[
+              styles.yearItem,
+              selectedYear === y && styles.yearItemActive,
+            ]}
             onPress={() => onSelect(y)}
           >
-            <Text style={[styles.yearItemText, selectedYear === y && styles.yearItemTextActive]}>{y}</Text>
+            <Text
+              style={[
+                styles.yearItemText,
+                selectedYear === y && styles.yearItemTextActive,
+              ]}
+            >
+              {y}
+            </Text>
           </TouchableOpacity>
         ))}
       </ScrollView>
@@ -1015,7 +1146,10 @@ export default function PendienteFirmaIndex() {
 
     return (
       <Pressable
-        style={[styles.card, { borderLeftWidth: 4, borderLeftColor: FIORI.warn }]}
+        style={[
+          styles.card,
+          { borderLeftWidth: 4, borderLeftColor: FIORI.warn },
+        ]}
         onPress={() => {
           if (selectMode) toggleSelect(orderId);
           else openDetalle(orderId);
@@ -1032,7 +1166,9 @@ export default function PendienteFirmaIndex() {
             <Text style={styles.title}>
               #{orderId} - {safeStr(item.order_type || "")}
             </Text>
-            <Text style={styles.label}>Equipo: {safeStr(item.equipment || "—")}</Text>
+            <Text style={styles.label}>
+              Equipo: {safeStr(item.equipment || "—")}
+            </Text>
             <Text style={styles.label}>Inicio: {startLabel}</Text>
             <Text style={styles.label}>Fin: {finishLabel}</Text>
             <Text style={styles.label}>Estatus: PENDIENTE DE FIRMA</Text>
@@ -1064,7 +1200,10 @@ export default function PendienteFirmaIndex() {
           />
 
           <TouchableOpacity
-            style={[styles.actionBtn, selectMode ? styles.actionBtnDanger : styles.actionBtnPrimary]}
+            style={[
+              styles.actionBtn,
+              selectMode ? styles.actionBtnDanger : styles.actionBtnPrimary,
+            ]}
             onPress={() => {
               if (selectMode) {
                 setSelectMode(false);
@@ -1082,7 +1221,9 @@ export default function PendienteFirmaIndex() {
               color="#fff"
               style={{ marginRight: 6 }}
             />
-            <Text style={styles.actionBtnText}>{selectMode ? "Cancelar" : "Seleccionar"}</Text>
+            <Text style={styles.actionBtnText}>
+              {selectMode ? "Cancelar" : "Seleccionar"}
+            </Text>
           </TouchableOpacity>
         </View>
 
@@ -1091,7 +1232,14 @@ export default function PendienteFirmaIndex() {
             style={[styles.chip, dateMode === "all" && styles.chipActive]}
             onPress={() => setDateMode("all")}
           >
-            <Text style={[styles.chipText, dateMode === "all" && styles.chipTextActive]}>Todas</Text>
+            <Text
+              style={[
+                styles.chipText,
+                dateMode === "all" && styles.chipTextActive,
+              ]}
+            >
+              Todas
+            </Text>
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -1101,7 +1249,14 @@ export default function PendienteFirmaIndex() {
               setShowDayPicker(true);
             }}
           >
-            <Text style={[styles.chipText, dateMode === "day" && styles.chipTextActive]}>Día</Text>
+            <Text
+              style={[
+                styles.chipText,
+                dateMode === "day" && styles.chipTextActive,
+              ]}
+            >
+              Día
+            </Text>
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -1111,7 +1266,14 @@ export default function PendienteFirmaIndex() {
               setShowWeekStartPicker(true);
             }}
           >
-            <Text style={[styles.chipText, dateMode === "weekRange" && styles.chipTextActive]}>Semana</Text>
+            <Text
+              style={[
+                styles.chipText,
+                dateMode === "weekRange" && styles.chipTextActive,
+              ]}
+            >
+              Semana
+            </Text>
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -1121,7 +1283,14 @@ export default function PendienteFirmaIndex() {
               setShowMonthModal(true);
             }}
           >
-            <Text style={[styles.chipText, dateMode === "month" && styles.chipTextActive]}>Mes</Text>
+            <Text
+              style={[
+                styles.chipText,
+                dateMode === "month" && styles.chipTextActive,
+              ]}
+            >
+              Mes
+            </Text>
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -1131,10 +1300,21 @@ export default function PendienteFirmaIndex() {
               setShowYearModal(true);
             }}
           >
-            <Text style={[styles.chipText, dateMode === "year" && styles.chipTextActive]}>Año</Text>
+            <Text
+              style={[
+                styles.chipText,
+                dateMode === "year" && styles.chipTextActive,
+              ]}
+            >
+              Año
+            </Text>
           </TouchableOpacity>
 
-          <TouchableOpacity style={styles.clearBtn} onPress={clearFilters} activeOpacity={0.85}>
+          <TouchableOpacity
+            style={styles.clearBtn}
+            onPress={clearFilters}
+            activeOpacity={0.85}
+          >
             <Text style={styles.clearBtnText}>Limpiar</Text>
           </TouchableOpacity>
 
@@ -1152,17 +1332,22 @@ export default function PendienteFirmaIndex() {
         </Text>
 
         <Text style={styles.hint}>
-          Mostrando solo órdenes con estatus <Text style={{ fontWeight: "900" }}>Pendiente de firma</Text>.
+          Mostrando solo órdenes con estatus{" "}
+          <Text style={{ fontWeight: "900" }}>Pendiente de firma</Text>.
           {selectMode ? (
             <>
               {" "}
-              · Seleccionadas: <Text style={{ fontWeight: "900" }}>{selectedIds.length}</Text>
+              · Seleccionadas:{" "}
+              <Text style={{ fontWeight: "900" }}>{selectedIds.length}</Text>
             </>
           ) : null}
           {selectMode && firmaDataUrl ? (
             <>
               {" "}
-              · <Text style={{ fontWeight: "900", color: FIORI.ok }}>Firma lista ✅</Text>
+              ·{" "}
+              <Text style={{ fontWeight: "900", color: FIORI.ok }}>
+                Firma lista ✅
+              </Text>
             </>
           ) : null}
           {selectMode && clienteEmail ? (
@@ -1210,7 +1395,7 @@ export default function PendienteFirmaIndex() {
 
         {showWeekEndPicker && (
           <DateTimePicker
-            value={weekEnd ?? (weekStart ?? new Date())}
+            value={weekEnd ?? weekStart ?? new Date()}
             mode="date"
             minimumDate={weekStart ?? undefined}
             display={Platform.OS === "ios" ? "inline" : "default"}
@@ -1231,28 +1416,45 @@ export default function PendienteFirmaIndex() {
               style={[styles.smallBtn, { backgroundColor: FIORI.cardSubtle }]}
               onPress={() => setShowWeekStartPicker(true)}
             >
-              <Text style={styles.smallBtnText}>Inicio: {weekStart ? weekStart.toLocaleDateString() : "—"}</Text>
+              <Text style={styles.smallBtnText}>
+                Inicio: {weekStart ? weekStart.toLocaleDateString() : "—"}
+              </Text>
             </TouchableOpacity>
 
             <TouchableOpacity
               style={[styles.smallBtn, { backgroundColor: FIORI.cardSubtle }]}
               onPress={() => setShowWeekEndPicker(true)}
             >
-              <Text style={styles.smallBtnText}>Fin: {weekEnd ? weekEnd.toLocaleDateString() : "—"}</Text>
+              <Text style={styles.smallBtnText}>
+                Fin: {weekEnd ? weekEnd.toLocaleDateString() : "—"}
+              </Text>
             </TouchableOpacity>
           </View>
         )}
       </View>
 
-      <Modal visible={showMonthModal} transparent animationType="fade" onRequestClose={() => setShowMonthModal(false)}>
+      <Modal
+        visible={showMonthModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowMonthModal(false)}
+      >
         <View style={styles.modalBackdrop}>
           <View style={styles.modalCard}>
             <View style={styles.modalHeader}>
-              <TouchableOpacity onPress={() => setMonthYear((s) => ({ ...s, year: s.year - 1 }))}>
+              <TouchableOpacity
+                onPress={() =>
+                  setMonthYear((s) => ({ ...s, year: s.year - 1 }))
+                }
+              >
                 <Text style={styles.modalHeaderBtn}>{"‹"}</Text>
               </TouchableOpacity>
               <Text style={styles.modalHeaderTitle}>{monthYear.year}</Text>
-              <TouchableOpacity onPress={() => setMonthYear((s) => ({ ...s, year: s.year + 1 }))}>
+              <TouchableOpacity
+                onPress={() =>
+                  setMonthYear((s) => ({ ...s, year: s.year + 1 }))
+                }
+              >
                 <Text style={styles.modalHeaderBtn}>{"›"}</Text>
               </TouchableOpacity>
             </View>
@@ -1269,23 +1471,40 @@ export default function PendienteFirmaIndex() {
                       setShowMonthModal(false);
                     }}
                   >
-                    <Text style={[styles.monthCellText, active && styles.monthCellTextActive]}>{m}</Text>
+                    <Text
+                      style={[
+                        styles.monthCellText,
+                        active && styles.monthCellTextActive,
+                      ]}
+                    >
+                      {m}
+                    </Text>
                   </TouchableOpacity>
                 );
               })}
             </View>
 
-            <TouchableOpacity style={styles.modalClose} onPress={() => setShowMonthModal(false)}>
+            <TouchableOpacity
+              style={styles.modalClose}
+              onPress={() => setShowMonthModal(false)}
+            >
               <Text style={styles.modalCloseText}>Cerrar</Text>
             </TouchableOpacity>
           </View>
         </View>
       </Modal>
 
-      <Modal visible={showYearModal} transparent animationType="fade" onRequestClose={() => setShowYearModal(false)}>
+      <Modal
+        visible={showYearModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowYearModal(false)}
+      >
         <View style={styles.modalBackdrop}>
           <View style={styles.modalCard}>
-            <Text style={[styles.modalHeaderTitle, { marginBottom: 8 }]}>Selecciona un año</Text>
+            <Text style={[styles.modalHeaderTitle, { marginBottom: 8 }]}>
+              Selecciona un año
+            </Text>
             <YearPickerContent
               selectedYear={yearOnly}
               onSelect={(y) => {
@@ -1295,7 +1514,10 @@ export default function PendienteFirmaIndex() {
               from={now.getFullYear() - 10}
               to={now.getFullYear() + 2}
             />
-            <TouchableOpacity style={styles.modalClose} onPress={() => setShowYearModal(false)}>
+            <TouchableOpacity
+              style={styles.modalClose}
+              onPress={() => setShowYearModal(false)}
+            >
               <Text style={styles.modalCloseText}>Cerrar</Text>
             </TouchableOpacity>
           </View>
@@ -1305,7 +1527,9 @@ export default function PendienteFirmaIndex() {
       {loading && allOrdenes.length === 0 ? (
         <View style={{ paddingTop: 28, alignItems: "center" }}>
           <ActivityIndicator size="large" color={FIORI.accent} />
-          <Text style={{ marginTop: 10, color: FIORI.textMuted }}>Cargando…</Text>
+          <Text style={{ marginTop: 10, color: FIORI.textMuted }}>
+            Cargando…
+          </Text>
         </View>
       ) : (
         <FlatList
@@ -1320,7 +1544,13 @@ export default function PendienteFirmaIndex() {
           refreshing={refreshing}
           onRefresh={() => fetchOrdenes0400({ isRefresh: true })}
           ListEmptyComponent={
-            <Text style={{ textAlign: "center", marginTop: 24, color: FIORI.textMuted }}>
+            <Text
+              style={{
+                textAlign: "center",
+                marginTop: 24,
+                color: FIORI.textMuted,
+              }}
+            >
               No hay órdenes pendientes de firma con los filtros actuales.
             </Text>
           }
@@ -1340,24 +1570,49 @@ export default function PendienteFirmaIndex() {
             <TouchableOpacity
               style={[
                 styles.bottomBtn,
-                { backgroundColor: FIORI.cardSubtle, borderWidth: 1, borderColor: FIORI.border },
+                {
+                  backgroundColor: FIORI.cardSubtle,
+                  borderWidth: 1,
+                  borderColor: FIORI.border,
+                },
               ]}
               onPress={selectAllVisible}
               activeOpacity={0.85}
               disabled={sending}
             >
-              <Ionicons name="list" size={18} color={FIORI.ink} style={{ marginRight: 6 }} />
-              <Text style={[styles.bottomBtnText, { color: FIORI.ink }]}>Seleccionar todo</Text>
+              <Ionicons
+                name="list"
+                size={18}
+                color={FIORI.ink}
+                style={{ marginRight: 6 }}
+              />
+              <Text style={[styles.bottomBtnText, { color: FIORI.ink }]}>
+                Seleccionar todo
+              </Text>
             </TouchableOpacity>
 
             <TouchableOpacity
-              style={[styles.bottomBtn, { backgroundColor: selectedIds.length ? FIORI.accent : "#9AA5B1" }]}
+              style={[
+                styles.bottomBtn,
+                {
+                  backgroundColor: selectedIds.length
+                    ? FIORI.accent
+                    : "#9AA5B1",
+                },
+              ]}
               onPress={startFirmaFlow}
               activeOpacity={0.85}
               disabled={!selectedIds.length || sending}
             >
-              <Ionicons name="create-outline" size={18} color="#fff" style={{ marginRight: 6 }} />
-              <Text style={[styles.bottomBtnText, { color: "#fff" }]}>Agregar firma del cliente</Text>
+              <Ionicons
+                name="create-outline"
+                size={18}
+                color="#fff"
+                style={{ marginRight: 6 }}
+              />
+              <Text style={[styles.bottomBtnText, { color: "#fff" }]}>
+                Agregar firma del cliente
+              </Text>
             </TouchableOpacity>
 
             <TouchableOpacity
@@ -1388,7 +1643,12 @@ export default function PendienteFirmaIndex() {
                 sending
               }
             >
-              <Ionicons name="cloud-upload-outline" size={18} color="#fff" style={{ marginRight: 6 }} />
+              <Ionicons
+                name="cloud-upload-outline"
+                size={18}
+                color="#fff"
+                style={{ marginRight: 6 }}
+              />
               <Text style={[styles.bottomBtnText, { color: "#fff" }]}>
                 {sending ? "Enviando…" : "Enviar órdenes"}
               </Text>
@@ -1396,11 +1656,15 @@ export default function PendienteFirmaIndex() {
           </View>
 
           <Text style={{ marginTop: 8, color: FIORI.textMuted, fontSize: 12 }}>
-            Seleccionadas: <Text style={{ fontWeight: "900" }}>{selectedIds.length}</Text>
+            Seleccionadas:{" "}
+            <Text style={{ fontWeight: "900" }}>{selectedIds.length}</Text>
             {firmaDataUrl ? (
               <>
                 {" "}
-                · <Text style={{ fontWeight: "900", color: FIORI.ok }}>Firma lista ✅</Text>
+                ·{" "}
+                <Text style={{ fontWeight: "900", color: FIORI.ok }}>
+                  Firma lista ✅
+                </Text>
               </>
             ) : null}
             {clienteEmail ? (
@@ -1410,7 +1674,9 @@ export default function PendienteFirmaIndex() {
                 <Text
                   style={{
                     fontWeight: "900",
-                    color: isValidEmail(clienteEmail) ? FIORI.ink : FIORI.danger,
+                    color: isValidEmail(clienteEmail)
+                      ? FIORI.ink
+                      : FIORI.danger,
                   }}
                 >
                   {clienteEmail}
@@ -1419,7 +1685,10 @@ export default function PendienteFirmaIndex() {
             ) : (
               <>
                 {" "}
-                · Correo: <Text style={{ fontWeight: "900", color: FIORI.danger }}>pendiente</Text>
+                · Correo:{" "}
+                <Text style={{ fontWeight: "900", color: FIORI.danger }}>
+                  pendiente
+                </Text>
               </>
             )}
           </Text>
@@ -1436,11 +1705,20 @@ export default function PendienteFirmaIndex() {
           <View style={[styles.modalCard, { maxWidth: 520 }]}>
             <Text style={styles.modalTitle}>Firma del cliente</Text>
             <Text style={styles.modalSub}>
-              Órdenes a firmar: <Text style={{ fontWeight: "900" }}>{firmaForOrderIds.length}</Text>
+              Órdenes a firmar:{" "}
+              <Text style={{ fontWeight: "900" }}>
+                {firmaForOrderIds.length}
+              </Text>
             </Text>
 
             <View style={{ marginTop: 12 }}>
-              <Text style={{ color: FIORI.textMuted, marginBottom: 6, fontWeight: "700" }}>
+              <Text
+                style={{
+                  color: FIORI.textMuted,
+                  marginBottom: 6,
+                  fontWeight: "700",
+                }}
+              >
                 Correo del cliente (obligatorio)
               </Text>
               <TextInput
@@ -1468,7 +1746,13 @@ export default function PendienteFirmaIndex() {
             </View>
 
             <View style={{ marginTop: 12 }}>
-              <Text style={{ color: FIORI.textMuted, marginBottom: 6, fontWeight: "700" }}>
+              <Text
+                style={{
+                  color: FIORI.textMuted,
+                  marginBottom: 6,
+                  fontWeight: "700",
+                }}
+              >
                 Nombre del cliente (obligatorio)
               </Text>
               <TextInput
@@ -1483,7 +1767,13 @@ export default function PendienteFirmaIndex() {
             </View>
 
             <View style={{ marginTop: 12 }}>
-              <Text style={{ color: FIORI.textMuted, marginBottom: 6, fontWeight: "700" }}>
+              <Text
+                style={{
+                  color: FIORI.textMuted,
+                  marginBottom: 6,
+                  fontWeight: "700",
+                }}
+              >
                 Cargo del cliente (obligatorio)
               </Text>
               <TextInput
@@ -1498,7 +1788,13 @@ export default function PendienteFirmaIndex() {
             </View>
 
             <View style={{ marginTop: 12 }}>
-              <Text style={{ color: FIORI.textMuted, marginBottom: 6, fontWeight: "700" }}>
+              <Text
+                style={{
+                  color: FIORI.textMuted,
+                  marginBottom: 6,
+                  fontWeight: "700",
+                }}
+              >
                 Comentarios del cliente (obligatorio)
               </Text>
               <TextInput
@@ -1534,16 +1830,34 @@ export default function PendienteFirmaIndex() {
               />
             </View>
 
-            <View style={{ flexDirection: "row", justifyContent: "flex-end", gap: 10, flexWrap: "wrap" }}>
+            <View
+              style={{
+                flexDirection: "row",
+                justifyContent: "flex-end",
+                gap: 10,
+                flexWrap: "wrap",
+              }}
+            >
               <TouchableOpacity
                 style={[
                   styles.smallBtn,
-                  { backgroundColor: FIORI.cardSubtle, borderWidth: 1, borderColor: FIORI.border },
+                  {
+                    backgroundColor: FIORI.cardSubtle,
+                    borderWidth: 1,
+                    borderColor: FIORI.border,
+                  },
                 ]}
                 onPress={() => signatureRef.current?.clearSignature?.()}
               >
-                <Ionicons name="trash-outline" size={18} color={FIORI.ink} style={{ marginRight: 6 }} />
-                <Text style={[styles.smallBtnText, { color: FIORI.ink }]}>Limpiar</Text>
+                <Ionicons
+                  name="trash-outline"
+                  size={18}
+                  color={FIORI.ink}
+                  style={{ marginRight: 6 }}
+                />
+                <Text style={[styles.smallBtnText, { color: FIORI.ink }]}>
+                  Limpiar
+                </Text>
               </TouchableOpacity>
 
               <TouchableOpacity
@@ -1555,15 +1869,24 @@ export default function PendienteFirmaIndex() {
                   const comentario = String(comentarioCliente || "").trim();
 
                   if (!email) {
-                    Alert.alert("Falta correo", "Escribe el correo del cliente antes de guardar la firma.");
+                    Alert.alert(
+                      "Falta correo",
+                      "Escribe el correo del cliente antes de guardar la firma.",
+                    );
                     return;
                   }
                   if (!isValidEmail(email)) {
-                    Alert.alert("Correo inválido", "Escribe un correo válido (ej: nombre@dominio.com).");
+                    Alert.alert(
+                      "Correo inválido",
+                      "Escribe un correo válido (ej: nombre@dominio.com).",
+                    );
                     return;
                   }
                   if (!nombre) {
-                    Alert.alert("Falta nombre", "Escribe el nombre del cliente.");
+                    Alert.alert(
+                      "Falta nombre",
+                      "Escribe el nombre del cliente.",
+                    );
                     return;
                   }
                   if (!cargo) {
@@ -1571,7 +1894,10 @@ export default function PendienteFirmaIndex() {
                     return;
                   }
                   if (!comentario) {
-                    Alert.alert("Falta comentario", "Escribe el comentario del cliente.");
+                    Alert.alert(
+                      "Falta comentario",
+                      "Escribe el comentario del cliente.",
+                    );
                     return;
                   }
 
@@ -1584,25 +1910,43 @@ export default function PendienteFirmaIndex() {
                   color="#fff"
                   style={{ marginRight: 6 }}
                 />
-                <Text style={[styles.smallBtnText, { color: "#fff" }]}>Guardar firma</Text>
+                <Text style={[styles.smallBtnText, { color: "#fff" }]}>
+                  Guardar firma
+                </Text>
               </TouchableOpacity>
 
               <TouchableOpacity
                 style={[
                   styles.smallBtn,
-                  { backgroundColor: FIORI.cardSubtle, borderWidth: 1, borderColor: FIORI.border },
+                  {
+                    backgroundColor: FIORI.cardSubtle,
+                    borderWidth: 1,
+                    borderColor: FIORI.border,
+                  },
                 ]}
                 onPress={() => setShowFirmaModal(false)}
               >
-                <Ionicons name="close" size={18} color={FIORI.ink} style={{ marginRight: 6 }} />
-                <Text style={[styles.smallBtnText, { color: FIORI.ink }]}>Cancelar</Text>
+                <Ionicons
+                  name="close"
+                  size={18}
+                  color={FIORI.ink}
+                  style={{ marginRight: 6 }}
+                />
+                <Text style={[styles.smallBtnText, { color: FIORI.ink }]}>
+                  Cancelar
+                </Text>
               </TouchableOpacity>
             </View>
           </View>
         </View>
       </Modal>
 
-      <Modal visible={sending} transparent animationType="fade" statusBarTranslucent>
+      <Modal
+        visible={sending}
+        transparent
+        animationType="fade"
+        statusBarTranslucent
+      >
         <View style={styles.blockBackdrop}>
           <View style={styles.blockCard}>
             <ActivityIndicator size="large" color={FIORI.accent} />
@@ -1610,7 +1954,10 @@ export default function PendienteFirmaIndex() {
               Enviando a SAP… ({sendProgress.done}/{sendProgress.total})
             </Text>
             <Text style={styles.blockSub}>
-              Orden actual: <Text style={{ fontWeight: "900" }}>{sendProgress.current || "—"}</Text>
+              Orden actual:{" "}
+              <Text style={{ fontWeight: "900" }}>
+                {sendProgress.current || "—"}
+              </Text>
             </Text>
 
             {!!sendResults?.length && (
@@ -1618,7 +1965,11 @@ export default function PendienteFirmaIndex() {
                 {sendResults.slice(-3).map((r) => (
                   <Text
                     key={`${r.orderId}-${r.ok ? "ok" : "fail"}`}
-                    style={{ fontSize: 12, color: r.ok ? FIORI.ok : FIORI.danger, marginTop: 4 }}
+                    style={{
+                      fontSize: 12,
+                      color: r.ok ? FIORI.ok : FIORI.danger,
+                      marginTop: 4,
+                    }}
                   >
                     {r.ok ? "✅" : "❌"} {r.orderId}: {r.msg}
                   </Text>
@@ -1804,9 +2155,19 @@ const styles = StyleSheet.create({
     borderColor: FIORI.border,
   },
 
-  modalHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 10 },
+  modalHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 10,
+  },
   modalHeaderTitle: { fontSize: 18, fontWeight: "700", color: FIORI.ink },
-  modalHeaderBtn: { fontSize: 22, fontWeight: "900", color: FIORI.accent, paddingHorizontal: 12 },
+  modalHeaderBtn: {
+    fontSize: 22,
+    fontWeight: "900",
+    color: FIORI.accent,
+    paddingHorizontal: 12,
+  },
 
   modalTitle: { fontSize: 18, fontWeight: "900", color: FIORI.ink },
   modalSub: { marginTop: 6, color: FIORI.textMuted },
@@ -1832,7 +2193,12 @@ const styles = StyleSheet.create({
   },
   smallBtnText: { color: FIORI.ink, fontWeight: "600" },
 
-  monthGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8, justifyContent: "space-between" },
+  monthGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    justifyContent: "space-between",
+  },
   monthCell: {
     width: "31.5%",
     backgroundColor: FIORI.cardSubtle,
@@ -1886,5 +2252,10 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   blockTitle: { marginTop: 10, fontWeight: "900", color: FIORI.ink },
-  blockSub: { marginTop: 6, color: FIORI.textMuted, textAlign: "center", fontSize: 12 },
+  blockSub: {
+    marginTop: 6,
+    color: FIORI.textMuted,
+    textAlign: "center",
+    fontSize: 12,
+  },
 });

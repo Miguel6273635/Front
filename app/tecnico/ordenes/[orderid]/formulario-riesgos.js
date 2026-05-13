@@ -72,6 +72,8 @@ const TBMKY_SUBMIT_ENDPOINT = "/api/formulario-riesgos/submit";
 
 const TBMKY_JSON_KEY = (orderId) =>
   `tbmky_json_${String(orderId || "").trim()}`;
+const TBMKY_STATUS_KEY = (orderId) =>
+  `tbmky_status_${String(orderId || "").trim()}`;
 
 const MAX_AUXILIARES = 5;
 
@@ -408,7 +410,7 @@ export default function FormularioRiesgosScreen() {
   const sanitize = (s) => (s || "").replace(/\s/g, "");
 
   const EQUIPO_TIPO_URL_BASE =
-    "https://my-node-api-pro-01.cfapps.us10-001.hana.ondemand.com";
+    "https://my-node-api-qas-01.cfapps.us10-001.hana.ondemand.com";
 
   function mapEqartToTipo(eqartRaw) {
     const v = String(eqartRaw || "")
@@ -1784,6 +1786,28 @@ export default function FormularioRiesgosScreen() {
             newStatus,
           );
           await patchCacheOrdenTecnicoDetail(payload.orderid, newStatus);
+          await AsyncStorage.setItem(
+            TBMKY_STATUS_KEY(payload.orderid),
+            newStatus,
+          );
+
+          setOrden((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  estatus_code: newStatus,
+                  userstatus: newStatus,
+                  UserStatus: newStatus,
+                  UserStText: newStatus,
+                  estatus_label: "EN PROCESO",
+                }
+              : prev,
+          );
+
+          console.log("[TBMKY][STATUS][LOCAL][OFFLINE]", {
+            orderId: payload.orderid,
+            newStatus,
+          });
         } catch (e) {
           console.log("[TBMKY] error patch local offline:", e);
         }
@@ -1864,10 +1888,34 @@ export default function FormularioRiesgosScreen() {
       }
 
       try {
+        const newStatus = "0200";
+
         await saveTbmkyJsonOffline(payload.orderid, payload);
-        await setLocalStatusPatch(userEmail, payload.orderid, "0200");
-        await patchCacheOrdenesTecnicoList(userEmail, payload.orderid, "0200");
-        await patchCacheOrdenTecnicoDetail(payload.orderid, "0200");
+        await setLocalStatusPatch(userEmail, payload.orderid, newStatus);
+        await patchCacheOrdenesTecnicoList(
+          userEmail,
+          payload.orderid,
+          newStatus,
+        );
+        await patchCacheOrdenTecnicoDetail(payload.orderid, newStatus);
+
+        setOrden((prev) =>
+          prev
+            ? {
+                ...prev,
+                estatus_code: newStatus,
+                userstatus: newStatus,
+                UserStatus: newStatus,
+                UserStText: newStatus,
+                estatus_label: "EN PROCESO",
+              }
+            : prev,
+        );
+
+        console.log("[TBMKY][STATUS][LOCAL][ONLINE]", {
+          orderId: payload.orderid,
+          newStatus,
+        });
       } catch (e) {
         console.log("[TBMKY] error patch online:", e);
       }

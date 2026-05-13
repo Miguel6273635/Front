@@ -37,6 +37,11 @@ import {
   filterOrdenesByWindow,
 } from "../../../src/offline/ordenesTecnicoCache";
 
+import {
+  setLocalStatusPatch,
+  patchCacheOrdenesTecnicoList,
+  patchCacheOrdenTecnicoDetail,
+} from "../../../src/offline/ordenesTecnicoLocalPatch";
 // Prefetch de detalles (para no entrar a cada orden)
 import { prefetchOrdenesTecnicoDetalles } from "../../../src/offline/prefetchOrdenesTecnico";
 
@@ -53,7 +58,8 @@ const ACTIVE_EQUIP_KEY = (userEmail) =>
   `activeEquipment:${String(userEmail || "anon")
     .toLowerCase()
     .trim()}`;
-
+const TBMKY_STATUS_KEY = (orderId) =>
+  `tbmky_status_${String(orderId || "").trim()}`;
 // ===== Fiori Palette =====
 const FIORI = {
   pageBg: "#F7F7F7",
@@ -506,7 +512,62 @@ export default function ListaOrdenesTecnico() {
       endStr: formatLocalYmd(e),
     };
   }, [dateMode, start, end, dayRef]);
+  const applyTbmkyOfflineStatuses = useCallback(async (data = []) => {
+    try {
+      const arr = Array.isArray(data) ? data : [];
 
+      const keys = arr
+        .map((x) => x?.Orderid)
+        .filter(Boolean)
+        .map((id) => TBMKY_STATUS_KEY(id));
+
+      if (!keys.length) return arr;
+
+      const pairs = await AsyncStorage.multiGet(keys);
+
+      const statusByOrder = {};
+
+      pairs.forEach(([key, value]) => {
+        if (!value) return;
+
+        const orderId = key.replace("tbmky_status_", "");
+        statusByOrder[String(orderId)] = String(value).trim();
+      });
+
+      return arr.map((x) => {
+        const orderId = String(x?.Orderid || "");
+        const status = statusByOrder[orderId];
+
+        if (!status) return x;
+
+        const currentStatus = normalizeCode(
+          x?.estatus_code ||
+            x?.userstatus ||
+            x?.UserStatus ||
+            x?.UserStText ||
+            "",
+        );
+
+        // Si la orden ya avanzó a 0400, 0300 o 0600,
+        // NO permitas que tbmky_status_ la regrese a 0200.
+        if (["0400", "0300", "0600"].includes(currentStatus)) {
+          return x;
+        }
+
+        return {
+          ...x,
+          estatus_code: status,
+          userstatus: status,
+          UserStatus: status,
+          UserStText: status,
+          estatus_label: STATUS_META[status]?.label || status,
+        };
+      });
+    } catch (e) {
+      console.log("[ORDENES][TBMKY_STATUS] error:", e?.message || e);
+      return data;
+    }
+  }, []);
   const fetchStatusCatalog = async () => {
     try {
       const res = await api.get(
@@ -571,7 +632,8 @@ export default function ListaOrdenesTecnico() {
           const cached = await loadOrdenesTecnicoList(userEmail);
 
           if (cached?.data?.length) {
-            setAllOrdenes(cached.data);
+            const patchedData = await applyTbmkyOfflineStatuses(cached.data);
+            setAllOrdenes(patchedData);
             setLoading(false);
           }
         }
@@ -594,7 +656,8 @@ export default function ListaOrdenesTecnico() {
               "No hay internet y no hay datos guardados aún.",
             );
           } else {
-            setAllOrdenes(cached.data);
+            const patchedData = await applyTbmkyOfflineStatuses(cached.data);
+            setAllOrdenes(patchedData);
           }
 
           return;
@@ -678,7 +741,8 @@ export default function ListaOrdenesTecnico() {
         const cached = await loadOrdenesTecnicoList(userEmail);
 
         if (cached?.data?.length) {
-          setAllOrdenes(cached.data);
+          const patchedData = await applyTbmkyOfflineStatuses(cached.data);
+          setAllOrdenes(patchedData);
         } else {
           const serverMsg =
             error?.response?.data?.error ||
@@ -691,7 +755,13 @@ export default function ListaOrdenesTecnico() {
         setRefreshing(false);
       }
     },
-    [ensureValidToken, userEmail, dateMode, getSapRequestRange],
+    [
+      ensureValidToken,
+      userEmail,
+      dateMode,
+      getSapRequestRange,
+      applyTbmkyOfflineStatuses,
+    ],
   );
 
   // catálogo una vez
@@ -893,19 +963,27 @@ export default function ListaOrdenesTecnico() {
     );
   };
 
-  const postChangeStatusTo0100 = async (orderId) => {
+  const postChangeStatusToSap = async (orderId, statusCode = "0100") => {
+    const finalStatus = normalizeCode(statusCode) || "0100";
+
     const payload = {
       OrderId: orderId,
       WorkOrderHeader: { Orderid: orderId },
       WorkOrderUserStatusSet: [
         {
-          UserStText: "0100",
+          UserStText: finalStatus,
           Langu: "ES",
           Inactive: "",
         },
       ],
       Return: [],
     };
+
+    console.log("[CHECKIN][STATUS][SAP]", {
+      orderId,
+      finalStatus,
+      payload,
+    });
 
     await api.post(
       `/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet?sap-client=400&sap-language=ES`,
@@ -914,6 +992,36 @@ export default function ListaOrdenesTecnico() {
         headers: { "Content-Type": "application/json" },
       },
     );
+  };
+
+  const applyLocalOfflineStatus = async (orderId, statusCode = "0100") => {
+    const finalStatus = normalizeCode(statusCode) || "0100";
+
+    try {
+      await setLocalStatusPatch(userEmail, orderId, finalStatus);
+      await patchCacheOrdenesTecnicoList(userEmail, orderId, finalStatus);
+      await patchCacheOrdenTecnicoDetail(orderId, finalStatus);
+
+      setAllOrdenes((prev) =>
+        (prev || []).map((x) =>
+          String(x?.Orderid) === String(orderId)
+            ? {
+                ...x,
+                estatus_code: finalStatus,
+                userstatus: finalStatus,
+                estatus_label: STATUS_META[finalStatus]?.label || finalStatus,
+              }
+            : x,
+        ),
+      );
+
+      console.log("[CHECKIN][STATUS][LOCAL]", {
+        orderId,
+        finalStatus,
+      });
+    } catch (e) {
+      console.log("[CHECKIN][STATUS][LOCAL] error:", e?.message || e);
+    }
   };
 
   // Sync cola a SAP (foto + estatus)
@@ -956,9 +1064,10 @@ export default function ListaOrdenesTecnico() {
             orderId,
             b64len: b64.length,
           });
+          const statusToSend = normalizeCode(item?.statusCode) || "0100";
 
           await postCheckinEvidence(orderId, b64);
-          await postChangeStatusTo0100(orderId);
+          await postChangeStatusToSap(orderId, statusToSend);
           await removeFromQueue(userEmail, orderId);
         } catch (e) {
           console.log(
@@ -1008,9 +1117,15 @@ export default function ListaOrdenesTecnico() {
       setIsOnline(online);
 
       if (!online) {
+        const offlineStatus = "0100";
+
+        await applyLocalOfflineStatus(orderId, offlineStatus);
+
         const nextQueue = await enqueueCheckin(userEmail, {
           orderId,
           photoBase64: String(checkinPhotoBase64).trim(),
+          statusCode: offlineStatus,
+          lastValidStatus: offlineStatus,
           createdAt: Date.now(),
         });
 
@@ -1030,9 +1145,11 @@ export default function ListaOrdenesTecnico() {
 
       const ok = await ensureValidToken();
       if (!ok) return;
+      const onlineStatus = "0100";
 
       await postCheckinEvidence(orderId, checkinPhotoBase64);
-      await postChangeStatusTo0100(orderId);
+      await postChangeStatusToSap(orderId, onlineStatus);
+      await applyLocalOfflineStatus(orderId, onlineStatus);
 
       Alert.alert(
         "Check-in",
@@ -1057,9 +1174,15 @@ export default function ListaOrdenesTecnico() {
       );
 
       if (!online2) {
+        const offlineStatus = "0100";
+
+        await applyLocalOfflineStatus(orderId, offlineStatus);
+
         const nextQueue = await enqueueCheckin(userEmail, {
           orderId,
           photoBase64: String(checkinPhotoBase64).trim(),
+          statusCode: offlineStatus,
+          lastValidStatus: offlineStatus,
           createdAt: Date.now(),
         });
 
@@ -1108,17 +1231,20 @@ export default function ListaOrdenesTecnico() {
 
     const isPendingOffline = pendingSet.has(String(item?.Orderid));
 
-    const st = isPendingOffline
-      ? {
-          ...stBase,
-          code: "0100",
-          label: "CHECK-IN PENDIENTE (OFFLINE)",
-          type: "pendiente",
-          color: "#7C3AED",
-          lockActions: false,
-          allowCheckin: false,
-        }
-      : stBase;
+    const tbmYaProceso = stBase.code === "0200";
+
+    const st =
+      isPendingOffline && !tbmYaProceso
+        ? {
+            ...stBase,
+            code: "0100",
+            label: STATUS_META["0100"]?.label || "PENDIENTE",
+            type: "pendiente",
+            color: STATUS_META["0100"]?.color || "#D64545",
+            lockActions: false,
+            allowCheckin: false,
+          }
+        : stBase;
 
     const showCheckinBtn = st.type === "start" && st.allowCheckin;
     const showTbmBtn = st.type === "pendiente" || st.type === "proceso";

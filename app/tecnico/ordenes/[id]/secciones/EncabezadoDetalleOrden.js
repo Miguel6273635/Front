@@ -177,32 +177,35 @@ export default function EncabezadoDetalleOrden({
             <Text style={styles.noMantTitle}>Orden pendiente de firma</Text>
 
             <Text style={styles.noMantText}>
-              Esta orden quedó en estatus 0400. Puedes continuar el proceso
-              para capturar firma y finalizar.
+              Esta orden quedó en estatus 0400. Puedes continuar el proceso para
+              capturar firma y finalizar.
             </Text>
           </View>
         </View>
       )}
 
-      {!isCartaNoMantto && !checkinDone && !isFinished0300 && (
-        <View style={styles.noMantBanner}>
-          <Ionicons
-            name="lock-closed-outline"
-            size={22}
-            color={FIORI.text}
-            style={{ marginRight: 10 }}
-          />
+      {!isCartaNoMantto &&
+        statusCode !== "0200" &&
+        !checkinDone &&
+        !isFinished0300 && (
+          <View style={styles.noMantBanner}>
+            <Ionicons
+              name="lock-closed-outline"
+              size={22}
+              color={FIORI.text}
+              style={{ marginRight: 10 }}
+            />
 
-          <View style={{ flex: 1 }}>
-            <Text style={styles.noMantTitle}>Operaciones bloqueadas</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.noMantTitle}>Operaciones bloqueadas</Text>
 
-            <Text style={styles.noMantText}>
-              Primero debes hacer Check-in y el formulario TBMK/Y para habilitar
-              el inicio de la orden.
-            </Text>
+              <Text style={styles.noMantText}>
+                Primero debes hacer Check-in y el formulario TBMK/Y para
+                habilitar el inicio de la orden.
+              </Text>
+            </View>
           </View>
-        </View>
-      )}
+        )}
 
       {isFinished0300 && !isCartaNoMantto && (
         <View style={styles.noMantBanner}>
@@ -257,7 +260,9 @@ export default function EncabezadoDetalleOrden({
 
         <Row
           label="Fin"
-          value={typeof fmtDMY === "function" ? fmtDMY(orden?.finish_date) : "—"}
+          value={
+            typeof fmtDMY === "function" ? fmtDMY(orden?.finish_date) : "—"
+          }
           styles={styles}
           formatValueForRow={formatValueForRow}
         />
@@ -291,7 +296,9 @@ export default function EncabezadoDetalleOrden({
         {Number.isFinite(orderElapsedMs) ? (
           <Row
             label="Tiempo transcurrido"
-            value={typeof msToHMS === "function" ? msToHMS(orderElapsedMs) : "—"}
+            value={
+              typeof msToHMS === "function" ? msToHMS(orderElapsedMs) : "—"
+            }
             styles={styles}
             formatValueForRow={formatValueForRow}
           />
