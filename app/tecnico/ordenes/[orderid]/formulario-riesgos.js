@@ -342,7 +342,7 @@ export default function FormularioRiesgosScreen() {
 
   // ✅ CAMBIO: ahora puede seleccionar varias áreas
   const [selectedAreas, setSelectedAreas] = useState([]);
-
+  const [showAreasModal, setShowAreasModal] = useState(false);
   const [jefeInmediato, setJefeInmediato] = useState("");
   const [actividadDia, setActividadDia] = useState("");
 
@@ -410,7 +410,7 @@ export default function FormularioRiesgosScreen() {
   const sanitize = (s) => (s || "").replace(/\s/g, "");
 
   const EQUIPO_TIPO_URL_BASE =
-    "https://my-node-api-qas-01.cfapps.us10-001.hana.ondemand.com";
+    "https://my-node-api-pro-01.cfapps.us10-001.hana.ondemand.com";
 
   function mapEqartToTipo(eqartRaw) {
     const v = String(eqartRaw || "")
@@ -2312,25 +2312,94 @@ export default function FormularioRiesgosScreen() {
 
               <Text style={styles.fieldLabel}>Área de trabajo *</Text>
 
-              <MultiSelect
+              <TouchableOpacity
                 style={styles.dropdown}
-                data={areaOptions}
-                labelField="label"
-                valueField="value"
-                placeholder="Seleccionar una o más áreas"
-                search
-                searchPlaceholder="Buscar área"
-                value={selectedAreas}
-                onChange={(items) => {
+                onPress={() => {
                   if (lockedAfterPdf) return;
-                  setSelectedAreas(items || []);
+                  setShowAreasModal(true);
                 }}
-                disable={lockedAfterPdf}
-                selectedStyle={styles.multiSelectedStyle}
-                placeholderStyle={styles.dropdownPlaceholder}
-                selectedTextStyle={styles.multiSelectedText}
-                maxHeight={280}
-              />
+                disabled={lockedAfterPdf}
+              >
+                <Text
+                  style={
+                    selectedAreas.length > 0
+                      ? styles.dropdownText
+                      : styles.dropdownPlaceholder
+                  }
+                >
+                  {selectedAreas.length > 0
+                    ? `${selectedAreas.length} área(s) seleccionada(s)`
+                    : "Seleccionar una o más áreas"}
+                </Text>
+
+                <Ionicons
+                  name="chevron-down"
+                  size={18}
+                  color={FIORI.textMuted}
+                />
+              </TouchableOpacity>
+
+              <Modal
+                visible={showAreasModal}
+                transparent
+                animationType="fade"
+                onRequestClose={() => setShowAreasModal(false)}
+              >
+                <View style={styles.areaModalOverlay}>
+                  <View style={styles.areaModalBox}>
+                    <Text style={styles.areaModalTitle}>
+                      Seleccionar área de trabajo
+                    </Text>
+
+                    <ScrollView showsVerticalScrollIndicator={false}>
+                      {areaOptions.map((item) => {
+                        const selected = selectedAreas.includes(item.value);
+
+                        return (
+                          <TouchableOpacity
+                            key={item.value}
+                            style={[
+                              styles.areaOption,
+                              selected && styles.areaOptionSelected,
+                            ]}
+                            onPress={() => {
+                              setSelectedAreas((prev) =>
+                                prev.includes(item.value)
+                                  ? prev.filter((x) => x !== item.value)
+                                  : [...prev, item.value],
+                              );
+                            }}
+                          >
+                            <Text
+                              style={[
+                                styles.areaOptionText,
+                                selected && styles.areaOptionTextSelected,
+                              ]}
+                            >
+                              {item.label}
+                            </Text>
+
+                            {selected && (
+                              <Ionicons
+                                name="checkmark-circle"
+                                size={20}
+                                color={FIORI.accent}
+                              />
+                            )}
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </ScrollView>
+
+                    <TouchableOpacity
+                      style={styles.areaModalButton}
+                      onPress={() => setShowAreasModal(false)}
+                    >
+                      <Text style={styles.areaModalButtonText}>Aceptar</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              </Modal>
 
               {selectedAreas?.length > 0 && (
                 <View style={styles.selectedAreasBox}>
@@ -4022,5 +4091,164 @@ const styles = StyleSheet.create({
 
   signaturePad: {
     flex: 1,
+  },
+  areaDropdownBox: {
+    width: "100%",
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: FIORI.accent,
+    backgroundColor: "#fff",
+    overflow: "hidden",
+    elevation: 6,
+  },
+
+  areaItemContainer: {
+    borderRadius: 10,
+    marginHorizontal: 8,
+    marginVertical: 3,
+  },
+  dropdownText: {
+    color: FIORI.text,
+    fontSize: 13,
+  },
+
+  areaModalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.35)",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 20,
+  },
+
+  areaModalBox: {
+    width: "100%",
+    maxHeight: "70%",
+    backgroundColor: "#fff",
+    borderRadius: 18,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: FIORI.accent,
+  },
+
+  areaModalTitle: {
+    fontSize: 16,
+    fontWeight: "900",
+    color: FIORI.ink,
+    marginBottom: 12,
+  },
+
+  areaOption: {
+    minHeight: 48,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    borderRadius: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 6,
+    backgroundColor: "#fff",
+  },
+
+  areaOptionSelected: {
+    backgroundColor: FIORI.accentSoft,
+    borderWidth: 1,
+    borderColor: FIORI.accent,
+  },
+
+  areaOptionText: {
+    fontSize: 14,
+    color: FIORI.text,
+    flex: 1,
+  },
+
+  areaOptionTextSelected: {
+    color: FIORI.accent,
+    fontWeight: "800",
+  },
+
+  areaModalButton: {
+    marginTop: 12,
+    height: 46,
+    borderRadius: 14,
+    backgroundColor: FIORI.accent,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  areaModalButtonText: {
+    color: "#fff",
+    fontWeight: "900",
+  },
+  dropdownText: {
+    color: FIORI.text,
+    fontSize: 14,
+  },
+
+  areaModalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.45)",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 20,
+  },
+
+  areaModalBox: {
+    width: "92%",
+    maxHeight: "70%",
+    backgroundColor: "#fff",
+    borderRadius: 20,
+    padding: 18,
+    borderWidth: 1,
+    borderColor: FIORI.accent,
+  },
+
+  areaModalTitle: {
+    fontSize: 16,
+    fontWeight: "bold",
+    color: FIORI.ink,
+    marginBottom: 15,
+    textAlign: "center",
+  },
+
+  areaOption: {
+    minHeight: 50,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 8,
+  },
+
+  areaOptionSelected: {
+    backgroundColor: FIORI.accentSoft,
+    borderWidth: 1,
+    borderColor: FIORI.accent,
+  },
+
+  areaOptionText: {
+    fontSize: 14,
+    color: FIORI.text,
+  },
+
+  areaOptionTextSelected: {
+    color: FIORI.accent,
+    fontWeight: "bold",
+  },
+
+  areaModalButton: {
+    marginTop: 15,
+    height: 48,
+    borderRadius: 14,
+    backgroundColor: FIORI.accent,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+
+  areaModalButtonText: {
+    color: "#fff",
+    fontWeight: "bold",
+    fontSize: 15,
   },
 });

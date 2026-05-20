@@ -114,13 +114,18 @@ const atEndOfDay = (d) => {
   x.setHours(23, 59, 59, 999);
   return x;
 };
-const startOfMonth = (d) => new Date(d.getFullYear(), d.getMonth(), 1, 0, 0, 0, 0);
-const endOfMonth = (d) => new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59, 999);
+const startOfMonth = (d) =>
+  new Date(d.getFullYear(), d.getMonth(), 1, 0, 0, 0, 0);
+const endOfMonth = (d) =>
+  new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59, 999);
 const startOfYear = (y) => new Date(y, 0, 1, 0, 0, 0, 0);
 const endOfYear = (y) => new Date(y, 11, 31, 23, 59, 59, 999);
 
 // ===== UI helpers =====
-const normalize = (s) => String(s || "").trim().toLowerCase();
+const normalize = (s) =>
+  String(s || "")
+    .trim()
+    .toLowerCase();
 
 // ✅ Prioridad SIEMPRE AZUL (SAP)
 const prioMeta = (p) => {
@@ -205,13 +210,15 @@ export default function AveriaIndexTecnico() {
 
   const activeRangeText = useMemo(() => {
     if (dateMode === "all") return "Últimos 90 días";
-    if (dateMode === "day") return `Día: ${atStartOfDay(dayRef).toLocaleDateString()}`;
+    if (dateMode === "day")
+      return `Día: ${atStartOfDay(dayRef).toLocaleDateString()}`;
     if (dateMode === "weekRange") {
       const a = weekStart ? atStartOfDay(weekStart).toLocaleDateString() : "—";
       const b = weekEnd ? atEndOfDay(weekEnd).toLocaleDateString() : "—";
       return `Semana (rango): ${a} → ${b}`;
     }
-    if (dateMode === "month") return `Mes: ${MONTHS[monthYear.month]} ${monthYear.year}`;
+    if (dateMode === "month")
+      return `Mes: ${MONTHS[monthYear.month]} ${monthYear.year}`;
     if (dateMode === "year") return `Año: ${yearOnly}`;
     return "";
   }, [dateMode, dayRef, weekStart, weekEnd, monthYear, yearOnly]);
@@ -241,7 +248,7 @@ export default function AveriaIndexTecnico() {
         if (Array.isArray(items) && items.length) {
           setAvisos(items);
           setOfflineMsg(
-            `Mostrando datos offline (guardados: ${new Date(cached.savedAt).toLocaleString()})`
+            `Mostrando datos offline (guardados: ${new Date(cached.savedAt).toLocaleString()})`,
           );
         } else {
           setAvisos([]);
@@ -261,7 +268,7 @@ export default function AveriaIndexTecnico() {
         {
           params: { $filter: filter, $format: "json" },
           headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-        }
+        },
       );
 
       const raw = res?.data;
@@ -276,7 +283,7 @@ export default function AveriaIndexTecnico() {
         NotifNo: it?.NotifNo,
         ShortText: it?.ShortText || "",
         Equipment: it?.Equipment || "",
-        FunctLoc: it?.FunctLoc || "",
+        MaterialLong: it?.MaterialLong || "",
         CustNo: it?.CustNo || "",
         Priority: it?.Priority || it?.Priotype || "",
         NotifDate: it?.NotifDate || null,
@@ -296,7 +303,9 @@ export default function AveriaIndexTecnico() {
       await saveAveriasListCache({ correo, startYmd, endYmd, items: mapped });
     } catch (err) {
       console.error("Error cargando avisos OData:", err?.response?.data || err);
-      setErrorMsg("No se pudieron cargar los avisos desde SAP. Intenta nuevamente.");
+      setErrorMsg(
+        "No se pudieron cargar los avisos desde SAP. Intenta nuevamente.",
+      );
 
       // ✅ fallback a cache
       try {
@@ -308,7 +317,7 @@ export default function AveriaIndexTecnico() {
         if (Array.isArray(items) && items.length) {
           setAvisos(items);
           setOfflineMsg(
-            `Mostrando último cache guardado (guardado: ${new Date(cached.savedAt).toLocaleString()})`
+            `Mostrando último cache guardado (guardado: ${new Date(cached.savedAt).toLocaleString()})`,
           );
           setErrorMsg("");
         } else {
@@ -321,7 +330,18 @@ export default function AveriaIndexTecnico() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [start, end, token, user, dateMode, dayRef, weekStart, weekEnd, monthYear, yearOnly]);
+  }, [
+    start,
+    end,
+    token,
+    user,
+    dateMode,
+    dayRef,
+    weekStart,
+    weekEnd,
+    monthYear,
+    yearOnly,
+  ]);
 
   useEffect(() => {
     fetchAvisosForRange();
@@ -345,7 +365,10 @@ export default function AveriaIndexTecnico() {
         {years.map((y) => (
           <TouchableOpacity
             key={y}
-            style={[styles.yearItem, selectedYear === y && styles.yearItemActive]}
+            style={[
+              styles.yearItem,
+              selectedYear === y && styles.yearItemActive,
+            ]}
             onPress={() => onSelect(y)}
           >
             <Text
@@ -371,9 +394,15 @@ export default function AveriaIndexTecnico() {
       const a = normalize(it?.NotifNo);
       const b = normalize(it?.Equipment);
       const c = normalize(it?.ShortText);
-      const d = normalize(it?.FunctLoc);
+      const d = normalize(it?.MaterialLong);
       const e = normalize(it?.CustNo);
-      return a.includes(q) || b.includes(q) || c.includes(q) || d.includes(q) || e.includes(q);
+      return (
+        a.includes(q) ||
+        b.includes(q) ||
+        c.includes(q) ||
+        d.includes(q) ||
+        e.includes(q)
+      );
     });
   }, [avisos, query]);
 
@@ -405,7 +434,8 @@ export default function AveriaIndexTecnico() {
 
       <View style={styles.resultsRow}>
         <Text style={styles.resultsText}>
-          Mostrando <Text style={styles.resultsStrong}>{filteredAvisos.length}</Text> de{" "}
+          Mostrando{" "}
+          <Text style={styles.resultsStrong}>{filteredAvisos.length}</Text> de{" "}
           <Text style={styles.resultsStrong}>{avisos.length}</Text>
         </Text>
       </View>
@@ -440,13 +470,16 @@ export default function AveriaIndexTecnico() {
               <Text style={styles.cardDate}>
                 {formatDate(item?.NotifDate)}{" "}
                 <Text style={styles.cardDateMuted}>•</Text>{" "}
-                <Text style={styles.cardDateMuted}>Equipo:</Text> {item?.Equipment || "—"}
+                <Text style={styles.cardDateMuted}>Equipo:</Text>{" "}
+                {item?.Equipment || "—"}
               </Text>
             </View>
 
             {!!item?.Priority && (
               <View style={[styles.prioChip, { backgroundColor: pm.chipBg }]}>
-                <Text style={[styles.prioChipText, { color: pm.chipText }]}>{pm.label}</Text>
+                <Text style={[styles.prioChipText, { color: pm.chipText }]}>
+                  {pm.label}
+                </Text>
               </View>
             )}
           </View>
@@ -456,15 +489,23 @@ export default function AveriaIndexTecnico() {
           </Text>
 
           <View style={styles.metaRow}>
-            <Ionicons name="location-outline" size={16} color={FIORI.textMuted} />
+            <Ionicons
+              name="location-outline"
+              size={16}
+              color={FIORI.textMuted}
+            />
             <Text style={styles.metaText} numberOfLines={1}>
-              {item?.FunctLoc || "—"}
+              {item?.MaterialLong || "—"}
             </Text>
           </View>
 
           {!!item?.CustNo && (
             <View style={styles.metaRow}>
-              <Ionicons name="business-outline" size={16} color={FIORI.textMuted} />
+              <Ionicons
+                name="business-outline"
+                size={16}
+                color={FIORI.textMuted}
+              />
               <Text style={styles.metaText} numberOfLines={1}>
                 Cliente: {item?.CustNo}
               </Text>
@@ -489,7 +530,12 @@ export default function AveriaIndexTecnico() {
             style={[styles.chip, dateMode === "all" && styles.chipActive]}
             onPress={() => setDateMode("all")}
           >
-            <Text style={[styles.chipText, dateMode === "all" && styles.chipTextActive]}>
+            <Text
+              style={[
+                styles.chipText,
+                dateMode === "all" && styles.chipTextActive,
+              ]}
+            >
               Todas
             </Text>
           </TouchableOpacity>
@@ -501,7 +547,14 @@ export default function AveriaIndexTecnico() {
               setShowDayPicker(true);
             }}
           >
-            <Text style={[styles.chipText, dateMode === "day" && styles.chipTextActive]}>Día</Text>
+            <Text
+              style={[
+                styles.chipText,
+                dateMode === "day" && styles.chipTextActive,
+              ]}
+            >
+              Día
+            </Text>
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -511,7 +564,12 @@ export default function AveriaIndexTecnico() {
               setShowWeekStartPicker(true);
             }}
           >
-            <Text style={[styles.chipText, dateMode === "weekRange" && styles.chipTextActive]}>
+            <Text
+              style={[
+                styles.chipText,
+                dateMode === "weekRange" && styles.chipTextActive,
+              ]}
+            >
               Semana (rango)
             </Text>
           </TouchableOpacity>
@@ -523,7 +581,12 @@ export default function AveriaIndexTecnico() {
               setShowMonthModal(true);
             }}
           >
-            <Text style={[styles.chipText, dateMode === "month" && styles.chipTextActive]}>
+            <Text
+              style={[
+                styles.chipText,
+                dateMode === "month" && styles.chipTextActive,
+              ]}
+            >
               Mes
             </Text>
           </TouchableOpacity>
@@ -535,7 +598,12 @@ export default function AveriaIndexTecnico() {
               setShowYearModal(true);
             }}
           >
-            <Text style={[styles.chipText, dateMode === "year" && styles.chipTextActive]}>
+            <Text
+              style={[
+                styles.chipText,
+                dateMode === "year" && styles.chipTextActive,
+              ]}
+            >
               Año
             </Text>
           </TouchableOpacity>
@@ -644,11 +712,19 @@ export default function AveriaIndexTecnico() {
         <View style={styles.modalBackdrop}>
           <View style={styles.modalCard}>
             <View style={styles.modalHeader}>
-              <TouchableOpacity onPress={() => setMonthYear((s) => ({ ...s, year: s.year - 1 }))}>
+              <TouchableOpacity
+                onPress={() =>
+                  setMonthYear((s) => ({ ...s, year: s.year - 1 }))
+                }
+              >
                 <Text style={styles.modalHeaderBtn}>{"‹"}</Text>
               </TouchableOpacity>
               <Text style={styles.modalHeaderTitle}>{monthYear.year}</Text>
-              <TouchableOpacity onPress={() => setMonthYear((s) => ({ ...s, year: s.year + 1 }))}>
+              <TouchableOpacity
+                onPress={() =>
+                  setMonthYear((s) => ({ ...s, year: s.year + 1 }))
+                }
+              >
                 <Text style={styles.modalHeaderBtn}>{"›"}</Text>
               </TouchableOpacity>
             </View>
@@ -665,7 +741,12 @@ export default function AveriaIndexTecnico() {
                       setShowMonthModal(false);
                     }}
                   >
-                    <Text style={[styles.monthCellText, active && styles.monthCellTextActive]}>
+                    <Text
+                      style={[
+                        styles.monthCellText,
+                        active && styles.monthCellTextActive,
+                      ]}
+                    >
                       {m}
                     </Text>
                   </TouchableOpacity>
@@ -673,7 +754,10 @@ export default function AveriaIndexTecnico() {
               })}
             </View>
 
-            <TouchableOpacity style={styles.modalClose} onPress={() => setShowMonthModal(false)}>
+            <TouchableOpacity
+              style={styles.modalClose}
+              onPress={() => setShowMonthModal(false)}
+            >
               <Text style={styles.modalCloseText}>Cerrar</Text>
             </TouchableOpacity>
           </View>
@@ -689,7 +773,9 @@ export default function AveriaIndexTecnico() {
       >
         <View style={styles.modalBackdrop}>
           <View style={styles.modalCard}>
-            <Text style={[styles.modalHeaderTitle, { marginBottom: 8 }]}>Selecciona un año</Text>
+            <Text style={[styles.modalHeaderTitle, { marginBottom: 8 }]}>
+              Selecciona un año
+            </Text>
             <YearPickerContent
               selectedYear={yearOnly}
               onSelect={(y) => {
@@ -699,7 +785,10 @@ export default function AveriaIndexTecnico() {
               from={now.getFullYear() - 10}
               to={now.getFullYear() + 2}
             />
-            <TouchableOpacity style={styles.modalClose} onPress={() => setShowYearModal(false)}>
+            <TouchableOpacity
+              style={styles.modalClose}
+              onPress={() => setShowYearModal(false)}
+            >
               <Text style={styles.modalCloseText}>Cerrar</Text>
             </TouchableOpacity>
           </View>
@@ -716,14 +805,26 @@ export default function AveriaIndexTecnico() {
         ) : (
           <FlatList
             data={filteredAvisos}
-            keyExtractor={(item, index) => item?.NotifNo?.toString() || `notif-${index}`}
+            keyExtractor={(item, index) =>
+              item?.NotifNo?.toString() || `notif-${index}`
+            }
             renderItem={renderItem}
             ListHeaderComponent={listHeader}
             contentContainerStyle={{ padding: 16, paddingBottom: 120 }}
-            refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+            refreshControl={
+              <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+            }
             ListEmptyComponent={
-              <Text style={{ textAlign: "center", marginTop: 40, color: FIORI.textMuted }}>
-                {query ? "No hay resultados con esa búsqueda." : "No hay avisos con los filtros actuales."}
+              <Text
+                style={{
+                  textAlign: "center",
+                  marginTop: 40,
+                  color: FIORI.textMuted,
+                }}
+              >
+                {query
+                  ? "No hay resultados con esa búsqueda."
+                  : "No hay avisos con los filtros actuales."}
               </Text>
             }
           />

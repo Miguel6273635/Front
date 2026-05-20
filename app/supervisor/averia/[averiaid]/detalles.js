@@ -74,14 +74,14 @@ export default function DetallesAveriaSupervisor() {
     // Header
     const resHdr = await api.get(
       `/api/odata/ZCS_GET_NOTIFICATION_SRV/NotificationHeaderSet('${encodeURIComponent(averiaid)}')`,
-      { params: { $format: "json" } }
+      { params: { $format: "json" } },
     );
     const hdr = resHdr?.data?.d ?? resHdr?.data ?? null;
 
     // Items
     const resItems = await api.get(
       `/api/odata/ZCS_GET_NOTIFICATION_SRV/NotificationHeaderSet('${encodeURIComponent(averiaid)}')/NotificationItemsSet`,
-      { params: { $format: "json" } }
+      { params: { $format: "json" } },
     );
 
     const itemsRaw = resItems?.data;
@@ -100,9 +100,12 @@ export default function DetallesAveriaSupervisor() {
 
     // normaliza
     const codeGroup =
-      hdr?.CodeGroup ?? hdr?.Codegroup ?? hdr?.CODEGROUP ?? hdr?.codeGroup ?? null;
-    const coding =
-      hdr?.Coding ?? hdr?.CODING ?? hdr?.coding ?? null;
+      hdr?.CodeGroup ??
+      hdr?.Codegroup ??
+      hdr?.CODEGROUP ??
+      hdr?.codeGroup ??
+      null;
+    const coding = hdr?.Coding ?? hdr?.CODING ?? hdr?.coding ?? null;
 
     const hdrFixed = { ...(hdr || {}), CodeGroup: codeGroup, Coding: coding };
 
@@ -129,9 +132,16 @@ export default function DetallesAveriaSupervisor() {
       }
 
       // ✅ guarda cache
-      await saveAveriaDetailCache({ averiaid, header: hdrFixed, codigos: codes });
+      await saveAveriaDetailCache({
+        averiaid,
+        header: hdrFixed,
+        codigos: codes,
+      });
     } catch (err) {
-      console.error("Error al cargar detalle de avería:", err?.response?.data || err);
+      console.error(
+        "Error al cargar detalle de avería:",
+        err?.response?.data || err,
+      );
 
       // ✅ fallback cache
       const cached = await loadAveriaDetailCache({ averiaid });
@@ -148,9 +158,13 @@ export default function DetallesAveriaSupervisor() {
           });
         }
 
-        if (!silent) Alert.alert("Sin conexión", "Mostrando detalle guardado (offline).");
+        if (!silent)
+          Alert.alert("Sin conexión", "Mostrando detalle guardado (offline).");
       } else {
-        Alert.alert("Error", "No se pudo cargar el detalle del aviso y no hay cache guardado.");
+        Alert.alert(
+          "Error",
+          "No se pudo cargar el detalle del aviso y no hay cache guardado.",
+        );
       }
     } finally {
       setLoading(false);
@@ -176,9 +190,12 @@ export default function DetallesAveriaSupervisor() {
 
       // ✅ 1) intenta por tu API (mejor)
       try {
-        const { data } = await api.get("/api/aviso-averia/catalogos/circunstancia", {
-          params: { catalogo: "P" },
-        });
+        const { data } = await api.get(
+          "/api/aviso-averia/catalogos/circunstancia",
+          {
+            params: { catalogo: "P" },
+          },
+        );
 
         if (Array.isArray(data) && data.length) {
           setCausas(data);
@@ -190,7 +207,9 @@ export default function DetallesAveriaSupervisor() {
       }
 
       // ✅ 2) fallback launchpad (puede fallar sin SSO)
-      const resp = await fetch(CATALOGOS_P_URL, { headers: { Accept: "application/json" } });
+      const resp = await fetch(CATALOGOS_P_URL, {
+        headers: { Accept: "application/json" },
+      });
 
       if (!resp.ok) {
         const txt = await resp.text();
@@ -238,7 +257,10 @@ export default function DetallesAveriaSupervisor() {
 
     const notifNoToUse = String(header?.NotifNo || averiaid || "").trim();
     if (!notifNoToUse) {
-      Alert.alert("Error", "No se pudo determinar el número de aviso (NotifNo).");
+      Alert.alert(
+        "Error",
+        "No se pudo determinar el número de aviso (NotifNo).",
+      );
       return;
     }
 
@@ -258,7 +280,7 @@ export default function DetallesAveriaSupervisor() {
       const { data } = await api.post(
         "/api/odata/ZCS_CHANGE_AVISO_SRV/NotificationHeaderSet",
         payload,
-        { params: { "sap-client": "400", "sap-language": "ES" } }
+        { params: { "sap-client": "400", "sap-language": "ES" } },
       );
 
       if (!data) throw new Error("Respuesta vacía de SAP");
@@ -274,12 +296,18 @@ export default function DetallesAveriaSupervisor() {
       await saveAveriaDetailCache({ averiaid, header: nextHeader, codigos });
 
       setModalCausa(false);
-      Alert.alert("Listo", `Causa asignada: ${selectedCausa.Descripcion || selectedCausa.Codigo}`);
+      Alert.alert(
+        "Listo",
+        `Causa asignada: ${selectedCausa.Descripcion || selectedCausa.Codigo}`,
+      );
     } catch (e) {
-      console.error("Error asignar causa:", e?.response?.data || e.message || e);
+      console.error(
+        "Error asignar causa:",
+        e?.response?.data || e.message || e,
+      );
       Alert.alert(
         "Error",
-        "No se pudo asignar la causa. (Si estás offline, necesitas conexión para guardar en SAP)."
+        "No se pudo asignar la causa. (Si estás offline, necesitas conexión para guardar en SAP).",
       );
     } finally {
       setSavingCausa(false);
@@ -309,7 +337,8 @@ export default function DetallesAveriaSupervisor() {
     const q = searchCausa.trim().toLowerCase();
     if (!q) return causas;
     return causas.filter((c) => {
-      const t = `${c?.Descripcion || ""} ${c?.GrupoCodigo || ""} ${c?.Codigo || ""}`.toLowerCase();
+      const t =
+        `${c?.Descripcion || ""} ${c?.GrupoCodigo || ""} ${c?.Codigo || ""}`.toLowerCase();
       return t.includes(q);
     });
   }, [causas, searchCausa]);
@@ -332,8 +361,12 @@ export default function DetallesAveriaSupervisor() {
     return (
       <View style={styles.container}>
         <Header title="Detalle de avería" />
-        <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
-          <Text style={{ color: COLORS.text }}>No se encontró información para el aviso #{averiaid}</Text>
+        <View
+          style={{ flex: 1, justifyContent: "center", alignItems: "center" }}
+        >
+          <Text style={{ color: COLORS.text }}>
+            No se encontró información para el aviso #{averiaid}
+          </Text>
         </View>
       </View>
     );
@@ -346,7 +379,7 @@ export default function DetallesAveriaSupervisor() {
   const codeGroup = header.CodeGroup;
   const coding = header.Coding;
   const equipment = header.Equipment;
-  const functLoc = header.FunctLoc;
+  const MaterialLong = header.MaterialLong;
   const notifDate = header.NotifDate;
   const desstDate = header.Desstdate;
   const createdOn = header.CreatedOn;
@@ -356,14 +389,22 @@ export default function DetallesAveriaSupervisor() {
       <Header title={`Aviso ${notifNo || averiaid}`} />
 
       <ScrollView contentContainerStyle={styles.scrollContent}>
-        <TouchableOpacity style={styles.backRow} onPress={goBack} activeOpacity={0.6}>
+        <TouchableOpacity
+          style={styles.backRow}
+          onPress={goBack}
+          activeOpacity={0.6}
+        >
           <Ionicons name="chevron-back" size={20} color={COLORS.accent} />
           <Text style={styles.backText}>Volver a la lista</Text>
         </TouchableOpacity>
 
         {!!cacheInfo?.savedAt && (
           <View style={styles.offlineBadge}>
-            <Ionicons name="cloud-offline-outline" size={14} color={COLORS.title} />
+            <Ionicons
+              name="cloud-offline-outline"
+              size={14}
+              color={COLORS.title}
+            />
             <Text style={styles.offlineBadgeText}>
               Offline · Guardado: {new Date(cacheInfo.savedAt).toLocaleString()}
             </Text>
@@ -371,7 +412,10 @@ export default function DetallesAveriaSupervisor() {
         )}
 
         <Pressable
-          style={({ pressed }) => [styles.refreshInline, pressed && { opacity: 0.9 }]}
+          style={({ pressed }) => [
+            styles.refreshInline,
+            pressed && { opacity: 0.9 },
+          ]}
           onPress={() => fetchDetalle()}
         >
           <Ionicons name="refresh-outline" size={16} color={COLORS.accent} />
@@ -381,13 +425,23 @@ export default function DetallesAveriaSupervisor() {
         <View style={styles.cardHighlight}>
           <View style={styles.chipRow}>
             <View style={styles.chip}>
-              <Ionicons name="alert-circle-outline" size={14} color={COLORS.accent} style={{ marginRight: 4 }} />
+              <Ionicons
+                name="alert-circle-outline"
+                size={14}
+                color={COLORS.accent}
+                style={{ marginRight: 4 }}
+              />
               <Text style={styles.chipText}>{notifType || "Sin tipo"}</Text>
             </View>
 
             {equipment ? (
               <View style={styles.chip}>
-                <Ionicons name="hardware-chip-outline" size={14} color={COLORS.accent} style={{ marginRight: 4 }} />
+                <Ionicons
+                  name="hardware-chip-outline"
+                  size={14}
+                  color={COLORS.accent}
+                  style={{ marginRight: 4 }}
+                />
                 <Text style={styles.chipText}>{equipment}</Text>
               </View>
             ) : null}
@@ -398,7 +452,9 @@ export default function DetallesAveriaSupervisor() {
           {reportedBy ? (
             <Text style={styles.subtitle}>
               Reportado por{" "}
-              <Text style={{ fontWeight: "700", color: COLORS.title }}>{reportedBy}</Text>
+              <Text style={{ fontWeight: "700", color: COLORS.title }}>
+                {reportedBy}
+              </Text>
             </Text>
           ) : null}
 
@@ -417,8 +473,15 @@ export default function DetallesAveriaSupervisor() {
             onPress={openModalCausa}
           >
             <View style={{ flexDirection: "row", alignItems: "center" }}>
-              <Ionicons name="list-outline" size={18} color={COLORS.accent} style={{ marginRight: 8 }} />
-              <Text style={styles.btnSecondaryText}>Asignar causa de la avería</Text>
+              <Ionicons
+                name="list-outline"
+                size={18}
+                color={COLORS.accent}
+                style={{ marginRight: 8 }}
+              />
+              <Text style={styles.btnSecondaryText}>
+                Asignar causa de la avería
+              </Text>
             </View>
           </Pressable>
         </View>
@@ -439,7 +502,7 @@ export default function DetallesAveriaSupervisor() {
 
             <View style={styles.infoItemFull}>
               <Text style={styles.infoLabel}>Ubicación funcional</Text>
-              <Text style={styles.infoValue}>{functLoc || "—"}</Text>
+              <Text style={styles.infoValue}>{MaterialLong || "—"}</Text>
             </View>
 
             <View style={styles.infoItem}>
@@ -476,7 +539,9 @@ export default function DetallesAveriaSupervisor() {
         </View>
 
         <View style={styles.card}>
-          <Text style={styles.sectionTitle}>Detalle de daño / parte / causa</Text>
+          <Text style={styles.sectionTitle}>
+            Detalle de daño / parte / causa
+          </Text>
 
           {codigos?.Descript ? (
             <View style={styles.block}>
@@ -488,18 +553,42 @@ export default function DetallesAveriaSupervisor() {
           <View style={styles.chipBlock}>
             <Text style={styles.infoLabel}>Daño</Text>
             <View style={styles.chipRowWrap}>
-              <View style={styles.chip}><Text style={styles.chipText}>Tipo: {codigos?.DCatTyp || "—"}</Text></View>
-              <View style={styles.chip}><Text style={styles.chipText}>Grupo: {codigos?.DCodegrp || "—"}</Text></View>
-              <View style={styles.chip}><Text style={styles.chipText}>Código: {codigos?.DCode || "—"}</Text></View>
+              <View style={styles.chip}>
+                <Text style={styles.chipText}>
+                  Tipo: {codigos?.DCatTyp || "—"}
+                </Text>
+              </View>
+              <View style={styles.chip}>
+                <Text style={styles.chipText}>
+                  Grupo: {codigos?.DCodegrp || "—"}
+                </Text>
+              </View>
+              <View style={styles.chip}>
+                <Text style={styles.chipText}>
+                  Código: {codigos?.DCode || "—"}
+                </Text>
+              </View>
             </View>
           </View>
 
           <View style={styles.chipBlock}>
             <Text style={styles.infoLabel}>Parte dañada</Text>
             <View style={styles.chipRowWrap}>
-              <View style={styles.chip}><Text style={styles.chipText}>Tipo: {codigos?.DlCatTyp || "—"}</Text></View>
-              <View style={styles.chip}><Text style={styles.chipText}>Grupo: {codigos?.DlCodegrp || "—"}</Text></View>
-              <View style={styles.chip}><Text style={styles.chipText}>Código: {codigos?.DlCode || "—"}</Text></View>
+              <View style={styles.chip}>
+                <Text style={styles.chipText}>
+                  Tipo: {codigos?.DlCatTyp || "—"}
+                </Text>
+              </View>
+              <View style={styles.chip}>
+                <Text style={styles.chipText}>
+                  Grupo: {codigos?.DlCodegrp || "—"}
+                </Text>
+              </View>
+              <View style={styles.chip}>
+                <Text style={styles.chipText}>
+                  Código: {codigos?.DlCode || "—"}
+                </Text>
+              </View>
             </View>
           </View>
         </View>
@@ -511,7 +600,10 @@ export default function DetallesAveriaSupervisor() {
           style={({ pressed }) => [
             styles.btnPrimary,
             (!causaAsignada || savingCausa) && styles.btnDisabled,
-            pressed && causaAsignada && !savingCausa && styles.btnPrimaryPressed,
+            pressed &&
+              causaAsignada &&
+              !savingCausa &&
+              styles.btnPrimaryPressed,
           ]}
           disabled={!causaAsignada || savingCausa}
           onPress={() =>
@@ -521,16 +613,23 @@ export default function DetallesAveriaSupervisor() {
                 averiaid,
                 notifNo: String(notifNo || ""),
                 equipment: String(equipment || ""),
-                functLoc: String(functLoc || ""),
+                MaterialLong: String(MaterialLong || ""),
                 shortText: String(shortText || ""),
               },
             })
           }
         >
           <View style={styles.btnPrimaryContent}>
-            <Ionicons name="construct-outline" size={18} color="#FFFFFF" style={{ marginRight: 6 }} />
+            <Ionicons
+              name="construct-outline"
+              size={18}
+              color="#FFFFFF"
+              style={{ marginRight: 6 }}
+            />
             <Text style={styles.btnPrimaryText}>
-              {causaAsignada ? "Crear orden de mantenimiento" : "Asigna la causa para continuar"}
+              {causaAsignada
+                ? "Crear orden de mantenimiento"
+                : "Asigna la causa para continuar"}
             </Text>
             <Ionicons name="chevron-forward" size={18} color="#FFFFFF" />
           </View>
@@ -538,7 +637,12 @@ export default function DetallesAveriaSupervisor() {
       </ScrollView>
 
       {/* ================= MODAL CAUSA ================= */}
-      <Modal visible={modalCausa} transparent animationType="fade" onRequestClose={() => setModalCausa(false)}>
+      <Modal
+        visible={modalCausa}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setModalCausa(false)}
+      >
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
             <View style={styles.modalHeader}>
@@ -549,7 +653,12 @@ export default function DetallesAveriaSupervisor() {
             </View>
 
             <View style={styles.searchBox}>
-              <Ionicons name="search" size={18} color={COLORS.text} style={{ marginRight: 6 }} />
+              <Ionicons
+                name="search"
+                size={18}
+                color={COLORS.text}
+                style={{ marginRight: 6 }}
+              />
               <TextInput
                 value={searchCausa}
                 onChangeText={setSearchCausa}
@@ -562,12 +671,18 @@ export default function DetallesAveriaSupervisor() {
             {loadingCausas ? (
               <View style={{ paddingVertical: 18, alignItems: "center" }}>
                 <ActivityIndicator size="small" color={COLORS.accent} />
-                <Text style={{ marginTop: 8, color: COLORS.text, fontSize: 12 }}>Cargando catálogo…</Text>
+                <Text
+                  style={{ marginTop: 8, color: COLORS.text, fontSize: 12 }}
+                >
+                  Cargando catálogo…
+                </Text>
               </View>
             ) : (
               <FlatList
                 data={causasFiltradas}
-                keyExtractor={(item, idx) => `${item?.GrupoCodigo || "X"}-${item?.Codigo || idx}`}
+                keyExtractor={(item, idx) =>
+                  `${item?.GrupoCodigo || "X"}-${item?.Codigo || idx}`
+                }
                 style={{ maxHeight: 340 }}
                 renderItem={({ item }) => {
                   const active =
@@ -583,24 +698,43 @@ export default function DetallesAveriaSupervisor() {
                           Descripcion: item.Descripcion,
                         })
                       }
-                      style={[styles.optionRow, active && styles.optionRowActive]}
+                      style={[
+                        styles.optionRow,
+                        active && styles.optionRowActive,
+                      ]}
                     >
                       <View style={{ flex: 1 }}>
-                        <Text style={styles.optionText}>{item?.Descripcion || "—"}</Text>
+                        <Text style={styles.optionText}>
+                          {item?.Descripcion || "—"}
+                        </Text>
                         <Text style={styles.optionSub}>
                           {item?.GrupoCodigo} / {item?.Codigo}
                         </Text>
                       </View>
                       {active ? (
-                        <Ionicons name="checkmark-circle" size={20} color={COLORS.accent} />
+                        <Ionicons
+                          name="checkmark-circle"
+                          size={20}
+                          color={COLORS.accent}
+                        />
                       ) : (
-                        <Ionicons name="ellipse-outline" size={18} color="#9AA5B1" />
+                        <Ionicons
+                          name="ellipse-outline"
+                          size={18}
+                          color="#9AA5B1"
+                        />
                       )}
                     </Pressable>
                   );
                 }}
                 ListEmptyComponent={
-                  <Text style={{ color: COLORS.text, fontSize: 12, paddingVertical: 10 }}>
+                  <Text
+                    style={{
+                      color: COLORS.text,
+                      fontSize: 12,
+                      paddingVertical: 10,
+                    }}
+                  >
                     No hay resultados.
                   </Text>
                 }
@@ -609,7 +743,10 @@ export default function DetallesAveriaSupervisor() {
 
             <View style={styles.modalFooter}>
               <Pressable
-                style={({ pressed }) => [styles.btnGhost, pressed && { opacity: 0.9 }]}
+                style={({ pressed }) => [
+                  styles.btnGhost,
+                  pressed && { opacity: 0.9 },
+                ]}
                 onPress={() => setModalCausa(false)}
                 disabled={savingCausa}
               >
@@ -620,12 +757,21 @@ export default function DetallesAveriaSupervisor() {
                 style={({ pressed }) => [
                   styles.btnSave,
                   (!selectedCausa || savingCausa) && styles.btnSaveDisabled,
-                  pressed && selectedCausa && !savingCausa && { opacity: 0.95, transform: [{ scale: 0.99 }] },
+                  pressed &&
+                    selectedCausa &&
+                    !savingCausa && {
+                      opacity: 0.95,
+                      transform: [{ scale: 0.99 }],
+                    },
                 ]}
                 disabled={!selectedCausa || savingCausa}
                 onPress={asignarCausa}
               >
-                {savingCausa ? <ActivityIndicator size="small" color="#FFF" /> : <Text style={styles.btnSaveText}>Guardar causa</Text>}
+                {savingCausa ? (
+                  <ActivityIndicator size="small" color="#FFF" />
+                ) : (
+                  <Text style={styles.btnSaveText}>Guardar causa</Text>
+                )}
               </Pressable>
             </View>
           </View>
@@ -640,8 +786,18 @@ const styles = StyleSheet.create({
   scrollContent: { padding: 16, paddingBottom: 90 },
   loadingWrap: { flex: 1, justifyContent: "center", alignItems: "center" },
   loadingText: { marginTop: 8, color: COLORS.text, fontSize: 13 },
-  backRow: { flexDirection: "row", alignItems: "center", marginBottom: 12, paddingVertical: 4 },
-  backText: { marginLeft: 4, color: COLORS.accent, fontWeight: "600", fontSize: 13 },
+  backRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 12,
+    paddingVertical: 4,
+  },
+  backText: {
+    marginLeft: 4,
+    color: COLORS.accent,
+    fontWeight: "600",
+    fontSize: 13,
+  },
 
   offlineBadge: {
     marginBottom: 10,
@@ -686,7 +842,12 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 4 },
     elevation: 1,
   },
-  mainTitle: { fontSize: 16, fontWeight: "700", color: COLORS.title, marginBottom: 4 },
+  mainTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: COLORS.title,
+    marginBottom: 4,
+  },
   subtitle: { fontSize: 13, color: COLORS.text },
 
   chipRow: { flexDirection: "row", flexWrap: "wrap", marginBottom: 8, gap: 6 },
@@ -714,11 +875,21 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 4 },
     elevation: 1,
   },
-  sectionTitle: { fontSize: 15, fontWeight: "700", color: COLORS.title, marginBottom: 10 },
+  sectionTitle: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: COLORS.title,
+    marginBottom: 10,
+  },
   infoGrid: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
   infoItem: { width: "48%" },
   infoItemFull: { width: "100%" },
-  infoLabel: { fontSize: 11, color: COLORS.text, opacity: 0.8, marginBottom: 2 },
+  infoLabel: {
+    fontSize: 11,
+    color: COLORS.text,
+    opacity: 0.8,
+    marginBottom: 2,
+  },
   infoValue: { fontSize: 14, color: COLORS.title, fontWeight: "600" },
   block: { marginBottom: 10 },
   chipBlock: { marginTop: 6 },
@@ -755,7 +926,12 @@ const styles = StyleSheet.create({
     opacity: 0.9,
   },
   btnPrimaryContent: { flexDirection: "row", alignItems: "center" },
-  btnPrimaryText: { color: "#FFFFFF", fontWeight: "700", fontSize: 13, marginHorizontal: 4 },
+  btnPrimaryText: {
+    color: "#FFFFFF",
+    fontWeight: "700",
+    fontSize: 13,
+    marginHorizontal: 4,
+  },
 
   modalOverlay: {
     flex: 1,

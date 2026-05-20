@@ -619,7 +619,7 @@ function buildStatus0300Payload({ orderId, email, currentCode }) {
     OrderId: orderId,
     WorkOrderHeader: {
       Orderid: orderId,
-      FunctLoc: email,
+      MaterialLong: email,
     },
     WorkOrderUserStatusSet: [
       { UserStText: "0300", Langu: "ES", Inactive: "" },

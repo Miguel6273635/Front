@@ -19,6 +19,7 @@ import {
   getConsumiblesByPair,
   mergeConsumiblesPair,
 } from "../../../../../src/offline/consumiblesCatalogoCache";
+import consumiblesFallback from "../../[id]/json.json";
 
 /**
  * Cobertura -> pares (Agrupador1, Agrupador2)
@@ -106,7 +107,10 @@ const uniqBy = (arr, keyFn) => {
   return Array.from(map.values());
 };
 
-const safeUpper = (v) => String(v || "").trim().toUpperCase();
+const safeUpper = (v) =>
+  String(v || "")
+    .trim()
+    .toUpperCase();
 
 const pairId = (p) => `${safeUpper(p?.Agr1)}__${safeUpper(p?.Agr2)}`;
 
@@ -123,7 +127,7 @@ function stableRowsString(rows) {
         Cantidad: String(r?.Cantidad || "").trim(),
         Unidad: safeUpper(r?.Unidad),
         Centro: String(r?.Centro || "").trim(),
-      }))
+      })),
     );
   } catch {
     return "[]";
@@ -145,7 +149,24 @@ function normalizeMaterialRows(rows = [], a1, a2) {
   return uniqBy(
     normalized,
     (x) =>
-      `${x.Material}__${x.Descripcion}__${x.Agrupador1}__${x.Agrupador2}__${x.Unidad}`
+      `${x.Material}__${x.Descripcion}__${x.Agrupador1}__${x.Agrupador2}__${x.Unidad}`,
+  );
+}
+function getFallbackConsumiblesByPair(a1, a2) {
+  const rows =
+    consumiblesFallback?.d?.results ||
+    consumiblesFallback?.results ||
+    consumiblesFallback ||
+    [];
+
+  return normalizeMaterialRows(
+    rows.filter(
+      (x) =>
+        safeUpper(x?.Agrupador1) === safeUpper(a1) &&
+        safeUpper(x?.Agrupador2) === safeUpper(a2),
+    ),
+    a1,
+    a2,
   );
 }
 
@@ -298,6 +319,10 @@ export default function ConsumiblesFinalizacion({
         /**
          * Si no hay red, se queda con lo que encontró en cache.
          */
+        /**
+         * cambios miguel se modifico if (!isOnline) {}
+         */
+        /*
         if (!isOnline) {
           console.log("[CONSUMIBLES][OFFLINE]", {
             coverageKey: cov,
@@ -312,6 +337,40 @@ export default function ConsumiblesFinalizacion({
             (!Array.isArray(offlineRows) || offlineRows.length === 0)
           ) {
             setMaterials([]);
+          }
+
+          return;
+        }
+*/
+        /*nuevo codigo  Miguel Angel 19/05/2026*/
+        if (!isOnline) {
+          const hasOfflineCache =
+            Array.isArray(offlineRows) && offlineRows.length > 0;
+
+          const fallbackRows = hasOfflineCache
+            ? normalizeMaterialRows(offlineRows, a1, a2)
+            : getFallbackConsumiblesByPair(a1, a2);
+
+          if (!hasOfflineCache) {
+            console.log("[CONSUMIBLES][JSON FALLBACK OFFLINE ACTIVADO]", {
+              motivo: "Sin cache offline disponible",
+              coverageKey: cov,
+              Agr1: a1,
+              Agr2: a2,
+              jsonCount: fallbackRows.length,
+              archivo: "json.json",
+            });
+          } else {
+            console.log("[CONSUMIBLES][CACHE OFFLINE UTILIZADO]", {
+              coverageKey: cov,
+              Agr1: a1,
+              Agr2: a2,
+              cacheCount: fallbackRows.length,
+            });
+          }
+
+          if (mounted && myLoadId === loadIdRef.current) {
+            setMaterials(fallbackRows);
           }
 
           return;
@@ -348,10 +407,11 @@ export default function ConsumiblesFinalizacion({
         if (mounted && myLoadId === loadIdRef.current) {
           setMaterials(deduped);
         }
+        /* cambios en la parte del catch Miguel Angel 19/05/2026
       } catch (e) {
         console.log(
           "[CONSUMIBLES][ERROR] Falló SAP, usando cache:",
-          e?.response?.data || e?.message || e
+          e?.response?.data || e?.message || e,
         );
 
         try {
@@ -361,7 +421,11 @@ export default function ConsumiblesFinalizacion({
             agr2: a2,
           });
 
-          const normalizedFallback = normalizeMaterialRows(fallbackRows, a1, a2);
+          const normalizedFallback = normalizeMaterialRows(
+            fallbackRows,
+            a1,
+            a2,
+          );
 
           if (mounted && myLoadId === loadIdRef.current) {
             setMaterials(normalizedFallback);
@@ -370,6 +434,24 @@ export default function ConsumiblesFinalizacion({
           if (mounted && myLoadId === loadIdRef.current) {
             setMaterials([]);
           }
+        }
+      }
+      */
+      } catch (e) {
+        const fallbackRows = getFallbackConsumiblesByPair(a1, a2);
+
+        console.log("[CONSUMIBLES][JSON FALLBACK ERROR ACTIVADO]", {
+          motivo: "Falló SAP o lectura de cache",
+          coverageKey: cov,
+          Agr1: a1,
+          Agr2: a2,
+          jsonCount: fallbackRows.length,
+          error: e?.response?.data || e?.message || String(e),
+          archivo: "json.json",
+        });
+
+        if (mounted && myLoadId === loadIdRef.current) {
+          setMaterials(fallbackRows);
         }
       } finally {
         if (mounted && myLoadId === loadIdRef.current) {
@@ -386,7 +468,9 @@ export default function ConsumiblesFinalizacion({
   }, [selectedPair, effectiveCoverageKey]);
 
   const filteredMaterials = useMemo(() => {
-    const qq = String(materialSearch || "").toUpperCase().trim();
+    const qq = String(materialSearch || "")
+      .toUpperCase()
+      .trim();
     if (!qq) return materials;
 
     return materials.filter((m) => {
@@ -420,7 +504,7 @@ export default function ConsumiblesFinalizacion({
 
   const buildSelectedKey = (item) =>
     `${String(item?.Material || "").trim()}__${safeUpper(
-      item?.Agrupador1
+      item?.Agrupador1,
     )}__${safeUpper(item?.Agrupador2)}`;
 
   const handleEditItem = (item) => {
@@ -430,7 +514,7 @@ export default function ConsumiblesFinalizacion({
       pairId({
         Agr1: item?.Agrupador1,
         Agr2: item?.Agrupador2,
-      })
+      }),
     );
 
     setSelectedMaterial({

@@ -135,7 +135,10 @@ export default function NotificacionesAveriaSupervisor() {
     const correo = getCorreo();
     if (!correo) {
       setAverias([]);
-      Alert.alert("Sin correo", "No se pudo obtener el correo del usuario logueado.");
+      Alert.alert(
+        "Sin correo",
+        "No se pudo obtener el correo del usuario logueado.",
+      );
       setLoading(false);
       return;
     }
@@ -157,7 +160,7 @@ export default function NotificacionesAveriaSupervisor() {
           params: { $filter: filter, $format: "json" },
           // si tu interceptor ya mete token, esto no estorba
           headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-        }
+        },
       );
 
       const raw = res?.data;
@@ -174,7 +177,8 @@ export default function NotificacionesAveriaSupervisor() {
         let estatus = "pendiente";
         const sys = String(it?.SysStatus || "").toUpperCase();
         if (sys.includes("NOCO") || sys.includes("CERR")) estatus = "cerrada";
-        else if (sys.includes("PROC") || sys.includes("INPR")) estatus = "en_proceso";
+        else if (sys.includes("PROC") || sys.includes("INPR"))
+          estatus = "en_proceso";
 
         return {
           NotifNo: it?.NotifNo,
@@ -184,14 +188,15 @@ export default function NotificacionesAveriaSupervisor() {
           notif_date: notifISO,
           created_on: createdISO,
           cust_no: it?.CustNo || "",
-          funct_loc: it?.FunctLoc || "",
+          funct_loc: it?.MaterialLong || "",
           estatus,
         };
       });
 
       mapped.sort(
         (a, b) =>
-          new Date(b.notif_date || 0).getTime() - new Date(a.notif_date || 0).getTime()
+          new Date(b.notif_date || 0).getTime() -
+          new Date(a.notif_date || 0).getTime(),
       );
 
       setAverias(mapped);
@@ -210,18 +215,30 @@ export default function NotificacionesAveriaSupervisor() {
         if (offline) {
           console.log("[AVERIAS] Offline: usando cache");
         } else {
-          console.log("[AVERIAS] Falló online, usando cache:", error?.response?.data || error);
+          console.log(
+            "[AVERIAS] Falló online, usando cache:",
+            error?.response?.data || error,
+          );
         }
         if (!silent) {
-          Alert.alert("Sin conexión", "Mostrando las averías guardadas (offline).");
+          Alert.alert(
+            "Sin conexión",
+            "Mostrando las averías guardadas (offline).",
+          );
         }
         return;
       }
 
       // ❌ sin cache, ahora sí es “error real”
-      console.error("Error al cargar averías por OData:", error?.response?.data || error);
+      console.error(
+        "Error al cargar averías por OData:",
+        error?.response?.data || error,
+      );
       setAverias([]);
-      Alert.alert("Error", "No se pudieron cargar los avisos de avería y no hay cache guardado.");
+      Alert.alert(
+        "Error",
+        "No se pudieron cargar los avisos de avería y no hay cache guardado.",
+      );
     } finally {
       setLoading(false);
     }
@@ -261,20 +278,22 @@ export default function NotificacionesAveriaSupervisor() {
       item.estatus === "pendiente"
         ? COLORS.danger
         : item.estatus === "en_proceso"
-        ? COLORS.warning
-        : COLORS.success;
+          ? COLORS.warning
+          : COLORS.success;
 
     const estatusIcon =
       item.estatus === "pendiente"
         ? "alert-circle-outline"
         : item.estatus === "en_proceso"
-        ? "refresh-outline"
-        : "checkmark-circle-outline";
+          ? "refresh-outline"
+          : "checkmark-circle-outline";
 
     return (
       <TouchableOpacity
         style={styles.card}
-        onPress={() => router.push(`/supervisor/averia/${item.NotifNo}/detalles`)}
+        onPress={() =>
+          router.push(`/supervisor/averia/${item.NotifNo}/detalles`)
+        }
       >
         <View style={[styles.sideBar, { backgroundColor: estatusColor }]} />
 
@@ -318,11 +337,15 @@ export default function NotificacionesAveriaSupervisor() {
           <View style={styles.metaRow}>
             <View style={styles.metaItem}>
               <Ionicons name="time-outline" size={14} color="#52616B" />
-              <Text style={styles.metaText}>Notif.: {formatDate(item.notif_date)}</Text>
+              <Text style={styles.metaText}>
+                Notif.: {formatDate(item.notif_date)}
+              </Text>
             </View>
             <View style={styles.metaItem}>
               <Ionicons name="person-outline" size={14} color="#52616B" />
-              <Text style={styles.metaText}>Cliente: {item.cust_no || "—"}</Text>
+              <Text style={styles.metaText}>
+                Cliente: {item.cust_no || "—"}
+              </Text>
             </View>
           </View>
 
@@ -357,14 +380,21 @@ export default function NotificacionesAveriaSupervisor() {
         <View style={{ marginBottom: 8 }}>
           <Text style={styles.pageTitle}>Lista de averías</Text>
           <Text style={styles.pageSubtitle}>
-            {loading ? "Cargando..." : `${filtered.length} notificaciones de avería encontradas`}
+            {loading
+              ? "Cargando..."
+              : `${filtered.length} notificaciones de avería encontradas`}
           </Text>
 
           {!!cacheInfo?.savedAt && (
             <View style={styles.offlineBadge}>
-              <Ionicons name="cloud-offline-outline" size={14} color={COLORS.title} />
+              <Ionicons
+                name="cloud-offline-outline"
+                size={14}
+                color={COLORS.title}
+              />
               <Text style={styles.offlineBadgeText}>
-                Offline · Guardado: {new Date(cacheInfo.savedAt).toLocaleString()}
+                Offline · Guardado:{" "}
+                {new Date(cacheInfo.savedAt).toLocaleString()}
               </Text>
             </View>
           )}
@@ -379,17 +409,30 @@ export default function NotificacionesAveriaSupervisor() {
         />
 
         <View style={styles.dateRow}>
-          <TouchableOpacity style={styles.dateBtn} onPress={() => setShowStartPicker(true)}>
+          <TouchableOpacity
+            style={styles.dateBtn}
+            onPress={() => setShowStartPicker(true)}
+          >
             <Ionicons name="calendar-outline" size={16} color={COLORS.text} />
-            <Text style={styles.dateBtnText}>Desde: {startDate.toLocaleDateString()}</Text>
+            <Text style={styles.dateBtnText}>
+              Desde: {startDate.toLocaleDateString()}
+            </Text>
           </TouchableOpacity>
 
-          <TouchableOpacity style={styles.dateBtn} onPress={() => setShowEndPicker(true)}>
+          <TouchableOpacity
+            style={styles.dateBtn}
+            onPress={() => setShowEndPicker(true)}
+          >
             <Ionicons name="calendar-outline" size={16} color={COLORS.text} />
-            <Text style={styles.dateBtnText}>Hasta: {endDate.toLocaleDateString()}</Text>
+            <Text style={styles.dateBtnText}>
+              Hasta: {endDate.toLocaleDateString()}
+            </Text>
           </TouchableOpacity>
 
-          <TouchableOpacity style={styles.refreshBtn} onPress={() => fetchAverias()}>
+          <TouchableOpacity
+            style={styles.refreshBtn}
+            onPress={() => fetchAverias()}
+          >
             <Ionicons name="refresh-outline" size={18} color="#fff" />
           </TouchableOpacity>
         </View>
@@ -426,15 +469,23 @@ export default function NotificacionesAveriaSupervisor() {
       </View>
 
       {loading ? (
-        <ActivityIndicator style={{ marginTop: 40 }} size="large" color={COLORS.accent} />
+        <ActivityIndicator
+          style={{ marginTop: 40 }}
+          size="large"
+          color={COLORS.accent}
+        />
       ) : (
         <FlatList
           data={filtered}
-          keyExtractor={(item) => item.NotifNo?.toString() ?? Math.random().toString()}
+          keyExtractor={(item) =>
+            item.NotifNo?.toString() ?? Math.random().toString()
+          }
           renderItem={renderItem}
           contentContainerStyle={styles.listContent}
           ListEmptyComponent={
-            <Text style={{ textAlign: "center", marginTop: 24, color: COLORS.text }}>
+            <Text
+              style={{ textAlign: "center", marginTop: 24, color: COLORS.text }}
+            >
               No hay averías con los filtros actuales.
             </Text>
           }
@@ -482,7 +533,12 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: COLORS.title,
   },
-  dateRow: { flexDirection: "row", alignItems: "center", marginTop: 10, gap: 8 },
+  dateRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: 10,
+    gap: 8,
+  },
   dateBtn: {
     flex: 1,
     flexDirection: "row",
@@ -568,6 +624,11 @@ const styles = StyleSheet.create({
     color: COLORS.title,
   },
   metaRow: { flexDirection: "row", gap: 16, marginTop: 8 },
-  metaItem: { flexDirection: "row", alignItems: "center", gap: 4, flexShrink: 1 },
+  metaItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    flexShrink: 1,
+  },
   metaText: { fontSize: 12, color: COLORS.text },
 });

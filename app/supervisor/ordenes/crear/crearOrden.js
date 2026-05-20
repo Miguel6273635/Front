@@ -295,7 +295,7 @@ function normalizeOpsAndComponents(list, planPlant) {
 }
 
 export default function CrearOrdenMantto() {
-  const { averiaid, notifNo, equipment, functLoc, shortText } =
+  const { averiaid, notifNo, equipment, MaterialLong, shortText } =
     useLocalSearchParams();
 
   const [orderType] = useState("SM01");
@@ -361,7 +361,7 @@ export default function CrearOrdenMantto() {
         setLoadingWorkCenters(true);
 
         const url =
-          "https://my-node-api-qas-01.cfapps.us10-001.hana.ondemand.com/api/odata/ZSD_CATALOGOS_SRV/WorkCentreSet?$format=json";
+          "https://my-node-api-pro-01.cfapps.us10-001.hana.ondemand.com/api/odata/ZSD_CATALOGOS_SRV/WorkCentreSet?$format=json";
 
         const res = await fetch(url);
         const json = await res.json();
@@ -680,7 +680,7 @@ export default function CrearOrdenMantto() {
 
     try {
       const baseUrl =
-        "https://my-node-api-qas-01.cfapps.us10-001.hana.ondemand.com/api/odata/ZSD_CATALOGOS_SRV/MaterialesCoberturaSet";
+        "https://my-node-api-pro-01.cfapps.us10-001.hana.ondemand.com/api/odata/ZSD_CATALOGOS_SRV/MaterialesCoberturaSet";
       const url =
         baseUrl +
         `?$filter=Agrupador1 eq 'BASICO' and Agrupador2 eq '${category}'&$format=json`;
@@ -990,7 +990,7 @@ export default function CrearOrdenMantto() {
 
           <View style={styles.block}>
             <Text style={styles.infoLabel}>Ubicación funcional</Text>
-            <Text style={styles.infoValue}>{functLoc || "—"}</Text>
+            <Text style={styles.infoValue}>{MaterialLong || "—"}</Text>
           </View>
         </View>
 
