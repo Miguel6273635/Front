@@ -43,10 +43,14 @@ import {
 
 import {
   getLocalStatusPatch,
+  setLocalStatusPatch,
   applyStatusPatchToOrdenes,
 } from "../../../src/offline/ordenesTecnicoLocalPatch";
 
-import { upsertSapQueueItem } from "../../../src/offline/sapQueue";
+import {
+  upsertSapQueueItem,
+  processSapQueue,
+} from "../../../src/offline/sapQueue";
 import { buildMantenimientoHtml } from "../../../src/services/templates/buildMantenimientoHtml";
 
 const FIORI = {
@@ -248,10 +252,31 @@ async function loadPending0400FromOffline(userEmail) {
     let data = Array.isArray(cached?.data) ? cached.data : [];
 
     const patchMap = await getLocalStatusPatch(userEmail);
+
     data = applyStatusPatchToOrdenes(data, patchMap);
 
-    return data.filter((it) => isPending0400(it));
-  } catch {
+    return data.filter((it) => {
+      const orderId = String(it?.Orderid || it?.OrderId || "").trim();
+
+      const localCode = normalizeCode(
+        patchMap?.[orderId]?.code ||
+          patchMap?.[orderId]?.estatus_code ||
+          patchMap?.[orderId]?.status_code ||
+          patchMap?.[orderId],
+      );
+
+      // Si localmente ya está finalizada, ya NO debe aparecer en pendiente de firma
+      if (localCode === "0300") {
+        return false;
+      }
+
+      return isPending0400(it);
+    });
+  } catch (e) {
+    console.warn(
+      "[PENDIENTE FIRMA] loadPending0400FromOffline ERROR:",
+      e?.message || e,
+    );
     return [];
   }
 }
@@ -487,7 +512,7 @@ export default function PendienteFirmaIndex() {
   const [sendResults, setSendResults] = useState([]);
 
   const signatureRef = useRef(null);
-
+  const queueProcessingRef = useRef(false);
   const selectedIds = useMemo(
     () => Object.keys(selectedMap).filter((k) => !!selectedMap[k]),
     [selectedMap],
@@ -692,6 +717,104 @@ export default function PendienteFirmaIndex() {
       getSapRequestRange,
     ],
   );
+  const processPendingQueue = useCallback(
+    async (source = "unknown") => {
+      if (queueProcessingRef.current) {
+        console.log(
+          "[PENDIENTE FIRMA] Cola ya se está procesando, se omite:",
+          source,
+        );
+        return;
+      }
+
+      try {
+        queueProcessingRef.current = true;
+
+        console.log("[PENDIENTE FIRMA] Intentando procesar cola SAP:", {
+          source,
+          userEmail,
+        });
+
+        const net = await NetInfo.fetch();
+        const online = !!(
+          net?.isConnected && net?.isInternetReachable !== false
+        );
+
+        setIsOnline(online);
+
+        if (!online) {
+          console.log("[PENDIENTE FIRMA] Sin internet, no se procesa cola");
+          return;
+        }
+
+        const ok = await ensureValidToken();
+
+        if (!ok) {
+          console.log("[PENDIENTE FIRMA] Token no válido, no se procesa cola");
+          return;
+        }
+
+        console.log(
+          "[PENDIENTE FIRMA] Internet disponible. Procesando cola...",
+        );
+
+        const queueResult = await processSapQueue({
+          ensureValidToken,
+          apiInstance: api,
+        });
+
+        console.log(
+          "[PENDIENTE FIRMA] Resultado processSapQueue:",
+          queueResult,
+        );
+
+        console.log("[PENDIENTE FIRMA] Cola SAP procesada OK");
+
+        await fetchOrdenes0400({ isRefresh: true });
+      } catch (e) {
+        console.warn(
+          "[PENDIENTE FIRMA] Error procesando cola SAP:",
+          e?.response?.data || e?.message || e,
+        );
+      } finally {
+        queueProcessingRef.current = false;
+      }
+    },
+    [ensureValidToken, token, userEmail, fetchOrdenes0400],
+  );
+  useEffect(() => {
+    const unsubscribe = NetInfo.addEventListener((state) => {
+      const online = !!(
+        state?.isConnected && state?.isInternetReachable !== false
+      );
+
+      setIsOnline(online);
+
+      console.log("[PENDIENTE FIRMA] Cambio de red:", {
+        online,
+        isConnected: state?.isConnected,
+        isInternetReachable: state?.isInternetReachable,
+      });
+
+      if (online) {
+        processPendingQueue("netinfo-online");
+      }
+    });
+
+    NetInfo.fetch().then((state) => {
+      const online = !!(
+        state?.isConnected && state?.isInternetReachable !== false
+      );
+
+      setIsOnline(online);
+
+      if (online) {
+        processPendingQueue("initial-check");
+      }
+    });
+
+    return () => unsubscribe();
+  }, [processPendingQueue]);
 
   useEffect(() => {
     fetchOrdenes0400();
@@ -953,8 +1076,24 @@ export default function PendienteFirmaIndex() {
                       ? "mantenimiento_escaleras.pdf"
                       : "mantenimiento_elevadores.pdf";
 
-                  const payloadAttachment = {
-                    WorkOrderHeader: { Orderid: orderId },
+                  const payloadFinal0300 = {
+                    OrderId: orderId,
+                    WorkOrderHeader: {
+                      Orderid: orderId,
+                      MaterialLong: email,
+                    },
+                    WorkOrderUserStatusSet: [
+                      {
+                        UserStText: "0300",
+                        Langu: "ES",
+                        Inactive: " ",
+                      },
+                      {
+                        UserStText: "0400",
+                        Langu: "ES",
+                        Inactive: "X",
+                      },
+                    ],
                     Attachments: [
                       {
                         DocId: orderId,
@@ -966,31 +1105,13 @@ export default function PendienteFirmaIndex() {
                     Return: [],
                   };
 
-                  const payloadStatus0300 = {
-                    OrderId: orderId,
-                    WorkOrderHeader: {
-                      Orderid: orderId,
-                      MaterialLong: email,
-                    },
-                    WorkOrderUserStatusSet: [
-                      { UserStText: "0300", Langu: "ES", Inactive: " " },
-                      { UserStText: "0400", Langu: "ES", Inactive: "X" },
-                    ],
-                    Return: [],
-                  };
-
                   logSapPayload(
-                    "=== SAP PAYLOAD (ATTACHMENT) ===",
-                    payloadAttachment,
+                    "=== SAP PAYLOAD ÚNICO (PDF + STATUS 0300 / remove 0400) ===",
+                    payloadFinal0300,
                     {
                       stripBase64: true,
                     },
                   );
-                  logSapPayload(
-                    "=== SAP PAYLOAD (STATUS 0300 / remove 0400) ===",
-                    payloadStatus0300,
-                  );
-
                   const workOrderEndpoint = `/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet`;
 
                   if (!online) {
@@ -1000,27 +1121,40 @@ export default function PendienteFirmaIndex() {
                       endpoint: workOrderEndpoint,
                       method: "POST",
                       dedupeKey: `PENDIENTE_FIRMA_0300:${orderId}`,
-                      payload: {
-                        attachmentEndpoint: workOrderEndpoint,
-                        attachmentPayload: payloadAttachment,
-                        statusEndpoint: workOrderEndpoint,
-                        statusPayload: payloadStatus0300,
+                      payload: payloadFinal0300,
+                    });
+
+                    // Cambio local de estatus para que la app ya lo vea como finalizado
+                    await setLocalStatusPatch(userEmail, orderId, "0300");
+                    const debugPatch = await getLocalStatusPatch(userEmail);
+                    console.log(
+                      "[PENDIENTE FIRMA] PATCH LOCAL DESPUÉS DE GUARDAR:",
+                      {
+                        orderId,
+                        patch: debugPatch?.[orderId],
+                        patchMap: debugPatch,
                       },
+                    );
+                    // Quitarlo visualmente de pendiente de firma
+                    setAllOrdenes((prev) =>
+                      (prev || []).filter(
+                        (it) => String(it?.Orderid) !== orderId,
+                      ),
+                    );
+
+                    setSelectedMap((prev) => {
+                      const next = { ...(prev || {}) };
+                      delete next[orderId];
+                      return next;
                     });
 
                     results.push({
                       orderId,
                       ok: true,
-                      msg: "Guardado offline. Se enviará cuando vuelva la red.",
+                      msg: "Guardado offline. Estatus local cambiado a 0300 y se enviará cuando vuelva la red.",
                     });
                   } else {
-                    await api.post(workOrderEndpoint, payloadAttachment, {
-                      headers: token
-                        ? { Authorization: `Bearer ${token}` }
-                        : undefined,
-                    });
-
-                    await api.post(workOrderEndpoint, payloadStatus0300, {
+                    await api.post(workOrderEndpoint, payloadFinal0300, {
                       headers: token
                         ? { Authorization: `Bearer ${token}` }
                         : undefined,
@@ -1029,7 +1163,7 @@ export default function PendienteFirmaIndex() {
                     results.push({
                       orderId,
                       ok: true,
-                      msg: "Enviado OK (PDF + 0300).",
+                      msg: "Enviado OK (PDF + 0300 en un solo JSON).",
                     });
                   }
                 } catch (err) {
