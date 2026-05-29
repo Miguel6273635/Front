@@ -1009,6 +1009,8 @@ export default function ListaOrdenesTecnico() {
                 ...x,
                 estatus_code: finalStatus,
                 userstatus: finalStatus,
+                UserStatus: finalStatus,
+                UserStText: finalStatus,
                 estatus_label: STATUS_META[finalStatus]?.label || finalStatus,
               }
             : x,
@@ -1232,9 +1234,11 @@ export default function ListaOrdenesTecnico() {
     const isPendingOffline = pendingSet.has(String(item?.Orderid));
 
     const tbmYaProceso = stBase.code === "0200";
+    const ordenYaAvanzo = ["0400", "0300", "0600"].includes(stBase.code);
 
+    // ✅ No permitas que un pendiente offline viejo regrese visualmente la orden a 0100
     const st =
-      isPendingOffline && !tbmYaProceso
+      isPendingOffline && !tbmYaProceso && !ordenYaAvanzo
         ? {
             ...stBase,
             code: "0100",

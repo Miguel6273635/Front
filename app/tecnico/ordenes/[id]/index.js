@@ -874,12 +874,16 @@ export default function DetalleOrden() {
 
   const baseStatusCode = pickCurrentStatusCode(orden);
 
+  const isAdvancedStatus = ["0400", "0300", "0600"].includes(baseStatusCode);
+
+  // ✅ Solo mostrar 0100 por check-in pendiente si la orden NO avanzó.
+  // Si ya está 0400, 0300 o 0600, respetamos ese estatus.
   const statusCode =
-    hasPendingOfflineCheckin && baseStatusCode !== "0200"
+    hasPendingOfflineCheckin && !isAdvancedStatus && baseStatusCode !== "0200"
       ? "0100"
       : baseStatusCode;
   const statusLabel =
-    hasPendingOfflineCheckin && statusCode !== "0200"
+    hasPendingOfflineCheckin && !isAdvancedStatus && statusCode !== "0200"
       ? "CHECK-IN PENDIENTE (OFFLINE)"
       : resolveStatusLabelFromCode(
           statusCode,
@@ -943,23 +947,50 @@ export default function DetalleOrden() {
   };
 
   const applyLocalOrderStatus = async (orderId, code) => {
-    const statusCodeStr = String(code || "").trim();
+    const statusCodeStr = normalizeCode(code);
     const statusLabelStr = resolveStatusLabelFromCode(statusCodeStr);
+
+    const localPatch = {
+      estatus_code: statusCodeStr,
+      userstatus: statusCodeStr,
+      UserStatus: statusCodeStr,
+      UserStText: statusCodeStr,
+      estatus_label: statusLabelStr,
+
+      // ✅ Extra para que la pantalla identifique bien 0400
+      isPendingSignature: statusCodeStr === "0400",
+      isFinal: statusCodeStr === "0300" || statusCodeStr === "0600",
+    };
 
     setOrden((prev) => ({
       ...(prev || {}),
-      estatus_code: statusCodeStr,
-      userstatus: statusCodeStr,
-      estatus_label: statusLabelStr,
+      ...localPatch,
     }));
 
     try {
       await setLocalStatusPatch(userEmail, orderId, statusCodeStr);
       await patchCacheOrdenesTecnicoList(userEmail, orderId, statusCodeStr);
       await patchCacheOrdenTecnicoDetail(orderId, statusCodeStr);
-      if (statusCodeStr !== "0200") {
+
+      // ✅ Guardar también el detalle completo con el estatus nuevo
+      const cached = await loadOrdenTecnicoDetail(orderId);
+      const base = cached?.data || orden || {};
+
+      await safeSaveDetailIfWindow(orderId, {
+        ...(base || {}),
+        ...localPatch,
+      });
+
+      // ✅ Si ya avanzó a 0400/0300/0600, quitamos marca vieja de TBM/check-in
+      if (["0400", "0300", "0600"].includes(statusCodeStr)) {
         await AsyncStorage.removeItem(`tbmky_status_${String(orderId).trim()}`);
       }
+
+      console.log("[DETALLE][STATUS][LOCAL]", {
+        orderId,
+        statusCodeStr,
+        statusLabelStr,
+      });
     } catch (e) {
       console.log("[DETALLE] applyLocalOrderStatus error:", e?.message || e);
     }
@@ -2018,6 +2049,9 @@ export default function DetalleOrden() {
         });
 
         await applyLocalOrderStatus(orderId, "0400");
+
+        setFinalizeMode(false);
+        router.replace("/tecnico/ordenes");
 
         Alert.alert(
           "Guardado offline",
