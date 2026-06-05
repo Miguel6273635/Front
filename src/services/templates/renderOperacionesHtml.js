@@ -13,7 +13,8 @@ function escapeHtml(str) {
 
 const getUsr02 = (op) => safeStr(op?.Usr02 ?? op?.usr02) || "SIN UBICACIÓN";
 const getActivity = (op) => safeStr(op?.activity ?? op?.Activity);
-const getSub = (op) => safeStr(op?.subactivity ?? op?.SubActivity);
+// Cambios agregados por lo del campo de SubActivity Miguel Angel 04/06/2026
+// const getSub = (op) => safeStr(op?.subactivity ?? op?.SubActivity);
 const getDesc = (op) => safeStr(op?.description ?? op?.Description);
 const getSTK = (op) => safeStr(op?.StandardTextKey ?? op?.standardTextKey);
 
@@ -23,10 +24,18 @@ function getOpId(orderid, op, idx) {
   if (existing) return existing;
 
   const a = getActivity(op);
-  const s = getSub(op);
+  // Cambios agregados por lo del campo de SubActivity Miguel Angel 04/06/2026
+  // const s = getSub(op);
   const oid = safeStr(orderid);
 
-  const key = `${oid}-${a}${s ? `-${s}` : ""}`.trim();
+  // Cambios agregados por lo del campo de SubActivity Miguel Angel 04/06/2026
+  // const key = `${oid}-${a}${s ? `-${s}` : ""}`.trim();
+  const usr02 = getUsr02(op);
+  const desc = getDesc(op);
+  const stk = getSTK(op);
+
+  const key = `${oid}-${a}-${usr02}-${desc}-${stk}-${idx}`.trim();
+
   return key && key !== "-" ? key : `fallback__${idx}`;
 }
 
@@ -54,6 +63,8 @@ function sortOps(ops = []) {
     const bActTxt = textCode(getActivity(b));
     if (aActTxt !== bActTxt) return aActTxt.localeCompare(bActTxt);
 
+    // Cambios agregados por lo del campo de SubActivity Miguel Angel 04/06/2026
+    /*
     const aSubNum = numericOrBig(getSub(a));
     const bSubNum = numericOrBig(getSub(b));
     if (aSubNum !== bSubNum) return aSubNum - bSubNum;
@@ -61,6 +72,7 @@ function sortOps(ops = []) {
     const aSubTxt = textCode(getSub(a));
     const bSubTxt = textCode(getSub(b));
     if (aSubTxt !== bSubTxt) return aSubTxt.localeCompare(bSubTxt);
+    */
 
     const aDesc = getDesc(a).toLowerCase();
     const bDesc = getDesc(b).toLowerCase();
@@ -70,10 +82,13 @@ function sortOps(ops = []) {
 
 function buildOperacionLine(op) {
   const act = getActivity(op) || "—";
-  const sub = getSub(op);
+  // Cambios agregados por lo del campo de SubActivity Miguel Angel 04/06/2026
+  // const sub = getSub(op);
   const desc = getDesc(op);
 
-  const code = `${escapeHtml(act)}${sub ? `-${escapeHtml(sub)}` : ""}`;
+  // Cambios agregados por lo del campo de SubActivity Miguel Angel 04/06/2026
+  // const code = `${escapeHtml(act)}${sub ? `-${escapeHtml(sub)}` : ""}`;
+  const code = `${escapeHtml(act)}`;
 
   return {
     code,
@@ -162,7 +177,7 @@ export function renderOperacionesAgrupadasHtml({
             <div class="opsCol">
               ${col.join("")}
             </div>
-          `
+          `,
         )
         .join("");
 

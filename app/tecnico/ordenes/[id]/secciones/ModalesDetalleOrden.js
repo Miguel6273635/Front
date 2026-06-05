@@ -76,13 +76,17 @@ export default function ModalesDetalleOrden({
       setShowSignaturePadModal(false);
     }
   }, [showSignModal]);
-
+  //cAMBIOS MIGUEL PARA LO DEL CAMPO subactivity 03/06/2026
+  /*
   const titleOp = selectedOp
     ? `${safeStr(selectedOp.activity || selectedOp.Activity)}${
         safeStr(selectedOp.subactivity || selectedOp.SubActivity)
           ? " / " + safeStr(selectedOp.subactivity || selectedOp.SubActivity)
           : ""
       }`
+    : "";*/
+  const titleOp = selectedOp
+    ? `${safeStr(selectedOp.activity || selectedOp.Activity)}`
     : "";
 
   const closeSign = () => {

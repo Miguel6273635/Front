@@ -16,11 +16,12 @@ function normalizeUsr02(op) {
 function normalizeActivity(op) {
   return safeStr(op?.activity ?? op?.Activity);
 }
-
+//eliminando campo de SubActivity Miguel Angel 04/06/2026
+/*
 function normalizeSubActivity(op) {
   return safeStr(op?.subactivity ?? op?.SubActivity);
 }
-
+*/
 function normalizeDescription(op) {
   return safeStr(op?.description ?? op?.Description);
 }
@@ -120,7 +121,10 @@ function hashTextToIndex(text, max) {
 }
 
 function getCategoryColor(categoria) {
-  const idx = hashTextToIndex(categoria || "SIN CATEGORÍA", CATEGORY_COLORS.length);
+  const idx = hashTextToIndex(
+    categoria || "SIN CATEGORÍA",
+    CATEGORY_COLORS.length,
+  );
   return CATEGORY_COLORS[idx];
 }
 
@@ -130,6 +134,8 @@ function getCategoryColor(categoria) {
  * - Si NO viene, genera MISMO FORMATO que tu index:
  *   `${orderId}-${activity}-${subactivity?}`
  */
+//cambios agregados Miguel Angel para la eliminacion del codigo SubActivity 04/06/2026
+/*
 function opStableId(orderId, op, idx) {
   const existing = safeStr(op?.id);
   if (existing) return existing;
@@ -142,7 +148,22 @@ function opStableId(orderId, op, idx) {
 
   return key && key !== "-" ? key : `fallback__${idx}`;
 }
+*/
 
+function opStableId(orderId, op, idx) {
+  const existing = safeStr(op?.id);
+  if (existing) return existing;
+
+  const activity = normalizeActivity(op);
+  const usr02 = normalizeUsr02(op);
+  const desc = normalizeDescription(op);
+  const stk = normalizeStandardTextKey(op);
+
+  const oid = safeStr(orderId);
+  const key = `${oid}-${activity}-${usr02}-${desc}-${stk}-${idx}`.trim();
+
+  return key && key !== "-" ? key : `fallback__${idx}`;
+}
 /**
  * ✅ Agrupar SOLO por Usr02
  * - Devuelve:
@@ -160,12 +181,24 @@ function agruparPorUsr02(ops = []) {
   const grupos = Object.keys(porGrupo).sort((a, b) => a.localeCompare(b));
 
   // Orden interno de operaciones dentro del grupo: Activity, luego SubActivity
+  // se elimino el campo de SubActivity Miguel Angel 04/06/2026
+  /*
   for (const grp of grupos) {
     porGrupo[grp].sort((x, y) => {
       const ax = normalizeActivity(x);
       const ay = normalizeActivity(y);
       if (ax !== ay) return ax.localeCompare(ay);
       return normalizeSubActivity(x).localeCompare(normalizeSubActivity(y));
+    });
+  }
+*/
+
+  // Orden interno de operaciones dentro del grupo: Activity
+  for (const grp of grupos) {
+    porGrupo[grp].sort((x, y) => {
+      const ax = normalizeActivity(x);
+      const ay = normalizeActivity(y);
+      return ax.localeCompare(ay);
     });
   }
 
@@ -273,7 +306,7 @@ export function ListaOperacionesAgrupadas({
             onRequestCancelFinalize?.();
           },
         },
-      ]
+      ],
     );
   };
 
@@ -369,7 +402,8 @@ export function ListaOperacionesAgrupadas({
                       marginTop: 2,
                     }}
                   >
-                    {opsGroup.length} operación{opsGroup.length === 1 ? "" : "es"}
+                    {opsGroup.length} operación
+                    {opsGroup.length === 1 ? "" : "es"}
                   </Text>
                 </View>
 
@@ -439,11 +473,12 @@ export function ListaOperacionesAgrupadas({
 
                       return (
                         <ItemOperacionDetalle
-                          key={realId}
+                          key={`${realId}-${idx}`}
                           op={{
                             ...op,
                             activity: normalizeActivity(op),
-                            subactivity: normalizeSubActivity(op),
+                            //Campo eliminado SubActivity Miguel Angel 04/06/2026
+                            //subactivity: normalizeSubActivity(op),
                             description: normalizeDescription(op),
                             standardTextKey: normalizeStandardTextKey(op),
                             categoria: normalizeCategoria(op),
@@ -491,7 +526,13 @@ export function ItemOperacionDetalle({
         ? "#FFF4E5"
         : FIORI.surfaceAlt;
 
-  const badgeText = isFinal ? "FIN" : isProc ? "PROC" : isPause ? "PAUS" : "PEND";
+  const badgeText = isFinal
+    ? "FIN"
+    : isProc
+      ? "PROC"
+      : isPause
+        ? "PAUS"
+        : "PEND";
 
   const desc = normalizeDescription(op);
   const stk = normalizeStandardTextKey(op);
@@ -508,7 +549,8 @@ export function ItemOperacionDetalle({
   const showDesc = !!descNorm;
 
   const act = safeStr(op?.activity ?? op?.Activity) || "—";
-  const sub = safeStr(op?.subactivity ?? op?.SubActivity);
+  //Campo eliminado subactivity  Miguel Angel 04/06/2026
+  //const sub = safeStr(op?.subactivity ?? op?.SubActivity);
 
   const cardBg = checked ? FIORI.brandSoft : categoryColor.bg;
   const cardBorder = checked ? FIORI.brand : categoryColor.border;
@@ -537,7 +579,9 @@ export function ItemOperacionDetalle({
               justifyContent: "center",
               borderWidth: 1,
               borderColor: checked ? FIORI.brand : categoryColor.border,
-              backgroundColor: checked ? FIORI.surface : "rgba(255,255,255,0.65)",
+              backgroundColor: checked
+                ? FIORI.surface
+                : "rgba(255,255,255,0.65)",
               marginTop: 2,
             }}
           >
@@ -563,11 +607,15 @@ export function ItemOperacionDetalle({
         </View>
 
         <View style={{ flex: 1 }}>
+          {/*  se realizaron cambios por Miguel Angel eliminacion del campo de SubActivity 04/06/2026
+<Text style={styles.operTitleSmall}>
+  #{index + 1} · {act}
+  {sub ? `-${sub}` : ""}
+</Text>
+*/}
           <Text style={styles.operTitleSmall}>
             #{index + 1} · {act}
-            {sub ? `-${sub}` : ""}
           </Text>
-
           {showDesc ? (
             <Text style={styles.operDescSmall} numberOfLines={2}>
               {desc}

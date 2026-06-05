@@ -302,7 +302,8 @@ function detectTipoMantenimiento(orden) {
   if (raw.includes("escal")) return "escalera";
   return "elevador";
 }
-
+//cambios agregados para la eliminacion del campo de SubActivity 04/06/2026Miguel Angel
+/*
 function normalizeOpsForPdf(ops = []) {
   if (!Array.isArray(ops)) return [];
   return ops.map((op) => {
@@ -318,6 +319,27 @@ function normalizeOpsForPdf(ops = []) {
       description: String(Description || ""),
       Activity: String(Activity || ""),
       SubActivity: String(SubActivity || ""),
+      Description: String(Description || ""),
+      StandardTextKey: String(StandardTextKey || ""),
+      standardTextKey: String(StandardTextKey || ""),
+    };
+  });
+}
+  */
+
+function normalizeOpsForPdf(ops = []) {
+  if (!Array.isArray(ops)) return [];
+
+  return ops.map((op) => {
+    const Activity = op.Activity || op.activity || op.Vornr || "";
+    const Description = op.Description || op.description || op.Ltxa1 || "";
+    const StandardTextKey = op.StandardTextKey || op.standardTextKey || "";
+
+    return {
+      ...op,
+      activity: String(Activity || ""),
+      description: String(Description || ""),
+      Activity: String(Activity || ""),
       Description: String(Description || ""),
       StandardTextKey: String(StandardTextKey || ""),
       standardTextKey: String(StandardTextKey || ""),
@@ -495,6 +517,7 @@ export default function PendienteFirmaIndex() {
   const [selectedMap, setSelectedMap] = useState({});
 
   const [showFirmaModal, setShowFirmaModal] = useState(false);
+  const [showPreviewModal, setShowPreviewModal] = useState(false);
   const [firmaDataUrl, setFirmaDataUrl] = useState(null);
   const [firmaForOrderIds, setFirmaForOrderIds] = useState([]);
 
@@ -895,9 +918,14 @@ export default function PendienteFirmaIndex() {
     setClienteNombre("");
     setClienteCargo("");
     setComentarioCliente("");
+
+    // Primero mostrar las órdenes seleccionadas
+    setShowPreviewModal(true);
+  };
+  const confirmarOrdenesYFirmar = () => {
+    setShowPreviewModal(false);
     setShowFirmaModal(true);
   };
-
   const onSignatureOK = (sig) => {
     setFirmaDataUrl(sig);
     setShowFirmaModal(false);
@@ -1835,6 +1863,109 @@ export default function PendienteFirmaIndex() {
         animationType="slide"
         onRequestClose={() => setShowFirmaModal(false)}
       >
+        <Modal
+          visible={showPreviewModal}
+          transparent
+          animationType="slide"
+          onRequestClose={() => setShowPreviewModal(false)}
+        >
+          <View style={styles.modalBackdrop}>
+            <View
+              style={[styles.modalCard, { maxWidth: 520, maxHeight: "85%" }]}
+            >
+              <Text style={styles.modalTitle}>Órdenes que se van a firmar</Text>
+
+              <Text style={styles.modalSub}>
+                Revisa con el cliente las órdenes seleccionadas antes de
+                capturar la firma.
+              </Text>
+
+              <ScrollView style={{ marginTop: 12, maxHeight: 420 }}>
+                {rows
+                  .filter((item) => selectedIds.includes(String(item?.Orderid)))
+                  .map((item) => {
+                    const orderId = String(item?.Orderid || "");
+
+                    return (
+                      <View key={orderId} style={styles.previewOrderCard}>
+                        <Text style={styles.previewOrderTitle}>
+                          Orden #{orderId}
+                        </Text>
+
+                        <Text style={styles.previewOrderText}>
+                          Tipo: {safeStr(item?.order_type || "—")}
+                        </Text>
+
+                        <Text style={styles.previewOrderText}>
+                          Equipo: {safeStr(item?.equipment || "—")}
+                        </Text>
+
+                        <Text style={styles.previewOrderText}>
+                          Cliente: {safeStr(item?.partner_name || "—")}
+                        </Text>
+
+                        <Text style={styles.previewOrderText}>
+                          Dirección: {safeStr(item?.partner_address || "—")}
+                        </Text>
+
+                        <Text style={styles.previewOrderText}>
+                          Inicio: {formatDateDMY(item?.start_date)}
+                        </Text>
+
+                        <Text style={styles.previewOrderText}>
+                          Fin: {formatDateDMY(item?.finish_date)}
+                        </Text>
+
+                        <Text
+                          style={[
+                            styles.previewOrderText,
+                            { fontWeight: "900" },
+                          ]}
+                        >
+                          Estatus: PENDIENTE DE FIRMA
+                        </Text>
+                      </View>
+                    );
+                  })}
+              </ScrollView>
+
+              <View
+                style={{
+                  flexDirection: "row",
+                  justifyContent: "flex-end",
+                  gap: 10,
+                  flexWrap: "wrap",
+                  marginTop: 14,
+                }}
+              >
+                <TouchableOpacity
+                  style={[
+                    styles.smallBtn,
+                    {
+                      backgroundColor: FIORI.cardSubtle,
+                      borderWidth: 1,
+                      borderColor: FIORI.border,
+                    },
+                  ]}
+                  onPress={() => setShowPreviewModal(false)}
+                >
+                  <Text style={[styles.smallBtnText, { color: FIORI.ink }]}>
+                    Cancelar
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[styles.smallBtn, { backgroundColor: FIORI.accent }]}
+                  onPress={confirmarOrdenesYFirmar}
+                >
+                  <Text style={[styles.smallBtnText, { color: "#fff" }]}>
+                    Confirmar y firmar
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </Modal>
         <View style={styles.modalBackdrop}>
           <View style={[styles.modalCard, { maxWidth: 520 }]}>
             <Text style={styles.modalTitle}>Firma del cliente</Text>
@@ -2391,5 +2522,26 @@ const styles = StyleSheet.create({
     color: FIORI.textMuted,
     textAlign: "center",
     fontSize: 12,
+  },
+  previewOrderCard: {
+    backgroundColor: FIORI.cardSubtle,
+    borderWidth: 1,
+    borderColor: FIORI.border,
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 10,
+  },
+
+  previewOrderTitle: {
+    color: FIORI.ink,
+    fontSize: 16,
+    fontWeight: "900",
+    marginBottom: 6,
+  },
+
+  previewOrderText: {
+    color: FIORI.textMuted,
+    fontSize: 13,
+    marginTop: 3,
   },
 });

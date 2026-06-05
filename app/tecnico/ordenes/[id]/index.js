@@ -226,13 +226,49 @@ function fmtDMY(val) {
 
   return `${dd}/${mm}/${yyyy}`;
 }
-
+//cambios agregados para quitare el campo del subactivity miguel angel 03/06/2026
+/*
 const opKey = (orderId, op) =>
   `${orderId}-${op.activity || op.Activity || ""}${
     op.subactivity || op.SubActivity
       ? `-${op.subactivity || op.SubActivity}`
       : ""
   }`;
+*/
+const opKey = (orderId, op, idx) => {
+  const activity = String(op.activity || op.Activity || "").trim();
+  const usr02 = String(op.Usr02 || op.usr02 || "SIN UBICACIÓN").trim();
+  const desc = String(op.description || op.Description || "").trim();
+  const stk = String(op.standardTextKey || op.StandardTextKey || "").trim();
+
+  return `${orderId}-${activity}-${usr02}-${desc}-${stk}-${idx}`;
+};
+
+// Cambios agregados por Miguel Angel para validar IDs de operaciones sin SubActivity 04/06/2026
+function getSelectedOpsFromMap(orderId, opsAll = [], checkedMap = {}) {
+  const selectedKeys = new Set(
+    Object.keys(checkedMap || {})
+      .filter((k) => !!checkedMap[k])
+      .map((k) => String(k).trim()),
+  );
+
+  return (opsAll || []).filter((op, idx) => {
+    const activity = String(op?.activity || op?.Activity || "").trim();
+    const usr02 = String(op?.Usr02 || op?.usr02 || "SIN UBICACIÓN").trim();
+    const desc = String(op?.description || op?.Description || "").trim();
+    const stk = String(op?.standardTextKey || op?.StandardTextKey || "").trim();
+
+    const possibleKeys = [
+      String(op?.id || "").trim(),
+      opKey(orderId, op, idx),
+      `${orderId}-${activity}`,
+      `${orderId}-${activity}-${idx}`,
+      `${orderId}-${activity}-${usr02}-${desc}-${stk}-${idx}`,
+    ].filter(Boolean);
+
+    return possibleKeys.some((key) => selectedKeys.has(key));
+  });
+}
 
 /* ====== SAP helpers para fechas/horas y prorrateo ====== */
 function msToMinutesRounded(ms) {
@@ -323,18 +359,25 @@ function buildConfirmationPayloadFromSelectedOps({
   orderId,
   opsAll,
   selectedIds,
+  checkedMap,
   startMs,
   finishMs,
   consumiblesRows,
   plantFallback,
-  user, // 👈 CAMBIA 'userEmail' POR 'user' PARA TENER EL OBJETO COMPLETO
+  user,
 }) {
+  //cambios agregados por Miguel Angel para lo del eliminacion de supactivity 04/06/2026
+  /*
   const selectedOpsRaw = (selectedIds || [])
     .map((idKey) =>
       (opsAll || []).find((op) => String(op.id) === String(idKey)),
     )
     .filter(Boolean);
-
+    */
+  // Cambios agregados por Miguel Angel para validar IDs de operaciones sin SubActivity 04/06/2026
+  const selectedOpsRaw = getSelectedOpsFromMap(orderId, opsAll, checkedMap);
+  //Miguel Angel cambios para lo del cambio de subactivity    03/06/2026
+  /*
   const uniqByOp = (ops) => {
     const map = new Map();
     for (const op of ops) {
@@ -345,7 +388,22 @@ function buildConfirmationPayloadFromSelectedOps({
     }
     return Array.from(map.values());
   };
+*/
+  const uniqByOp = (ops) => {
+    const map = new Map();
 
+    for (let idx = 0; idx < ops.length; idx++) {
+      const op = ops[idx];
+      const act = String(op.activity || op.Activity || "").trim();
+      const key = String(op?.id || opKey(orderId, op, idx)).trim() || act;
+
+      if (!map.has(key)) {
+        map.set(key, op);
+      }
+    }
+
+    return Array.from(map.values());
+  };
   const selectedOps = uniqByOp(selectedOpsRaw);
   if (!selectedOps.length) return null;
 
@@ -372,10 +430,16 @@ function buildConfirmationPayloadFromSelectedOps({
     Mail: String(user?.correo || user?.email || "").trim(),
     ConfirmationOrderSet: selectedOps.map((op, idx) => {
       const actRaw = String(op.activity || op.Activity || "").trim();
+
+      //cambios agregados para elimuinar el campo del subactivity
+      /*
       const subRaw = String(op.subactivity || op.SubActivity || "").trim();
 
       const Operation = actRaw.padStart(4, "0");
       const SubActivity = subRaw ? subRaw.padStart(4, "0") : "";
+     */
+      const Operation = actRaw.padStart(4, "0");
+
       const w = windows[idx];
 
       const row = {
@@ -391,8 +455,8 @@ function buildConfirmationPayloadFromSelectedOps({
         ExecFinTime: sapTimePTFromMs(w.end),
         FinConf: "X",
       };
-
-      if (SubActivity) row.SubActivity = SubActivity;
+      //se comento el if para lo del campo de SubActivity Miguel Angel 03/06/2026
+      // if (SubActivity) row.SubActivity = SubActivity;
       return row;
     }),
     ConfirmationMaterialSet,
@@ -436,8 +500,8 @@ function pickSecondAddress(results = []) {
 }
 
 function mergeOpsWithLocalState(orderId, ops, state) {
-  return (ops || []).map((o) => {
-    const id = o.id || opKey(orderId, o);
+  return (ops || []).map((o, idx) => {
+    const id = o.id || opKey(orderId, o, idx);
     const st = state?.[id] || {};
 
     const sapEstatus = (o.estatus || "pendiente").toLowerCase();
@@ -522,17 +586,18 @@ function normalizeOpsFromBackend(ops = []) {
   if (!Array.isArray(ops)) return [];
   return ops.map((op) => {
     const Activity = op.Activity || op.activity || op.Vornr || "";
-    const SubActivity = op.SubActivity || op.subactivity || op.Uvorn || "";
+    //se esta eliminando lo del campo de SubActivity Miguel Angel 03/06/2026
+    // const SubActivity = op.SubActivity || op.subactivity || op.Uvorn || "";
     const Description = op.Description || op.description || op.Ltxa1 || "";
     const StandardTextKey = op.StandardTextKey || op.standardTextKey || "";
 
     return {
       ...op,
       activity: String(Activity || ""),
-      subactivity: String(SubActivity || ""),
+      //  subactivity: String(SubActivity || ""),
       description: String(Description || ""),
       Activity: String(Activity || ""),
-      SubActivity: String(SubActivity || ""),
+      //  SubActivity: String(SubActivity || ""),
       Description: String(Description || ""),
       StandardTextKey: String(StandardTextKey || ""),
       standardTextKey: String(StandardTextKey || ""),
@@ -1378,11 +1443,16 @@ export default function DetalleOrden() {
       const orderIdReal = String(
         baseOrden?.Orderid || baseOrden?.OrderId || orderIdParam,
       ).trim();
+      // cambios Por lo de la eliminacion del campo SubActivity  04/06/2026
+      /*
       const opsWithId = ops.map((o) => ({
         ...o,
-        id: o.id || opKey(orderIdReal, o),
+        id: o.id || opKey(orderIdReal, o, idx),
+*/
+      const opsWithId = ops.map((o, idx) => ({
+        ...o,
+        id: o.id || opKey(orderIdReal, o, idx),
       }));
-
       const localState = await loadOpState(orderIdReal);
       const opsMerged = mergeOpsWithLocalState(
         orderIdReal,
@@ -1986,13 +2056,13 @@ export default function DetalleOrden() {
         orderId,
         opsAll,
         selectedIds,
+        checkedMap,
         startMs: orderStartedAtMs,
         finishMs,
         consumiblesRows: consumibles,
         plantFallback,
-        user: user, // 👈 CAMBIO: Pasamos el objeto 'user' completo
+        user: user,
       });
-
       if (!confirmationPayload0400) {
         Alert.alert(
           "Error",
@@ -2507,18 +2577,31 @@ export default function DetalleOrden() {
 
       const totalMs = elapsedNow;
       const totalMin = msToMinutesRounded(totalMs);
-
+      //cambios agregados port Miguel Angel no estaba seleccionando las actividades 04/06/2026
+      /*
       const opsAll = Array.isArray(orden?.operaciones) ? orden.operaciones : [];
       const selectedOpsRaw = selectedIds
         .map((idKey) => opsAll.find((op) => String(op.id) === String(idKey)))
         .filter(Boolean);
+        */
+      const opsAll = Array.isArray(orden?.operaciones) ? orden.operaciones : [];
+
+      // Cambios agregados por Miguel Angel para lo de la eliminación de SubActivity 04/06/2026
+      // Cambios agregados por Miguel Angel para validar IDs de operaciones sin SubActivity 04/06/2026
+      const selectedOpsRaw = getSelectedOpsFromMap(orderId, opsAll, checkedMap);
 
       const uniqByOp = (ops) => {
         const map = new Map();
         for (const op of ops) {
           const act = String(op.activity || op.Activity || "").trim();
+          //cambios agregados para quitar lo del campo de subactivity Miguel Angel 03/06/2026
+
+          /*
           const sub = String(op.subactivity || op.SubActivity || "").trim();
           const key = `${act}__${sub}`;
+
+          */
+          const key = act;
           if (!map.has(key)) map.set(key, op);
         }
         return Array.from(map.values());
@@ -2557,10 +2640,12 @@ export default function DetalleOrden() {
         Mail: String(userEmail || "").trim(), // 👈 AQUI
         ConfirmationOrderSet: selectedOps.map((op, idx) => {
           const actRaw = String(op.activity || op.Activity || "").trim();
-          const subRaw = String(op.subactivity || op.SubActivity || "").trim();
+
+          // Cambios agregados por Miguel Angel para lo de la eliminación de SubActivity 04/06/2026
+          // const subRaw = String(op.subactivity || op.SubActivity || "").trim();
 
           const Operation = actRaw.padStart(4, "0");
-          const SubActivity = subRaw ? subRaw.padStart(4, "0") : "";
+          // const SubActivity = subRaw ? subRaw.padStart(4, "0") : "";
           const w = windows[idx];
 
           const row = {
@@ -2576,8 +2661,8 @@ export default function DetalleOrden() {
             ExecFinTime: sapTimePTFromMs(w.end),
             FinConf: "X",
           };
-
-          if (SubActivity) row.SubActivity = SubActivity;
+          //cambios de Miguel Angel error en lo del campo de SubActivity
+          //if (SubActivity) row.SubActivity = SubActivity;
           return row;
         }),
         ConfirmationMaterialSet,
