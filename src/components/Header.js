@@ -1,159 +1,180 @@
 // src/components/Header.js
+
 import React from "react";
-import { View, Text, StyleSheet, TouchableOpacity, Platform, Image } from "react-native";
-import { useRouter, useNavigation, useSegments } from "expo-router";
+import {
+  View,
+  Text,
+  StyleSheet,
+  TouchableOpacity,
+  Image,
+  Platform,
+} from "react-native";
+
+import { SafeAreaView } from "react-native-safe-area-context";
+
+import { useRouter, useNavigation, usePathname } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
+
 import { useDrawer } from "../context/DrawerContext";
 
-// ✅ Import opcional: si existe el archivo, lo usas.
-// Si lo borraste, simplemente borra esta línea.
-import { useNotificaciones } from "../context/NotificacionesContext";
-
-const FIORI = {
-  shellBg: "#FFFFFF",
-  border: "#E6E9EF",
-  ink: "#0B1F3B",
-  accent: "#0A6ED1",
-  danger: "#EB5757",
+const COLORS = {
+  white: "#FFFFFF",
+  primary: "#0B1F3B",
+  border: "#E7ECF3",
+  iconBg: "#F4F6F8",
 };
+
+const ROOT_ROUTES = ["/admin", "/supervisor", "/tecnico"];
 
 export default function Header({ title }) {
   const router = useRouter();
   const navigation = useNavigation();
-  const segments = useSegments();
+  const pathname = usePathname();
   const { toggleDrawer } = useDrawer();
 
-  // ✅ SAFE: si no hay Provider, evita crash
-  let noLeidas = [];
-  try {
-    const ctx = useNotificaciones?.(); // si existe hook
-    noLeidas = Array.isArray(ctx?.noLeidas) ? ctx.noLeidas : [];
-  } catch (e) {
-    noLeidas = [];
-  }
+  const isRoot = ROOT_ROUTES.includes(pathname);
 
-  // Detecta si estamos en una pantalla raíz
-  const isRoot = ["/admin", "/supervisor", "/tecnico"].includes("/" + segments[1]);
+  const handleBack = () => {
+    if (isRoot) return;
+
+    if (navigation.canGoBack()) {
+      router.back();
+      return;
+    }
+
+    router.replace("/");
+  };
 
   return (
-    <View style={styles.header}>
-      {/* ===== LOGO CENTRADO ===== */}
-      <View style={styles.logoWrapper}>
-        <Image
-          source={require("../../assets/logo_header.png")}
-          style={styles.logo}
-          resizeMode="contain"
-        />
-      </View>
+    <SafeAreaView edges={["top"]} style={styles.safeArea}>
+      <View style={styles.container}>
 
-      {/* ===== FILA: BACK | TITULO | ICONOS ===== */}
-      <View style={styles.row}>
-        {/* Back */}
-        {!isRoot ? (
-          <TouchableOpacity
-            onPress={() => {
-              if (navigation.canGoBack()) router.back();
-            }}
-            style={styles.iconButton}
-            activeOpacity={0.7}
+        {/* IZQUIERDA */}
+        <View style={styles.side}>
+          {!isRoot ? (
+            <TouchableOpacity
+              style={styles.circleButton}
+              onPress={handleBack}
+              activeOpacity={0.7}
+            >
+              <Ionicons
+                name="arrow-back"
+                size={20}
+                color={COLORS.primary}
+              />
+            </TouchableOpacity>
+          ) : (
+            <Image
+              source={require("../../assets/logo_header.png")}
+              style={styles.logo}
+              resizeMode="contain"
+            />
+          )}
+        </View>
+
+        {/* CENTRO */}
+        <View style={styles.center}>
+          <Text
+            numberOfLines={1}
+            style={styles.title}
           >
-            <Ionicons name="arrow-back" size={22} color={FIORI.ink} />
-          </TouchableOpacity>
-        ) : (
-          <View style={{ width: 34 }} />
-        )}
+            {title}
+          </Text>
+        </View>
 
-        {/* Título */}
-        <Text style={styles.title} numberOfLines={1}>
-          {title}
-        </Text>
-
-        {/* Iconos derecha */}
-        <View style={styles.rightIcons}>
-          {/* Notificaciones (si algún día lo vuelves a usar) */}
+        {/* DERECHA */}
+        <View style={styles.sideRight}>
           <TouchableOpacity
-            // ✅ si no tienes módulo de notificaciones, mejor no navegar
-            onPress={() => {
-              // Si tienes la pantalla: router.push("/notificaciones")
-              // Si no, no hagas nada:
-              // router.push("/notificaciones");
-            }}
-            style={styles.iconButton}
-            activeOpacity={0.7}
-          >
-            <Ionicons name="notifications-outline" size={22} color={FIORI.ink} />
-            {noLeidas.length > 0 && (
-              <View style={styles.badge}>
-                <Text style={styles.badgeText}>
-                  {noLeidas.length > 99 ? "99+" : noLeidas.length}
-                </Text>
-              </View>
-            )}
-          </TouchableOpacity>
-
-          {/* ☰ MENÚ LATERAL */}
-          <TouchableOpacity
+            style={styles.circleButton}
             onPress={toggleDrawer}
-            style={styles.iconButton}
             activeOpacity={0.7}
           >
-            <Ionicons name="menu-outline" size={26} color={FIORI.ink} />
+            <Ionicons
+              name="menu-outline"
+              size={24}
+              color={COLORS.primary}
+            />
           </TouchableOpacity>
         </View>
+
       </View>
-    </View>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  header: {
-    paddingTop: 40,
-    paddingBottom: 10,
-    paddingHorizontal: 16,
-    backgroundColor: FIORI.shellBg,
+  safeArea: {
+    backgroundColor: COLORS.white,
+  },
+
+  container: {
+    height: 70,
+
+    backgroundColor: COLORS.white,
+
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+
+    paddingHorizontal: 24,
+
     borderBottomWidth: 1,
-    borderColor: FIORI.border,
+    borderBottomColor: COLORS.border,
+
     ...Platform.select({
       ios: {
         shadowColor: "#000",
-        shadowOpacity: 0.06,
-        shadowRadius: 6,
-        shadowOffset: { width: 0, height: 3 },
+        shadowOpacity: 0.05,
+        shadowRadius: 10,
+        shadowOffset: {
+          width: 0,
+          height: 3,
+        },
       },
-      android: { elevation: 3 },
+      android: {
+        elevation: 3,
+      },
     }),
   },
 
-  logoWrapper: { alignItems: "center", marginBottom: 6 },
-
-  logo: { width: 120, height: 32 },
-
-  row: { flexDirection: "row", alignItems: "center" },
-
-  iconButton: { padding: 6, borderRadius: 18, position: "relative" },
-
-  title: {
-    flex: 1,
-    fontSize: 18,
-    fontWeight: "600",
-    textAlign: "center",
-    color: FIORI.ink,
+  side: {
+    width: 60,
+    justifyContent: "center",
+    alignItems: "flex-start",
   },
 
-  rightIcons: { flexDirection: "row", alignItems: "center" },
-
-  badge: {
-    position: "absolute",
-    top: -4,
-    right: -6,
-    backgroundColor: FIORI.danger,
-    borderRadius: 10,
-    paddingHorizontal: 5,
-    minWidth: 18,
-    height: 18,
+  center: {
+    flex: 1,
     justifyContent: "center",
     alignItems: "center",
   },
 
-  badgeText: { color: "#fff", fontSize: 10, fontWeight: "700" },
+  sideRight: {
+    width: 60,
+    justifyContent: "center",
+    alignItems: "flex-end",
+  },
+
+  logo: {
+    width: 42,
+    height: 42,
+  },
+
+  title: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: COLORS.primary,
+    textAlign: "center",
+  },
+
+  circleButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+
+    backgroundColor: COLORS.iconBg,
+
+    justifyContent: "center",
+    alignItems: "center",
+  },
 });

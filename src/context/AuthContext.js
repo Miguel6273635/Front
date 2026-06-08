@@ -1,5 +1,12 @@
 // src/context/AuthContext.js
-import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
+import React, {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { AppState } from "react-native";
 import { router } from "expo-router";
@@ -17,15 +24,36 @@ WebBrowser.maybeCompleteAuthSession();
 
 const AuthContext = createContext(null);
 
+/*
+  Días permitidos para entrar a la app sin internet
+  después de haber iniciado sesión correctamente al menos una vez.
+*/
+const LOCAL_SESSION_DAYS = 15;
+
 function pickHomeByRole(rol_id) {
   if (rol_id === 1) return "/admin";
   if (rol_id === 2) return "/supervisor";
   return "/tecnico";
 }
 
+function getLocalSessionUntilMs() {
+  return Date.now() + LOCAL_SESSION_DAYS * 24 * 60 * 60 * 1000;
+}
+
+function isLocalSessionValid(localSessionUntil) {
+  if (!localSessionUntil) return false;
+
+  const value = Number(localSessionUntil);
+
+  if (Number.isNaN(value)) return false;
+
+  return Date.now() <= value;
+}
+
 /* =========================
    PKCE helpers
    ========================= */
+
 function base64UrlEncodeFromBytes(bytes) {
   let binary = "";
   const chunkSize = 0x8000;
@@ -80,6 +108,7 @@ export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [token, setToken] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [offlineMode, setOfflineMode] = useState(false);
 
   const extra = Constants.expoConfig?.extra || {};
   const AZURE_TENANT_ID = extra.AZURE_TENANT_ID;
@@ -117,17 +146,36 @@ export const AuthProvider = ({ children }) => {
       "token",
       "token_expires_at",
       "sso_code_verifier",
+      "local_session_until",
     ]);
 
-    await authDel(["access_token", "refresh_token", "expires_at", "user_json"]);
+    await authDel([
+      "access_token",
+      "refresh_token",
+      "expires_at",
+      "user_json",
+      "local_session_until",
+    ]);
   }
 
   const buildApiScopes = () => {
-    return uniq(["openid", "profile", "email", "offline_access", AZURE_API_SCOPE]);
+    return uniq([
+      "openid",
+      "profile",
+      "email",
+      "offline_access",
+      AZURE_API_SCOPE,
+    ]);
   };
 
   const buildGraphScopes = () => {
-    return uniq(["openid", "profile", "email", "offline_access", AZURE_GRAPH_SCOPE]);
+    return uniq([
+      "openid",
+      "profile",
+      "email",
+      "offline_access",
+      AZURE_GRAPH_SCOPE,
+    ]);
   };
 
   const buildLoginScopes = () => {
@@ -155,33 +203,47 @@ export const AuthProvider = ({ children }) => {
     refreshTimerRef.current = setTimeout(async () => {
       try {
         const online = await isOnline();
-        if (!online) return;
+
+        if (!online) {
+          console.log("[AUTH] No se refresca token porque no hay internet");
+          return;
+        }
 
         const r = await refreshAccessToken();
+
         if (r?.ok) {
           await scheduleRefresh();
         }
-      } catch {}
+      } catch (e) {
+        console.log("[AUTH REFRESH TIMER ERROR]", e?.message || e);
+      }
     }, msUntil);
   };
 
   /* =========================
-     REFRESH TOKEN TU API
+     REFRESH TOKEN
      ========================= */
+
   const refreshAccessToken = async () => {
     const online = await isOnline();
-    if (!online) return { ok: false, reason: "offline" };
+
+    if (!online) {
+      return { ok: false, reason: "offline" };
+    }
 
     const refreshToken = await authGet("refresh_token");
-    if (!refreshToken) return { ok: false, reason: "no_refresh_token" };
+
+    if (!refreshToken) {
+      return { ok: false, reason: "no_refresh_token" };
+    }
 
     if (!ISSUER || !AZURE_CLIENT_ID) {
       return { ok: false, reason: "missing_azure_config" };
     }
 
-    const discovery = await AuthSession.fetchDiscoveryAsync(ISSUER);
-
     try {
+      const discovery = await AuthSession.fetchDiscoveryAsync(ISSUER);
+
       const tokenResult = await AuthSession.refreshAsync(
         {
           clientId: AZURE_CLIENT_ID,
@@ -199,9 +261,11 @@ export const AuthProvider = ({ children }) => {
       }
 
       const expAt =
-        Date.now() + (typeof expiresIn === "number" ? expiresIn : 50 * 60) * 1000;
+        Date.now() +
+        (typeof expiresIn === "number" ? expiresIn : 50 * 60) * 1000;
 
       setToken(accessToken);
+      setOfflineMode(false);
 
       await AsyncStorage.setItem("token", accessToken);
       await AsyncStorage.setItem("token_expires_at", String(expAt));
@@ -213,6 +277,18 @@ export const AuthProvider = ({ children }) => {
         await authSet("refresh_token", tokenResult.refreshToken);
       }
 
+      /*
+        Renovamos también la sesión local porque hubo una validación online exitosa.
+      */
+      const localSessionUntil = getLocalSessionUntilMs();
+
+      await AsyncStorage.setItem(
+        "local_session_until",
+        String(localSessionUntil)
+      );
+
+      await authSet("local_session_until", String(localSessionUntil));
+
       return { ok: true, accessToken, expiresAt: expAt };
     } catch (e) {
       console.log("[REFRESH TOKEN ERROR]", e?.message || e);
@@ -223,6 +299,7 @@ export const AuthProvider = ({ children }) => {
   /* =========================
      TOKEN GRAPH
      ========================= */
+
   const acquireGraphAccessToken = async () => {
     const online = await isOnline();
     if (!online) return null;
@@ -245,6 +322,7 @@ export const AuthProvider = ({ children }) => {
       );
 
       const graphAccessToken = tokenResult?.accessToken;
+
       if (!graphAccessToken) return null;
 
       if (tokenResult?.refreshToken) {
@@ -261,6 +339,7 @@ export const AuthProvider = ({ children }) => {
   const fetchMicrosoftProfilePhoto = async (preferredToken = null) => {
     try {
       const graphToken = preferredToken || (await acquireGraphAccessToken());
+
       console.log("[GRAPH TOKEN EXISTS]", !!graphToken);
 
       if (!graphToken) return null;
@@ -295,52 +374,170 @@ export const AuthProvider = ({ children }) => {
   /* =========================
      LOAD STORAGE
      ========================= */
+
   useEffect(() => {
     const loadStorage = async () => {
       try {
         const storedToken =
-          (await authGet("access_token")) || (await AsyncStorage.getItem("token"));
+          (await authGet("access_token")) ||
+          (await AsyncStorage.getItem("token"));
+
         const storedExp =
-          (await authGet("expires_at")) || (await AsyncStorage.getItem("token_expires_at"));
+          (await authGet("expires_at")) ||
+          (await AsyncStorage.getItem("token_expires_at"));
+
         const storedUser =
-          (await authGet("user_json")) || (await AsyncStorage.getItem("user"));
+          (await authGet("user_json")) ||
+          (await AsyncStorage.getItem("user"));
 
-        let finalToken = storedToken;
-        let finalExp = storedExp;
+        const localSessionUntil =
+          (await authGet("local_session_until")) ||
+          (await AsyncStorage.getItem("local_session_until"));
 
-        if (storedToken && storedExp && isExpired(storedExp, 60)) {
+        const online = await isOnline();
+
+        if (!storedUser) {
+          console.log("[AUTH] No hay usuario local guardado");
+          setToken(null);
+          setUser(null);
+          setOfflineMode(false);
+          return;
+        }
+
+        const parsedUser = JSON.parse(storedUser);
+
+        /*
+          Caso 1:
+          Hay token y todavía no venció.
+          Entramos normal.
+        */
+        if (storedToken && storedExp && !isExpired(storedExp, 60)) {
+          console.log("[AUTH] Sesión online/local válida");
+
+          setToken(storedToken);
+          setUser(parsedUser);
+          setOfflineMode(false);
+
+          /*
+            Si el usuario ya existía antes de implementar local_session_until,
+            creamos esa vigencia local para que pueda entrar offline después.
+          */
+          if (!localSessionUntil) {
+            const newLocalSessionUntil = getLocalSessionUntilMs();
+
+            await AsyncStorage.setItem(
+              "local_session_until",
+              String(newLocalSessionUntil)
+            );
+
+            await authSet(
+              "local_session_until",
+              String(newLocalSessionUntil)
+            );
+
+            console.log(
+              "[AUTH] Se creó local_session_until para usuario existente"
+            );
+          }
+
+          await scheduleRefresh();
+          return;
+        }
+
+        /*
+          Caso 2:
+          El token venció, pero sí hay internet.
+          Intentamos refresh.
+        */
+        if (online) {
+          console.log("[AUTH] Token vencido. Intentando refresh online...");
+
           const refreshed = await refreshAccessToken();
 
-          if (!refreshed?.ok) {
-            await clearSessionLocal();
-            setUser(null);
-            setToken(null);
+          if (refreshed?.ok) {
+            const finalToken =
+              refreshed?.accessToken ||
+              (await authGet("access_token")) ||
+              (await AsyncStorage.getItem("token"));
+
+            setToken(finalToken);
+            setUser(parsedUser);
+            setOfflineMode(false);
+
+            await scheduleRefresh();
             return;
           }
 
-          finalToken =
-            refreshed?.accessToken ||
-            (await authGet("access_token")) ||
-            (await AsyncStorage.getItem("token"));
+          /*
+            Si hay internet y aun así no se pudo refrescar,
+            probablemente el refresh token ya expiró, fue revocado
+            o la sesión ya no es válida. Ahí sí cerramos sesión.
+          */
+          console.log("[AUTH] Refresh falló online. Cerrando sesión local.");
 
-          finalExp =
-            refreshed?.expiresAt ||
-            (await authGet("expires_at")) ||
-            (await AsyncStorage.getItem("token_expires_at"));
-        }
+          await clearSessionLocal();
 
-        if (finalToken && storedUser && finalExp && !isExpired(finalExp, 60)) {
-          setToken(finalToken);
-          setUser(JSON.parse(storedUser));
-          await scheduleRefresh();
-        } else {
           setToken(null);
           setUser(null);
+          setOfflineMode(false);
+          return;
         }
+
+        /*
+          Caso 3:
+          No hay internet.
+          Aunque el access token esté vencido, permitimos entrar
+          si existe usuario local y la sesión local sigue dentro del límite.
+
+          También cubrimos el caso donde local_session_until aún no existe
+          porque el usuario inició sesión antes de agregar esta mejora.
+        */
+        if (!online && storedUser) {
+          let finalLocalSessionUntil = localSessionUntil;
+
+          if (!finalLocalSessionUntil) {
+            finalLocalSessionUntil = getLocalSessionUntilMs();
+
+            await AsyncStorage.setItem(
+              "local_session_until",
+              String(finalLocalSessionUntil)
+            );
+
+            await authSet(
+              "local_session_until",
+              String(finalLocalSessionUntil)
+            );
+
+            console.log(
+              "[AUTH] Se creó local_session_until para usuario existente en modo offline"
+            );
+          }
+
+          if (isLocalSessionValid(finalLocalSessionUntil)) {
+            console.log("[AUTH] Entrando en modo offline con sesión local");
+
+            setToken(storedToken || null);
+            setUser(parsedUser);
+            setOfflineMode(true);
+            return;
+          }
+        }
+
+        /*
+          Caso 4:
+          No hay internet y no existe sesión local vigente.
+          No borramos por fuerza, pero no damos acceso.
+        */
+        console.log("[AUTH] Sin internet y sin sesión local vigente");
+
+        setToken(null);
+        setUser(null);
+        setOfflineMode(false);
       } catch (e) {
         console.log("[LOAD STORAGE ERROR]", e?.message || e);
         setToken(null);
         setUser(null);
+        setOfflineMode(false);
       } finally {
         setLoading(false);
       }
@@ -352,17 +549,30 @@ export const AuthProvider = ({ children }) => {
   /* =========================
      SSO INICIAR
      ========================= */
+
   const loginSSO = async () => {
+    const online = await isOnline();
+
+    if (!online) {
+      throw new Error(
+        "No hay conexión a internet. Para iniciar sesión con Microsoft necesitas internet. Si ya habías iniciado sesión antes, la app intentará entrar automáticamente en modo offline al abrirse."
+      );
+    }
+
     if (!AZURE_TENANT_ID || !AZURE_CLIENT_ID) {
       throw new Error("Faltan AZURE_TENANT_ID o AZURE_CLIENT_ID en expo.extra");
     }
-    if (!ISSUER) throw new Error("ISSUER vacío. Revisa AZURE_TENANT_ID");
+
+    if (!ISSUER) {
+      throw new Error("ISSUER vacío. Revisa AZURE_TENANT_ID");
+    }
 
     const discovery = await AuthSession.fetchDiscoveryAsync(ISSUER);
     const scopes = buildLoginScopes();
 
     const codeVerifier = await makeCodeVerifier();
     const codeChallenge = await makeCodeChallenge(codeVerifier);
+
     await AsyncStorage.setItem("sso_code_verifier", codeVerifier);
 
     const authUrl =
@@ -393,6 +603,7 @@ export const AuthProvider = ({ children }) => {
   /* =========================
      SSO FINALIZAR
      ========================= */
+
   const finishSSO = async (params) => {
     const code = params?.code;
     const error = params?.error;
@@ -406,15 +617,20 @@ export const AuthProvider = ({ children }) => {
 
     if (error) {
       throw new Error(
-        `SSO error: ${String(error)}${errorDescription ? ` - ${String(errorDescription)}` : ""}`
+        `SSO error: ${String(error)}${
+          errorDescription ? ` - ${String(errorDescription)}` : ""
+        }`
       );
     }
 
-    if (!code) throw new Error('No llegó "code" en callback');
+    if (!code) {
+      throw new Error('No llegó "code" en callback');
+    }
 
     const discovery = await AuthSession.fetchDiscoveryAsync(ISSUER);
 
     const codeVerifier = (await AsyncStorage.getItem("sso_code_verifier")) || "";
+
     if (!codeVerifier) {
       throw new Error("Falta sso_code_verifier (vuelve a iniciar loginSSO)");
     }
@@ -438,7 +654,8 @@ export const AuthProvider = ({ children }) => {
     }
 
     const expAt =
-      Date.now() + (typeof expiresIn === "number" ? expiresIn : 50 * 60) * 1000;
+      Date.now() +
+      (typeof expiresIn === "number" ? expiresIn : 50 * 60) * 1000;
 
     await AsyncStorage.setItem("token", accessToken);
     await AsyncStorage.setItem("token_expires_at", String(expAt));
@@ -451,6 +668,7 @@ export const AuthProvider = ({ children }) => {
     }
 
     let meRes;
+
     try {
       meRes = await api.get("/api/auth/me", {
         headers: { Authorization: `Bearer ${accessToken}` },
@@ -458,13 +676,19 @@ export const AuthProvider = ({ children }) => {
     } catch (e) {
       const status = e?.response?.status;
       const detail = e?.response?.data?.detail || e?.response?.data || e?.message;
+
       throw new Error(
-        `No pude validar en /api/auth/me (${status || "sin status"}): ${String(detail)}`
+        `No pude validar en /api/auth/me (${status || "sin status"}): ${String(
+          detail
+        )}`
       );
     }
 
     const u = meRes?.data?.user;
-    if (!u) throw new Error("Respuesta inválida de /api/auth/me (no viene user)");
+
+    if (!u) {
+      throw new Error("Respuesta inválida de /api/auth/me (no viene user)");
+    }
 
     let finalUser = { ...u, photo: null };
 
@@ -475,7 +699,10 @@ export const AuthProvider = ({ children }) => {
         photo = await fetchMicrosoftProfilePhoto();
       }
 
-      console.log("[GRAPH PHOTO RESULT]", photo ? "SI LLEGO FOTO" : "NO LLEGO FOTO");
+      console.log(
+        "[GRAPH PHOTO RESULT]",
+        photo ? "SI LLEGO FOTO" : "NO LLEGO FOTO"
+      );
 
       if (photo) {
         finalUser.photo = photo;
@@ -486,34 +713,97 @@ export const AuthProvider = ({ children }) => {
 
     setUser(finalUser);
     setToken(accessToken);
+    setOfflineMode(false);
 
     await AsyncStorage.setItem("user", JSON.stringify(finalUser));
     await authSet("user_json", JSON.stringify(finalUser));
+
+    /*
+      Guardamos vigencia de sesión local.
+      Esto es lo que permitirá entrar offline después.
+    */
+    const localSessionUntil = getLocalSessionUntilMs();
+
+    await AsyncStorage.setItem("local_session_until", String(localSessionUntil));
+    await authSet("local_session_until", String(localSessionUntil));
 
     await AsyncStorage.removeItem("sso_code_verifier");
 
     await scheduleRefresh();
 
     router.replace(pickHomeByRole(finalUser.rol_id));
+
     return { ok: true };
   };
 
   /* =========================
      Ensure token
      ========================= */
-  const ensureValidToken = async () => {
-    const expAt =
-      (await authGet("expires_at")) || (await AsyncStorage.getItem("token_expires_at"));
-    const tok =
-      (await authGet("access_token")) || (await AsyncStorage.getItem("token"));
 
+  const ensureValidToken = async () => {
+    const online = await isOnline();
+
+    const expAt =
+      (await authGet("expires_at")) ||
+      (await AsyncStorage.getItem("token_expires_at"));
+
+    const tok =
+      (await authGet("access_token")) ||
+      (await AsyncStorage.getItem("token"));
+
+    const storedUser =
+      (await authGet("user_json")) ||
+      (await AsyncStorage.getItem("user"));
+
+    let localSessionUntil =
+      (await authGet("local_session_until")) ||
+      (await AsyncStorage.getItem("local_session_until"));
+
+    if (!storedUser) return false;
+
+    /*
+      Si no hay internet, no intentamos refrescar ni cerramos sesión.
+      Permitimos continuar si la sesión local sigue vigente.
+
+      Si local_session_until no existe, lo creamos para usuarios que ya
+      habían iniciado sesión antes de esta mejora.
+    */
+    if (!online) {
+      if (!localSessionUntil) {
+        localSessionUntil = getLocalSessionUntilMs();
+
+        await AsyncStorage.setItem(
+          "local_session_until",
+          String(localSessionUntil)
+        );
+
+        await authSet("local_session_until", String(localSessionUntil));
+      }
+
+      const validLocal = isLocalSessionValid(localSessionUntil);
+
+      if (validLocal) {
+        setOfflineMode(true);
+      }
+
+      return validLocal;
+    }
+
+    /*
+      Si hay internet, necesitamos token.
+    */
     if (!tok || !expAt) return false;
 
-    if (!isExpired(expAt, 60)) return true;
+    if (!isExpired(expAt, 60)) {
+      setOfflineMode(false);
+      return true;
+    }
 
     const r = await refreshAccessToken();
+
     if (r?.ok) {
       await scheduleRefresh();
+      setOfflineMode(false);
       return true;
     }
 
@@ -523,10 +813,13 @@ export const AuthProvider = ({ children }) => {
   /* =========================
      LOGOUT
      ========================= */
+
   const logout = async () => {
     await clearSessionLocal();
+
     setUser(null);
     setToken(null);
+    setOfflineMode(false);
 
     try {
       await WebBrowser.clearBrowserSessionAsync();
@@ -538,6 +831,7 @@ export const AuthProvider = ({ children }) => {
   /* =========================
      Foreground refresh
      ========================= */
+
   useEffect(() => {
     const sub = AppState.addEventListener("change", async (state) => {
       if (state !== "active") return;
@@ -546,10 +840,25 @@ export const AuthProvider = ({ children }) => {
         if (!user) return;
 
         const online = await isOnline();
-        if (!online) return;
 
-        await ensureValidToken();
-      } catch {}
+        if (!online) {
+          console.log("[AUTH] App activa sin internet. Se mantiene sesión local.");
+          setOfflineMode(true);
+          return;
+        }
+
+        const ok = await ensureValidToken();
+
+        /*
+          No forzamos logout aquí directamente.
+          El interceptor de api.js se encargará de cerrar sesión si recibe 401 real.
+        */
+        if (!ok) {
+          console.log("[AUTH] No se pudo asegurar token al volver a foreground");
+        }
+      } catch (e) {
+        console.log("[AUTH FOREGROUND ERROR]", e?.message || e);
+      }
     });
 
     return () => sub?.remove?.();
@@ -558,6 +867,7 @@ export const AuthProvider = ({ children }) => {
   /* =========================
      Exponer auth a api.js
      ========================= */
+
   useEffect(() => {
     globalThis.__AUTH__ = {
       ensureValidToken,
@@ -571,6 +881,7 @@ export const AuthProvider = ({ children }) => {
         user,
         token,
         loading,
+        offlineMode,
         loginSSO,
         finishSSO,
         logout,

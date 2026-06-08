@@ -76,17 +76,9 @@ export default function ModalesDetalleOrden({
       setShowSignaturePadModal(false);
     }
   }, [showSignModal]);
-  //cAMBIOS MIGUEL PARA LO DEL CAMPO subactivity 03/06/2026
-  /*
+
   const titleOp = selectedOp
-    ? `${safeStr(selectedOp.activity || selectedOp.Activity)}${
-        safeStr(selectedOp.subactivity || selectedOp.SubActivity)
-          ? " / " + safeStr(selectedOp.subactivity || selectedOp.SubActivity)
-          : ""
-      }`
-    : "";*/
-  const titleOp = selectedOp
-    ? `${safeStr(selectedOp.activity || selectedOp.Activity)}`
+    ? safeStr(selectedOp.activity || selectedOp.Activity)
     : "";
 
   const closeSign = () => {
@@ -441,7 +433,7 @@ export default function ModalesDetalleOrden({
                       color="#0A6ED1"
                     />
                     <Text style={signStyles.previewPdfBtnText}>
-                      Visualizar PDF antes de firmar
+                      Visualizar datos antes de firmar
                     </Text>
                   </TouchableOpacity>
 

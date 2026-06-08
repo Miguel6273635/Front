@@ -18,6 +18,7 @@ import { WebView } from "react-native-webview";
 import Header from "../../../../src/components/Header";
 import api from "../../../../src/services/api";
 import { useAuth } from "../../../../src/context/AuthContext";
+import { addPageNumbersToPdfBase64 } from "../../../../src/services/pdf/addPageNumbersToPdf";
 import { useLocalSearchParams, router } from "expo-router";
 
 import {
@@ -226,49 +227,9 @@ function fmtDMY(val) {
 
   return `${dd}/${mm}/${yyyy}`;
 }
-//cambios agregados para quitare el campo del subactivity miguel angel 03/06/2026
-/*
+
 const opKey = (orderId, op) =>
-  `${orderId}-${op.activity || op.Activity || ""}${
-    op.subactivity || op.SubActivity
-      ? `-${op.subactivity || op.SubActivity}`
-      : ""
-  }`;
-*/
-const opKey = (orderId, op, idx) => {
-  const activity = String(op.activity || op.Activity || "").trim();
-  const usr02 = String(op.Usr02 || op.usr02 || "SIN UBICACIÓN").trim();
-  const desc = String(op.description || op.Description || "").trim();
-  const stk = String(op.standardTextKey || op.StandardTextKey || "").trim();
-
-  return `${orderId}-${activity}-${usr02}-${desc}-${stk}-${idx}`;
-};
-
-// Cambios agregados por Miguel Angel para validar IDs de operaciones sin SubActivity 04/06/2026
-function getSelectedOpsFromMap(orderId, opsAll = [], checkedMap = {}) {
-  const selectedKeys = new Set(
-    Object.keys(checkedMap || {})
-      .filter((k) => !!checkedMap[k])
-      .map((k) => String(k).trim()),
-  );
-
-  return (opsAll || []).filter((op, idx) => {
-    const activity = String(op?.activity || op?.Activity || "").trim();
-    const usr02 = String(op?.Usr02 || op?.usr02 || "SIN UBICACIÓN").trim();
-    const desc = String(op?.description || op?.Description || "").trim();
-    const stk = String(op?.standardTextKey || op?.StandardTextKey || "").trim();
-
-    const possibleKeys = [
-      String(op?.id || "").trim(),
-      opKey(orderId, op, idx),
-      `${orderId}-${activity}`,
-      `${orderId}-${activity}-${idx}`,
-      `${orderId}-${activity}-${usr02}-${desc}-${stk}-${idx}`,
-    ].filter(Boolean);
-
-    return possibleKeys.some((key) => selectedKeys.has(key));
-  });
-}
+  `${orderId}-${op.activity || op.Activity || ""}`;
 
 /* ====== SAP helpers para fechas/horas y prorrateo ====== */
 function msToMinutesRounded(ms) {
@@ -359,51 +320,28 @@ function buildConfirmationPayloadFromSelectedOps({
   orderId,
   opsAll,
   selectedIds,
-  checkedMap,
   startMs,
   finishMs,
   consumiblesRows,
   plantFallback,
-  user,
+  user, // 👈 CAMBIA 'userEmail' POR 'user' PARA TENER EL OBJETO COMPLETO
 }) {
-  //cambios agregados por Miguel Angel para lo del eliminacion de supactivity 04/06/2026
-  /*
   const selectedOpsRaw = (selectedIds || [])
     .map((idKey) =>
       (opsAll || []).find((op) => String(op.id) === String(idKey)),
     )
     .filter(Boolean);
-    */
-  // Cambios agregados por Miguel Angel para validar IDs de operaciones sin SubActivity 04/06/2026
-  const selectedOpsRaw = getSelectedOpsFromMap(orderId, opsAll, checkedMap);
-  //Miguel Angel cambios para lo del cambio de subactivity    03/06/2026
-  /*
+
   const uniqByOp = (ops) => {
     const map = new Map();
     for (const op of ops) {
       const act = String(op.activity || op.Activity || "").trim();
-      const sub = String(op.subactivity || op.SubActivity || "").trim();
-      const key = `${act}__${sub}`;
+      const key = `${act}`;
       if (!map.has(key)) map.set(key, op);
     }
     return Array.from(map.values());
   };
-*/
-  const uniqByOp = (ops) => {
-    const map = new Map();
 
-    for (let idx = 0; idx < ops.length; idx++) {
-      const op = ops[idx];
-      const act = String(op.activity || op.Activity || "").trim();
-      const key = String(op?.id || opKey(orderId, op, idx)).trim() || act;
-
-      if (!map.has(key)) {
-        map.set(key, op);
-      }
-    }
-
-    return Array.from(map.values());
-  };
   const selectedOps = uniqByOp(selectedOpsRaw);
   if (!selectedOps.length) return null;
 
@@ -430,16 +368,7 @@ function buildConfirmationPayloadFromSelectedOps({
     Mail: String(user?.correo || user?.email || "").trim(),
     ConfirmationOrderSet: selectedOps.map((op, idx) => {
       const actRaw = String(op.activity || op.Activity || "").trim();
-
-      //cambios agregados para elimuinar el campo del subactivity
-      /*
-      const subRaw = String(op.subactivity || op.SubActivity || "").trim();
-
       const Operation = actRaw.padStart(4, "0");
-      const SubActivity = subRaw ? subRaw.padStart(4, "0") : "";
-     */
-      const Operation = actRaw.padStart(4, "0");
-
       const w = windows[idx];
 
       const row = {
@@ -455,8 +384,6 @@ function buildConfirmationPayloadFromSelectedOps({
         ExecFinTime: sapTimePTFromMs(w.end),
         FinConf: "X",
       };
-      //se comento el if para lo del campo de SubActivity Miguel Angel 03/06/2026
-      // if (SubActivity) row.SubActivity = SubActivity;
       return row;
     }),
     ConfirmationMaterialSet,
@@ -500,8 +427,8 @@ function pickSecondAddress(results = []) {
 }
 
 function mergeOpsWithLocalState(orderId, ops, state) {
-  return (ops || []).map((o, idx) => {
-    const id = o.id || opKey(orderId, o, idx);
+  return (ops || []).map((o) => {
+    const id = o.id || opKey(orderId, o);
     const st = state?.[id] || {};
 
     const sapEstatus = (o.estatus || "pendiente").toLowerCase();
@@ -586,18 +513,14 @@ function normalizeOpsFromBackend(ops = []) {
   if (!Array.isArray(ops)) return [];
   return ops.map((op) => {
     const Activity = op.Activity || op.activity || op.Vornr || "";
-    //se esta eliminando lo del campo de SubActivity Miguel Angel 03/06/2026
-    // const SubActivity = op.SubActivity || op.subactivity || op.Uvorn || "";
     const Description = op.Description || op.description || op.Ltxa1 || "";
     const StandardTextKey = op.StandardTextKey || op.standardTextKey || "";
 
     return {
       ...op,
       activity: String(Activity || ""),
-      //  subactivity: String(SubActivity || ""),
       description: String(Description || ""),
       Activity: String(Activity || ""),
-      //  SubActivity: String(SubActivity || ""),
       Description: String(Description || ""),
       StandardTextKey: String(StandardTextKey || ""),
       standardTextKey: String(StandardTextKey || ""),
@@ -1443,16 +1366,11 @@ export default function DetalleOrden() {
       const orderIdReal = String(
         baseOrden?.Orderid || baseOrden?.OrderId || orderIdParam,
       ).trim();
-      // cambios Por lo de la eliminacion del campo SubActivity  04/06/2026
-      /*
       const opsWithId = ops.map((o) => ({
         ...o,
-        id: o.id || opKey(orderIdReal, o, idx),
-*/
-      const opsWithId = ops.map((o, idx) => ({
-        ...o,
-        id: o.id || opKey(orderIdReal, o, idx),
+        id: o.id || opKey(orderIdReal, o),
       }));
+
       const localState = await loadOpState(orderIdReal);
       const opsMerged = mergeOpsWithLocalState(
         orderIdReal,
@@ -2056,13 +1974,13 @@ export default function DetalleOrden() {
         orderId,
         opsAll,
         selectedIds,
-        checkedMap,
         startMs: orderStartedAtMs,
         finishMs,
         consumiblesRows: consumibles,
         plantFallback,
-        user: user,
+        user: user, // 👈 CAMBIO: Pasamos el objeto 'user' completo
       });
+
       if (!confirmationPayload0400) {
         Alert.alert(
           "Error",
@@ -2374,6 +2292,52 @@ export default function DetalleOrden() {
       setSavingPending0400(false);
     }
   };
+
+  function hacerPreviewConColumnasManuales(html = "") {
+    return String(html || "")
+      .replaceAll(
+        'class="ubicGrid"',
+        'class="ubicGrid previewManualGrid"'
+      )
+      .replace(
+        "</head>",
+        `
+        <style>
+          @media screen {
+            html, body {
+              width: 816px !important;
+              min-width: 816px !important;
+            }
+
+            .pagina {
+              width: 796px !important;
+              min-width: 796px !important;
+            }
+
+            .previewManualGrid {
+              display: grid !important;
+              grid-template-columns: 1fr 1fr !important;
+              column-gap: 10px !important;
+            }
+
+            .previewManualGrid .opItem {
+              width: 100% !important;
+              display: table !important;
+            }
+
+            .previewManualGrid .opItem:nth-child(odd) {
+              grid-column: 1;
+            }
+
+            .previewManualGrid .opItem:nth-child(even) {
+              grid-column: 2;
+            }
+          }
+        </style>
+        </head>`
+      );
+  }
+
   const generarVistaPreviaPdfAntesFirma = async () => {
     try {
       const orderId = String(orden?.Orderid || id || "").trim();
@@ -2432,13 +2396,21 @@ export default function DetalleOrden() {
         elapsedMs: draftElapsedMs,
       });
 
-      setMantHtmlPreview(String(html || ""));
+      const htmlPreview = hacerPreviewConColumnasManuales(html);
+      setMantHtmlPreview(htmlPreview);
 
-      const { uri } = await Print.printToFileAsync({
+      const result = await Print.printToFileAsync({
         html: String(html || ""),
+        base64: true,
       });
 
-      setMantPdfUri(uri);
+      const pdfBase64ConPaginas = await addPageNumbersToPdfBase64(result.base64);
+
+      await FileSystem.writeAsStringAsync(result.uri, pdfBase64ConPaginas, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+
+      setMantPdfUri(result.uri);
     } catch (error) {
       console.log("[PDF PREVIEW] Error:", error);
       setShowMantPreview(false);
@@ -2577,31 +2549,17 @@ export default function DetalleOrden() {
 
       const totalMs = elapsedNow;
       const totalMin = msToMinutesRounded(totalMs);
-      //cambios agregados port Miguel Angel no estaba seleccionando las actividades 04/06/2026
-      /*
+
       const opsAll = Array.isArray(orden?.operaciones) ? orden.operaciones : [];
       const selectedOpsRaw = selectedIds
         .map((idKey) => opsAll.find((op) => String(op.id) === String(idKey)))
         .filter(Boolean);
-        */
-      const opsAll = Array.isArray(orden?.operaciones) ? orden.operaciones : [];
-
-      // Cambios agregados por Miguel Angel para lo de la eliminación de SubActivity 04/06/2026
-      // Cambios agregados por Miguel Angel para validar IDs de operaciones sin SubActivity 04/06/2026
-      const selectedOpsRaw = getSelectedOpsFromMap(orderId, opsAll, checkedMap);
 
       const uniqByOp = (ops) => {
         const map = new Map();
         for (const op of ops) {
           const act = String(op.activity || op.Activity || "").trim();
-          //cambios agregados para quitar lo del campo de subactivity Miguel Angel 03/06/2026
-
-          /*
-          const sub = String(op.subactivity || op.SubActivity || "").trim();
-          const key = `${act}__${sub}`;
-
-          */
-          const key = act;
+          const key = `${act}`;
           if (!map.has(key)) map.set(key, op);
         }
         return Array.from(map.values());
@@ -2640,12 +2598,7 @@ export default function DetalleOrden() {
         Mail: String(userEmail || "").trim(), // 👈 AQUI
         ConfirmationOrderSet: selectedOps.map((op, idx) => {
           const actRaw = String(op.activity || op.Activity || "").trim();
-
-          // Cambios agregados por Miguel Angel para lo de la eliminación de SubActivity 04/06/2026
-          // const subRaw = String(op.subactivity || op.SubActivity || "").trim();
-
           const Operation = actRaw.padStart(4, "0");
-          // const SubActivity = subRaw ? subRaw.padStart(4, "0") : "";
           const w = windows[idx];
 
           const row = {
@@ -2661,8 +2614,6 @@ export default function DetalleOrden() {
             ExecFinTime: sapTimePTFromMs(w.end),
             FinConf: "X",
           };
-          //cambios de Miguel Angel error en lo del campo de SubActivity
-          //if (SubActivity) row.SubActivity = SubActivity;
           return row;
         }),
         ConfirmationMaterialSet,
@@ -2697,21 +2648,27 @@ export default function DetalleOrden() {
         elapsedMs: elapsedNow,
       });
 
-      setMantHtmlPreview(String(html || ""));
+      const htmlPreview = hacerPreviewConColumnasManuales(html);
+      setMantHtmlPreview(htmlPreview);
 
       let pdfBase64 = "";
       let pdfUri = null;
 
       try {
-        const { uri } = await Print.printToFileAsync({
-          html: String(html || ""),
-        });
-        pdfUri = uri;
-        setMantPdfUri(uri);
+        const result = await Print.printToFileAsync({
+        html: String(html || ""),
+        base64: true,
+      });
 
-        pdfBase64 = await FileSystem.readAsStringAsync(uri, {
-          encoding: FileSystem.EncodingType.Base64,
-        });
+      const pdfBase64ConPaginas = await addPageNumbersToPdfBase64(result.base64);
+
+      await FileSystem.writeAsStringAsync(result.uri, pdfBase64ConPaginas, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+
+      pdfUri = result.uri;
+      pdfBase64 = pdfBase64ConPaginas;
+      setMantPdfUri(result.uri);
       } catch (e) {
         console.warn("No se pudo generar PDF (base64):", e?.message || e);
         setMantPdfUri(null);
@@ -3369,7 +3326,7 @@ export default function DetalleOrden() {
           <View style={[styles.modalCard, { maxWidth: 720, height: "90%" }]}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>
-                Vista previa · Reporte de mantenimiento
+                Reporte de mantenimiento (vista previa)
               </Text>
               <TouchableOpacity
                 onPress={() => {

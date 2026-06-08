@@ -57,7 +57,7 @@
       "AZURE_API_SCOPE": "api://3478f3f9-66a8-46f1-adf8-078641a31024/access_as_user/AccessMitsuApp",
       "AZURE_GRAPH_SCOPE": "User.Read",
       "API_BASE_URL_DEV": "http://192.168.3.17:5000",
-      "API_BASE_URL_PROD": "https://my-node-api-qas-01.cfapps.us10-001.hana.ondemand.com",
+      "API_BASE_URL_PROD": "https://my-node-api-pro-01.cfapps.us10-001.hana.ondemand.com",
       "MAPTILER_KEY": "xXsfDizxhemYIlweqX7X",
       "router": {},
       "eas": {

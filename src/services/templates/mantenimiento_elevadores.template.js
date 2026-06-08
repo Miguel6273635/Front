@@ -8,7 +8,7 @@ export const HTML_ELEVADORES = `<!DOCTYPE html>
 
     @page {
       size: letter;
-      margin: 12mm 10mm 14mm 10mm;
+      margin: 12mm 10mm 16mm 10mm;
     }
 
     html, body {
@@ -23,20 +23,21 @@ export const HTML_ELEVADORES = `<!DOCTYPE html>
     }
 
     body {
-      counter-reset: page;
       background: #fff;
     }
 
     .pagina {
       width: 100%;
+      padding-bottom: 8mm;
     }
 
-    /* ===== Header compacto ===== */
     .header {
       width: 100%;
       display: table;
       table-layout: fixed;
       margin-bottom: 4px;
+      page-break-inside: avoid;
+      break-inside: avoid;
     }
 
     .headerLogo,
@@ -103,15 +104,18 @@ export const HTML_ELEVADORES = `<!DOCTYPE html>
       margin-bottom: 6px;
       text-align: center;
       background: #F7F7F7;
+      page-break-inside: avoid;
+      break-inside: avoid;
     }
 
-    /* ===== Layout general compacto ===== */
     .table2,
     .table3 {
       width: 100%;
       border-collapse: separate;
       border-spacing: 4px 4px;
       margin: 0 -4px;
+      page-break-inside: avoid;
+      break-inside: avoid;
     }
 
     .table2 td {
@@ -131,6 +135,8 @@ export const HTML_ELEVADORES = `<!DOCTYPE html>
       min-height: 34px;
       width: 100%;
       background: #fff;
+      page-break-inside: avoid;
+      break-inside: avoid;
     }
 
     .field.tight {
@@ -150,6 +156,7 @@ export const HTML_ELEVADORES = `<!DOCTYPE html>
       font-weight: 700;
       color: #111;
       word-break: break-word;
+      overflow-wrap: break-word;
     }
 
     .muted {
@@ -163,6 +170,8 @@ export const HTML_ELEVADORES = `<!DOCTYPE html>
       margin: 7px 0 4px 0;
       text-transform: uppercase;
       letter-spacing: 0.2px;
+      page-break-after: avoid;
+      break-after: avoid;
     }
 
     .box {
@@ -170,11 +179,18 @@ export const HTML_ELEVADORES = `<!DOCTYPE html>
       border-radius: 5px;
       padding: 6px;
       background: #fff;
+      page-break-inside: auto;
+      break-inside: auto;
     }
 
-    /* ===== Operaciones ===== */
     .opsWrap {
       display: block;
+    }
+
+    .opsEmpty {
+      color: #63718B;
+      font-weight: 800;
+      font-size: 9px;
     }
 
     .ubicCard {
@@ -197,26 +213,21 @@ export const HTML_ELEVADORES = `<!DOCTYPE html>
       margin-bottom: 4px;
       text-transform: uppercase;
       color: #111;
+      page-break-after: avoid;
+      break-after: avoid;
     }
 
     .ubicGrid {
-      display: table;
+      display: block;
       width: 100%;
-      table-layout: fixed;
+      column-count: 2;
+      column-gap: 10px;
+      column-fill: auto;
     }
 
     .opsCol {
-      display: table-cell;
-      vertical-align: top;
-      width: 50%;
-    }
-
-    .opsCol:first-child {
-      padding-right: 6px;
-    }
-
-    .opsCol:last-child {
-      padding-left: 6px;
+      display: block;
+      width: 100%;
     }
 
     .opItem {
@@ -226,6 +237,7 @@ export const HTML_ELEVADORES = `<!DOCTYPE html>
       margin-bottom: 4px;
       page-break-inside: avoid;
       break-inside: avoid;
+      -webkit-column-break-inside: avoid;
     }
 
     .opItem:last-child {
@@ -266,6 +278,7 @@ export const HTML_ELEVADORES = `<!DOCTYPE html>
       margin-top: 1px;
       line-height: 1.15;
       word-break: break-word;
+      overflow-wrap: break-word;
     }
 
     .opDescEmpty {
@@ -279,20 +292,21 @@ export const HTML_ELEVADORES = `<!DOCTYPE html>
       margin-top: 1px;
       line-height: 1.1;
       word-break: break-word;
+      overflow-wrap: break-word;
     }
 
-    /* ===== Comentarios ===== */
     .commentBlock {
       white-space: pre-wrap;
       word-break: break-word;
+      overflow-wrap: break-word;
       min-height: 18px;
+      line-height: 1.3;
     }
 
     .commentSpacer {
       height: 5px;
     }
 
-    /* ===== Consumibles ===== */
     .consumiblesBox {
       overflow: visible;
       page-break-inside: auto;
@@ -312,6 +326,7 @@ export const HTML_ELEVADORES = `<!DOCTYPE html>
       padding: 4px 4px;
       vertical-align: top;
       word-break: break-word;
+      overflow-wrap: break-word;
     }
 
     .consumiblesBox th {
@@ -320,7 +335,19 @@ export const HTML_ELEVADORES = `<!DOCTYPE html>
       font-weight: 900;
     }
 
-    /* ===== Firma ===== */
+    thead {
+      display: table-header-group;
+    }
+
+    tfoot {
+      display: table-footer-group;
+    }
+
+    tr {
+      page-break-inside: avoid;
+      break-inside: avoid;
+    }
+
     .firmaWrap {
       width: 100%;
       display: table;
@@ -350,6 +377,8 @@ export const HTML_ELEVADORES = `<!DOCTYPE html>
       border-radius: 5px;
       padding: 6px;
       min-height: 72px;
+      page-break-inside: avoid;
+      break-inside: avoid;
     }
 
     .firmaLabel {
@@ -379,6 +408,7 @@ export const HTML_ELEVADORES = `<!DOCTYPE html>
       font-size: 8px;
       margin-bottom: 3px;
       word-break: break-word;
+      overflow-wrap: break-word;
       line-height: 1.15;
     }
 
@@ -386,46 +416,13 @@ export const HTML_ELEVADORES = `<!DOCTYPE html>
       font-weight: 900;
     }
 
-    /* ===== Footer ===== */
-    .footerFixed {
-      position: fixed;
-      left: 0;
-      right: 0;
-      bottom: 0;
-      text-align: center;
-      font-size: 7px;
-      color: #666;
-      border-top: 1px solid #DDE6F2;
-      padding-top: 3px;
-    }
-
-    .pageNumber:before {
-      content: counter(page);
-    }
-
-    .pageCount:before {
-      content: counter(pages);
-    }
-
     .footerNote {
       margin-top: 5px;
       font-size: 7px;
       color: #777;
       text-align: center;
-    }
-
-    /* ===== Reglas para evitar páginas vacías ===== */
-    .field {
       page-break-inside: avoid;
       break-inside: avoid;
-    }
-
-    .box,
-    .consumiblesBox,
-    .firmaWrap,
-    .ubicGrid {
-      page-break-inside: auto;
-      break-inside: auto;
     }
   </style>
 </head>
@@ -545,11 +542,6 @@ export const HTML_ELEVADORES = `<!DOCTYPE html>
       </div>
     </div>
 
-    <div class="footerNote">Documento generado desde MitsuApp</div>
-  </div>
-
-  <div class="footerFixed">
-    Documento generado desde MitsuApp · Página <span class="pageNumber"></span> de <span class="pageCount"></span>
   </div>
 </body>
 </html>`;
