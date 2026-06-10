@@ -488,6 +488,23 @@ function logSapPayload(label, payload, { stripBase64 = false } = {}) {
     console.log("[LOG SAP PAYLOAD ERROR]", e?.message || e);
   }
 }
+function nowMs() {
+  return typeof performance !== "undefined" && performance.now
+    ? performance.now()
+    : Date.now();
+}
+
+function logDuration(label, startMs, extra = {}) {
+  const ms = nowMs() - startMs;
+
+  console.log(`[CRONOMETRO] ${label}`, {
+    ms: Number(ms.toFixed(2)),
+    segundos: Number((ms / 1000).toFixed(3)),
+    ...extra,
+  });
+
+  return ms;
+}
 
 function isValidEmail(email) {
   const s = String(email || "")
@@ -958,42 +975,47 @@ export default function PendienteFirmaIndex() {
     Alert.alert("Firma vacía", "El cliente no firmó. Intenta de nuevo.");
   };
   //Miguel Angel agregado para lo de agrupador de los pdf en uno solo const sendSelectedOrders = async () => {}
+  // PARALELIZACIÓN CONTROLADA POR LOTES PARA EVITAR CONGELAMIENTO EN +4 ÓRDENES
   const sendSelectedOrders = async () => {
-    if (!firmaDataUrl) {
-      Alert.alert("Falta firma", "Primero captura la firma del cliente.");
-      return;
-    }
-
     const email = String(clienteEmail || "").trim();
     const nombre = String(clienteNombre || "").trim();
     const cargo = String(clienteCargo || "").trim();
     const comentario = String(comentarioCliente || "").trim();
 
-    if (!email) {
-      Alert.alert("Falta correo", "Primero captura el correo del cliente.");
-      return;
-    }
+    let localErrors = { email: "", nombre: "", cargo: "", comentario: "" };
+    let hasFaults = false;
 
-    if (!isValidEmail(email)) {
+    if (!email) {
+      localErrors.email = "El correo es obligatorio.";
+      hasFaults = true;
+    } else if (!isValidEmail(email)) {
+      localErrors.email = "Escribe un correo válido.";
+      hasFaults = true;
+    }
+    if (!nombre) {
+      localErrors.nombre = "El nombre es obligatorio.";
+      hasFaults = true;
+    }
+    if (!cargo) {
+      localErrors.cargo = "El cargo es obligatorio.";
+      hasFaults = true;
+    }
+    if (!comentario) {
+      localErrors.comentario = "El comentario es obligatorio.";
+      hasFaults = true;
+    }
+    if (!firmaDataUrl) {
       Alert.alert(
-        "Correo inválido",
-        "Escribe un correo válido (ej: nombre@dominio.com).",
+        "Falta firma",
+        "Primero captura la firma del cliente abriendo el botón de firma.",
       );
       return;
     }
 
-    if (!nombre) {
-      Alert.alert("Falta nombre", "Escribe el nombre del cliente.");
-      return;
-    }
-
-    if (!cargo) {
-      Alert.alert("Falta cargo", "Escribe el cargo del cliente.");
-      return;
-    }
-
-    if (!comentario) {
-      Alert.alert("Falta comentario", "Escribe el comentario del cliente.");
+    if (hasFaults) {
+      setErrors(localErrors);
+      setModalStep(1);
+      setShowFirmaModal(true);
       return;
     }
 
@@ -1014,7 +1036,7 @@ export default function PendienteFirmaIndex() {
       "Confirmar envío",
       online
         ? `Se enviará un paquete con ${selectedIds.length} orden(es) a SAP:\n- PDFs de mantenimiento\n- Cambio de estatus a FINALIZADA\n\n¿Deseas continuar?`
-        : `No hay internet.\n\nSe guardará un paquete con ${selectedIds.length} orden(es) localmente con:\n- PDFs de mantenimiento\n- Cambio de estatus a FINALIZADA\n\nY se enviará automáticamente cuando vuelva la red.\n\n¿Deseas continuar?`,
+        : `No hay internet.\n\nSe guardará un paquete con ${selectedIds.length} orden(es) localmente...`,
       [
         { text: "Cancelar", style: "cancel" },
         {
@@ -1026,234 +1048,188 @@ export default function PendienteFirmaIndex() {
             setSendProgress({
               done: 0,
               total: selectedIds.length,
-              current: "",
+              current: "Iniciando empaquetado...",
             });
 
             const results = [];
             const toWorkOrders = [];
 
+            const tiempoInicioCronometro = performance.now();
+
             try {
-              // Se recorren todas las órdenes seleccionadas para preparar
-              // cada una antes de agregarla al paquete Bulk.
-              for (let i = 0; i < selectedIds.length; i++) {
-                const orderId = String(selectedIds[i]).trim();
+              console.log("==============================================");
+              console.log(
+                `[BULK] Preparando ${selectedIds.length} órdenes en bloques de memoria controlada.`,
+              );
 
-                setSendProgress({
-                  done: i,
-                  total: selectedIds.length,
-                  current: orderId,
-                });
+              // CONFIGURACIÓN DE CONCURRENCIA: Procesamos de 2 en 2 para mantener la UI fluida
+              const TAMANO_BLOQUE = 2;
 
-                try {
-                  console.log("==============================================");
-                  console.log(
-                    "[BULK][ORDEN] Iniciando preparación de orden:",
-                    orderId,
-                  );
-                  console.log(
-                    "[BULK][ORDEN] Posición:",
-                    `${i + 1}/${selectedIds.length}`,
-                  );
+              for (let i = 0; i < selectedIds.length; i += TAMANO_BLOQUE) {
+                const bloqueIds = selectedIds.slice(i, i + TAMANO_BLOQUE);
 
-                  const pending = await loadPendingSign(orderId);
-                  const checkedMap = pending?.checkedMap || null;
+                // Mapeamos el sub-bloque actual a promesas concurrentes
+                const promesasBloque = bloqueIds.map(
+                  async (idSeleccionado, indexDentroDelBloque) => {
+                    const posicionReal = i + indexDentroDelBloque;
+                    const orderId = String(idSeleccionado).trim();
 
-                  console.log("[BULK][PENDING SIGN]", {
-                    orderId,
-                    existePending: !!pending,
-                    checkedMapKeys: checkedMap
-                      ? Object.keys(checkedMap).length
-                      : 0,
-                    consumibles: Array.isArray(pending?.consumibles)
-                      ? pending.consumibles.length
-                      : 0,
-                    notaTecnico: String(pending?.notaTecnico || "").trim(),
-                    orderStartedAtMs: pending?.orderStartedAtMs,
-                    orderFinishedAtMs: pending?.orderFinishedAtMs,
-                    orderElapsedMs: pending?.orderElapsedMs,
-                  });
+                    try {
+                      const pending = await loadPendingSign(orderId);
+                      const checkedMap = pending?.checkedMap || null;
 
-                  if (!checkedMap || !Object.keys(checkedMap).length) {
-                    throw new Error(
-                      "No hay operaciones guardadas (pendingSign) para esta orden. Entra al detalle y marca/guarda primero.",
-                    );
+                      if (!checkedMap || !Object.keys(checkedMap).length) {
+                        throw new Error(
+                          "No hay operaciones guardadas (pendingSign) para esta orden. Entra al detalle y marca/guarda primero.",
+                        );
+                      }
+
+                      const ordenFull = await fetchOrdenFullForPdf({
+                        apiClient: api,
+                        token,
+                        orderId,
+                      });
+
+                      const tipo = detectTipoMantenimiento(ordenFull);
+                      const consumibles = Array.isArray(pending?.consumibles)
+                        ? pending.consumibles
+                        : [];
+                      const notaTecnico = String(
+                        pending?.notaTecnico || "",
+                      ).trim();
+
+                      const startedMs = Number.isFinite(
+                        pending?.orderStartedAtMs,
+                      )
+                        ? pending.orderStartedAtMs
+                        : null;
+                      const finishedMs = Number.isFinite(
+                        pending?.orderFinishedAtMs,
+                      )
+                        ? pending.orderFinishedAtMs
+                        : null;
+                      const elapsedMs = Number.isFinite(pending?.orderElapsedMs)
+                        ? pending.orderElapsedMs
+                        : Number.isFinite(startedMs) &&
+                            Number.isFinite(finishedMs)
+                          ? Math.max(0, finishedMs - startedMs)
+                          : null;
+
+                      const tecnicoNombreFinal = String(
+                        user?.nombre ||
+                          user?.name ||
+                          user?.fullName ||
+                          user?.displayName ||
+                          user?.username ||
+                          "",
+                      ).trim();
+
+                      const coberturaTipoFinal = String(
+                        ordenFull?.cobertura_tipo ||
+                          ordenFull?.coberturaTipo ||
+                          "",
+                      ).trim();
+
+                      const html = await buildMantenimientoHtml({
+                        tipo,
+                        orden: ordenFull,
+                        operaciones: Array.isArray(ordenFull?.operaciones)
+                          ? ordenFull.operaciones
+                          : [],
+                        checkedMap,
+                        signatureData: firmaDataUrl,
+                        clienteEmail: email,
+                        clienteNombre: nombre,
+                        clienteCargo: cargo,
+                        avisoCliente: comentario,
+                        notaTecnico,
+                        tecnicoNombre: tecnicoNombreFinal,
+                        coberturaTipo: coberturaTipoFinal,
+                        consumibles,
+                        startMs: startedMs,
+                        finishMs: finishedMs,
+                        elapsedMs,
+                      });
+
+                      const { uri } = await Print.printToFileAsync({ html });
+                      const pdfBase64 = await FileSystem.readAsStringAsync(
+                        uri,
+                        {
+                          encoding: FileSystem.EncodingType.Base64,
+                        },
+                      );
+
+                      const fileName =
+                        tipo === "escalera"
+                          ? `mantenimiento_escaleras_${posicionReal + 1}.pdf`
+                          : `mantenimiento_elevadores_${posicionReal + 1}.pdf`;
+
+                      const workOrderItem = {
+                        OrderId: orderId,
+                        WorkOrderHeader: {
+                          Orderid: orderId,
+                          MaterialLong: email,
+                        },
+                        WorkOrderUserStatusSet: [
+                          { UserStText: "0300", Langu: "ES", Inactive: "" },
+                          { UserStText: "0400", Langu: "ES", Inactive: "X" },
+                        ],
+                        Attachments: [
+                          {
+                            DocId: orderId,
+                            FileName: fileName,
+                            MimeType: "pdf",
+                            Base64: pdfBase64,
+                          },
+                        ],
+                      };
+
+                      // MEJORA VISUAL: Forzamos la actualización progresiva del contador en la UI
+                      setSendProgress((prev) => ({
+                        ...prev,
+                        done: prev.done + 1,
+                        current: `Estructurada #${orderId}`,
+                      }));
+
+                      logSapPayload(
+                        "[BULK][JSON ORDEN INDIVIDUAL]",
+                        workOrderItem,
+                        { stripBase64: true },
+                      );
+
+                      return { orderId, ok: true, data: workOrderItem };
+                    } catch (err) {
+                      const msg =
+                        err?.response?.data?.detail ||
+                        err?.response?.data?.error ||
+                        err?.message ||
+                        "Error desconocido";
+                      setSendProgress((prev) => ({
+                        ...prev,
+                        done: prev.done + 1,
+                      }));
+                      return { orderId, ok: false, msg };
+                    }
+                  },
+                );
+
+                // Esperamos a que este sub-bloque termine de procesarse antes de pasar al siguiente
+                const resultadosBloque = await Promise.all(promesasBloque);
+
+                for (const item of resultadosBloque) {
+                  if (item.ok) {
+                    toWorkOrders.push(item.data);
+                  } else {
+                    results.push({
+                      orderId: item.orderId,
+                      ok: false,
+                      msg: item.msg,
+                    });
                   }
-
-                  const ordenFull = await fetchOrdenFullForPdf({
-                    apiClient: api,
-                    token,
-                    orderId,
-                  });
-
-                  const tipo = detectTipoMantenimiento(ordenFull);
-
-                  const consumibles = Array.isArray(pending?.consumibles)
-                    ? pending.consumibles
-                    : [];
-
-                  const notaTecnico = String(pending?.notaTecnico || "").trim();
-
-                  const startedMs = Number.isFinite(pending?.orderStartedAtMs)
-                    ? pending.orderStartedAtMs
-                    : null;
-
-                  const finishedMs = Number.isFinite(pending?.orderFinishedAtMs)
-                    ? pending.orderFinishedAtMs
-                    : null;
-
-                  const elapsedMs = Number.isFinite(pending?.orderElapsedMs)
-                    ? pending.orderElapsedMs
-                    : Number.isFinite(startedMs) && Number.isFinite(finishedMs)
-                      ? Math.max(0, finishedMs - startedMs)
-                      : null;
-
-                  const tecnicoNombreFinal = String(
-                    user?.nombre ||
-                      user?.name ||
-                      user?.fullName ||
-                      user?.displayName ||
-                      user?.username ||
-                      "",
-                  ).trim();
-
-                  const coberturaTipoFinal = String(
-                    ordenFull?.cobertura_tipo || ordenFull?.coberturaTipo || "",
-                  ).trim();
-
-                  const html = await buildMantenimientoHtml({
-                    tipo,
-                    orden: ordenFull,
-                    operaciones: Array.isArray(ordenFull?.operaciones)
-                      ? ordenFull.operaciones
-                      : [],
-                    checkedMap,
-                    signatureData: firmaDataUrl,
-
-                    clienteEmail: email,
-                    clienteNombre: nombre,
-                    clienteCargo: cargo,
-
-                    avisoCliente: comentario,
-                    notaTecnico,
-
-                    tecnicoNombre: tecnicoNombreFinal,
-
-                    coberturaTipo: coberturaTipoFinal,
-                    consumibles,
-
-                    startMs: startedMs,
-                    finishMs: finishedMs,
-                    elapsedMs,
-                  });
-                  // Aquí se genera el PDF de mantenimiento de la orden.
-                  // El HTML ya contiene la información de la orden, operaciones,
-                  // firma del cliente, comentarios y datos del técnico.
-                  const { uri } = await Print.printToFileAsync({ html });
-
-                  const pdfBase64 = await FileSystem.readAsStringAsync(uri, {
-                    encoding: FileSystem.EncodingType.Base64,
-                  });
-
-                  const fileName =
-                    tipo === "escalera"
-                      ? `mantenimiento_escaleras_${i + 1}.pdf`
-                      : `mantenimiento_elevadores_${i + 1}.pdf`;
-                  // Aquí se crea el JSON individual de la orden.
-                  // Este objeto contiene:
-                  // - OrderId: número de orden
-                  // - WorkOrderHeader: datos principales, incluyendo el correo del cliente
-                  // - WorkOrderUserStatusSet: cambio de estatus a 0300 y desactivación del 0400
-                  // - Attachments: PDF de mantenimiento en Base64
-                  const workOrderItem = {
-                    OrderId: orderId,
-                    WorkOrderHeader: {
-                      Orderid: orderId,
-                      MaterialLong: email,
-                    },
-                    WorkOrderUserStatusSet: [
-                      {
-                        UserStText: "0300",
-                        Langu: "ES",
-                        Inactive: "",
-                      },
-                      {
-                        UserStText: "0400",
-                        Langu: "ES",
-                        Inactive: "X",
-                      },
-                    ],
-                    Attachments: [
-                      {
-                        DocId: orderId,
-                        FileName: fileName,
-                        MimeType: "pdf",
-                        Base64: pdfBase64,
-                      },
-                    ],
-                  };
-
-                  console.log("[BULK][ORDEN ARMADA]", {
-                    orderId,
-                    correoCliente: email,
-                    nombreCliente: nombre,
-                    cargoCliente: cargo,
-                    comentarioCliente: comentario,
-                    tipo,
-                    fileName,
-                    pdfBase64Length: String(pdfBase64 || "").length,
-                    operacionesTotal: Array.isArray(ordenFull?.operaciones)
-                      ? ordenFull.operaciones.length
-                      : 0,
-                    operacionesSeleccionadas: checkedMap
-                      ? Object.keys(checkedMap).length
-                      : 0,
-                    consumiblesTotal: consumibles.length,
-                    estatus: workOrderItem.WorkOrderUserStatusSet,
-                  });
-
-                  logSapPayload(
-                    "[BULK][JSON ORDEN INDIVIDUAL]",
-                    workOrderItem,
-                    {
-                      stripBase64: true,
-                    },
-                  );
-                  //Miguel Angel 05/06/2026
-                  // Aquí se agrega la orden ya preparada al arreglo general
-                  // que después se enviará dentro del WorkOrderSet.
-                  toWorkOrders.push(workOrderItem);
-                } catch (err) {
-                  console.log("[BULK][ERROR DETALLE]", {
-                    orderId,
-                    message: err?.message,
-                    responseStatus: err?.response?.status,
-                    responseData: err?.response?.data,
-                  });
-
-                  const msg =
-                    err?.response?.data?.detail ||
-                    err?.response?.data?.error ||
-                    err?.message ||
-                    "Error desconocido";
-
-                  console.warn(
-                    `[BUILD BULK ${orderId}]`,
-                    err?.response?.data || err,
-                  );
-
-                  results.push({
-                    orderId,
-                    ok: false,
-                    msg,
-                  });
                 }
 
-                setSendResults([...results]);
-                setSendProgress({
-                  done: i + 1,
-                  total: selectedIds.length,
-                  current: orderId,
-                });
+                // Pequeña pausa en milisegundos para permitir que el hilo de UI de React Native respire y pinte los cambios
+                await new Promise((resolve) => setTimeout(resolve, 100));
               }
 
               if (!toWorkOrders.length) {
@@ -1263,39 +1239,32 @@ export default function PendienteFirmaIndex() {
                 );
                 return;
               }
-              //Miguel Angel 05/06/2026
-              // Aquí se crea el JSON final tipo Bulk.
-              // Este es el paquete completo que contiene todas las órdenes seleccionadas.
+
               const bulkPayload = {
                 BulkId: `PAQUETE_${Date.now()}`,
                 WorkOrderSet: toWorkOrders,
               };
-              //Miguel Angel 05/06/2026
-              // Endpoint al que se enviará el paquete Bulk con todas las órdenes.
+
+              const tiempoFinCronometro = performance.now();
+              const tiempoTranscurridoMili = (
+                tiempoFinCronometro - tiempoInicioCronometro
+              ).toFixed(2);
+              const tiempoTranscurridoSeg = (
+                parseFloat(tiempoTranscurridoMili) / 1000
+              ).toFixed(2);
+
+              Alert.alert(
+                "Cronómetro de empaquetado optimizado",
+                `La aplicación procesó todo de manera fluida:\n\n⏱️ ${tiempoTranscurridoMili} ms (${tiempoTranscurridoSeg} segundos)\n\nEstructurado exitosamente para las ${toWorkOrders.length} orden(es).`,
+              );
+
               const workOrderBulkEndpoint =
                 "/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderBulkSet";
-
-              console.log("==============================================");
-              console.log("[BULK][RESUMEN ANTES DE ENVIAR]", {
-                endpoint: workOrderBulkEndpoint,
-                bulkId: bulkPayload.BulkId,
-                totalOrdenes: bulkPayload.WorkOrderSet.length,
-                ordenes: bulkPayload.WorkOrderSet.map((x) => ({
-                  OrderId: x.OrderId,
-                  correo: x?.WorkOrderHeader?.MaterialLong,
-                  fileName: x?.Attachments?.[0]?.FileName,
-                  pdfBase64Length: String(x?.Attachments?.[0]?.Base64 || "")
-                    .length,
-                  status: x?.WorkOrderUserStatusSet,
-                })),
-              });
 
               logSapPayload(
                 "=== SAP PAYLOAD BULK COMPLETO A ENVIAR ===",
                 bulkPayload,
-                {
-                  stripBase64: true,
-                },
+                { stripBase64: true },
               );
 
               if (!online) {
@@ -1310,9 +1279,7 @@ export default function PendienteFirmaIndex() {
 
                 for (const item of toWorkOrders) {
                   const orderId = String(item?.OrderId || "").trim();
-
                   await setLocalStatusPatch(userEmail, orderId, "0300");
-
                   results.push({
                     orderId,
                     ok: true,
@@ -1320,15 +1287,6 @@ export default function PendienteFirmaIndex() {
                   });
                 }
               } else {
-                console.log("[BULK][POST SAP] Enviando paquete a SAP...", {
-                  endpoint: workOrderBulkEndpoint,
-                  bulkId: bulkPayload.BulkId,
-                  totalOrdenes: bulkPayload.WorkOrderSet.length,
-                });
-
-                console.time(`[BULK][POST SAP TIME] ${bulkPayload.BulkId}`);
-                //Miguel Angel 05/06/2026
-                // Aquí se envía finalmente el JSON completo a SAP.
                 const sapResponse = await api.post(
                   workOrderBulkEndpoint,
                   bulkPayload,
@@ -1339,17 +1297,8 @@ export default function PendienteFirmaIndex() {
                   },
                 );
 
-                console.timeEnd(`[BULK][POST SAP TIME] ${bulkPayload.BulkId}`);
-
-                console.log("[BULK][POST SAP RESPONSE]", {
-                  status: sapResponse?.status,
-                  statusText: sapResponse?.statusText,
-                  data: sapResponse?.data,
-                });
-
                 for (const item of toWorkOrders) {
                   const orderId = String(item?.OrderId || "").trim();
-
                   results.push({
                     orderId,
                     ok: true,
@@ -1368,7 +1317,6 @@ export default function PendienteFirmaIndex() {
                 setAllOrdenes((prev) =>
                   (prev || []).filter((it) => !okSet.has(String(it?.Orderid))),
                 );
-
                 setSelectedMap((prev) => {
                   const next = { ...(prev || {}) };
                   for (const id of okSet) delete next[id];
@@ -1391,6 +1339,8 @@ export default function PendienteFirmaIndex() {
                 clearSelection();
                 resetFirmaFields();
               }
+            } catch (globalErr) {
+              console.log("[BULK][ERROR PAQUETE GLOBAL]", globalErr);
             } finally {
               setSending(false);
               setSendProgress((p) => ({ ...p, current: "" }));
