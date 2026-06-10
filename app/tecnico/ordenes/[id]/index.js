@@ -552,14 +552,12 @@ function detectTipoMantenimiento(orden) {
 
 function detectCoberturaFromShortText(shortText) {
   const s = String(shortText || "").toUpperCase();
-  const idx = s.indexOf("COBERTURA");
-  if (idx < 0) return null;
 
-  const tail = s.slice(idx);
-  if (tail.includes("COBERTURABASICA")) return "BASICA";
-  if (tail.includes("COBERTURAMEDIA")) return "MEDIA";
-  if (tail.includes("COBERTURASEMI")) return "SEMI";
-  return null;
+  if (s.includes("COBERTURA BASICA")) return "BASICA";
+  if (s.includes("COBERTURA MEDIA")) return "MEDIA";
+  if (s.includes("COBERTURA SEMI")) return "SEMI";
+
+  return "SIN COBERTURA";
 }
 
 /* ====================== Estatus ====================== */
@@ -2389,7 +2387,7 @@ export default function DetalleOrden() {
         ).trim(),
         avisoCliente: String(avisoCliente || "").trim(),
         notaTecnico: String(notaTecnico || "").trim(),
-        coberturaTipo: coberturaTipo || null,
+        coberturaTipo: coberturaTipo || orden?.cobertura_tipo || "SIN COBERTURA",
         consumibles,
         startMs: orderStartedAtMs,
         finishMs: draftFinishMs,
@@ -2641,7 +2639,7 @@ export default function DetalleOrden() {
         ).trim(),
         avisoCliente: String(avisoCliente || "").trim(),
         notaTecnico: String(notaTecnico || "").trim(),
-        coberturaTipo: coberturaTipo || null,
+        coberturaTipo: coberturaTipo || orden?.cobertura_tipo || "SIN COBERTURA",
         consumibles,
         startMs: effectiveStartMs,
         finishMs,

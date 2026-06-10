@@ -187,9 +187,9 @@ export default function ConsumiblesFinalizacion({
    * Antes se mostraban categorías BASICA, pero el cache se buscaba con coverageKey="".
    */
   const coverageKey = safeUpper(coberturaTipo);
-  const effectiveCoverageKey = ["BASICA", "MEDIA", "SEMI"].includes(coverageKey)
-    ? coverageKey
-    : "BASICA";
+const effectiveCoverageKey = ["BASICA", "MEDIA", "SEMI"].includes(coverageKey)
+  ? coverageKey
+  : "Sin cobertura";
 
   const pairsForCoverage = useMemo(() => {
     if (effectiveCoverageKey === "MEDIA") return COVERAGE_PAIRS.MEDIA;
