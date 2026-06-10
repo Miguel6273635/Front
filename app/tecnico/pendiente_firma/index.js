@@ -957,7 +957,7 @@ export default function PendienteFirmaIndex() {
   const onSignatureEmpty = () => {
     Alert.alert("Firma vacía", "El cliente no firmó. Intenta de nuevo.");
   };
-
+  //Miguel Angel agregado para lo de agrupador de los pdf en uno solo const sendSelectedOrders = async () => {}
   const sendSelectedOrders = async () => {
     if (!firmaDataUrl) {
       Alert.alert("Falta firma", "Primero captura la firma del cliente.");
@@ -1033,6 +1033,8 @@ export default function PendienteFirmaIndex() {
             const toWorkOrders = [];
 
             try {
+              // Se recorren todas las órdenes seleccionadas para preparar
+              // cada una antes de agregarla al paquete Bulk.
               for (let i = 0; i < selectedIds.length; i++) {
                 const orderId = String(selectedIds[i]).trim();
 
@@ -1143,7 +1145,9 @@ export default function PendienteFirmaIndex() {
                     finishMs: finishedMs,
                     elapsedMs,
                   });
-
+                  // Aquí se genera el PDF de mantenimiento de la orden.
+                  // El HTML ya contiene la información de la orden, operaciones,
+                  // firma del cliente, comentarios y datos del técnico.
                   const { uri } = await Print.printToFileAsync({ html });
 
                   const pdfBase64 = await FileSystem.readAsStringAsync(uri, {
@@ -1154,7 +1158,12 @@ export default function PendienteFirmaIndex() {
                     tipo === "escalera"
                       ? `mantenimiento_escaleras_${i + 1}.pdf`
                       : `mantenimiento_elevadores_${i + 1}.pdf`;
-
+                  // Aquí se crea el JSON individual de la orden.
+                  // Este objeto contiene:
+                  // - OrderId: número de orden
+                  // - WorkOrderHeader: datos principales, incluyendo el correo del cliente
+                  // - WorkOrderUserStatusSet: cambio de estatus a 0300 y desactivación del 0400
+                  // - Attachments: PDF de mantenimiento en Base64
                   const workOrderItem = {
                     OrderId: orderId,
                     WorkOrderHeader: {
@@ -1209,7 +1218,9 @@ export default function PendienteFirmaIndex() {
                       stripBase64: true,
                     },
                   );
-
+                  //Miguel Angel 05/06/2026
+                  // Aquí se agrega la orden ya preparada al arreglo general
+                  // que después se enviará dentro del WorkOrderSet.
                   toWorkOrders.push(workOrderItem);
                 } catch (err) {
                   console.log("[BULK][ERROR DETALLE]", {
@@ -1252,12 +1263,15 @@ export default function PendienteFirmaIndex() {
                 );
                 return;
               }
-
+              //Miguel Angel 05/06/2026
+              // Aquí se crea el JSON final tipo Bulk.
+              // Este es el paquete completo que contiene todas las órdenes seleccionadas.
               const bulkPayload = {
                 BulkId: `PAQUETE_${Date.now()}`,
                 WorkOrderSet: toWorkOrders,
               };
-
+              //Miguel Angel 05/06/2026
+              // Endpoint al que se enviará el paquete Bulk con todas las órdenes.
               const workOrderBulkEndpoint =
                 "/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderBulkSet";
 
@@ -1313,7 +1327,8 @@ export default function PendienteFirmaIndex() {
                 });
 
                 console.time(`[BULK][POST SAP TIME] ${bulkPayload.BulkId}`);
-
+                //Miguel Angel 05/06/2026
+                // Aquí se envía finalmente el JSON completo a SAP.
                 const sapResponse = await api.post(
                   workOrderBulkEndpoint,
                   bulkPayload,

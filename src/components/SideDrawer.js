@@ -35,8 +35,8 @@ export default function SideDrawer() {
     user?.rol_id === 1
       ? "/admin"
       : user?.rol_id === 2
-      ? "/supervisor"
-      : "/tecnico";
+        ? "/supervisor"
+        : "/tecnico";
 
   // 👉 Empieza oculto a la derecha
   const slideX = useRef(new Animated.Value(320)).current;
@@ -91,6 +91,13 @@ export default function SideDrawer() {
         icon: "information-circle-outline",
         onPress: () => router.push("/info"),
       },
+      //cambios agregados Miguel Angel para el nuevo boton de informacion del telefono.
+      {
+        key: "diagnostico",
+        label: "Diagnóstico",
+        icon: "phone-portrait-outline",
+        onPress: () => router.push("/diagnostico"),
+      },
       {
         key: "logout",
         label: "Cerrar sesión",
@@ -99,12 +106,10 @@ export default function SideDrawer() {
         onPress: handleLogout,
       },
     ],
-    [homeRoute, router]
+    [homeRoute, router],
   );
 
-  const avatarSource = user?.photo
-    ? { uri: user.photo }
-    : null;
+  const avatarSource = user?.photo ? { uri: user.photo } : null;
 
   return (
     <Modal
@@ -114,10 +119,7 @@ export default function SideDrawer() {
       onRequestClose={closeDrawer}
     >
       <View style={styles.root}>
-        <Pressable
-          style={styles.overlay}
-          onPress={closeDrawer}
-        />
+        <Pressable style={styles.overlay} onPress={closeDrawer} />
 
         <Animated.View
           style={[
@@ -149,24 +151,16 @@ export default function SideDrawer() {
             </View>
 
             <View style={{ flex: 1 }}>
-              <Text
-                style={styles.name}
-                numberOfLines={1}
-              >
-                {user?.nombre ||
-                  user?.name ||
-                  "Usuario"}
+              <Text style={styles.name} numberOfLines={1}>
+                {user?.nombre || user?.name || "Usuario"}
               </Text>
 
-              <Text
-                style={styles.role}
-                numberOfLines={1}
-              >
+              <Text style={styles.role} numberOfLines={1}>
                 {user?.rol_id === 1
                   ? "Administrador"
                   : user?.rol_id === 2
-                  ? "Supervisor"
-                  : "Técnico"}
+                    ? "Supervisor"
+                    : "Técnico"}
               </Text>
             </View>
           </View>
@@ -176,30 +170,19 @@ export default function SideDrawer() {
           {items.map((it) => (
             <TouchableOpacity
               key={it.key}
-              style={[
-                styles.item,
-                it.danger && styles.itemDanger,
-              ]}
+              style={[styles.item, it.danger && styles.itemDanger]}
               activeOpacity={0.75}
               onPress={() => handleGo(it.onPress)}
             >
               <Ionicons
                 name={it.icon}
                 size={22}
-                color={
-                  it.danger
-                    ? FIORI.danger
-                    : FIORI.ink
-                }
+                color={it.danger ? FIORI.danger : FIORI.ink}
                 style={{ width: 28 }}
               />
 
               <Text
-                style={[
-                  styles.itemText,
-                  it.danger &&
-                    styles.itemTextDanger,
-                ]}
+                style={[styles.itemText, it.danger && styles.itemTextDanger]}
               >
                 {it.label}
               </Text>

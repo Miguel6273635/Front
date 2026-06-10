@@ -9,7 +9,7 @@ const extra = Constants.expoConfig?.extra || {};
 // UNA SOLA BASE (BTP QAS)
 export const API_URL =
   extra.API_BASE_URL_PROD ||
-  "https://my-node-api-pro-01.cfapps.us10-001.hana.ondemand.com";
+  "https://my-node-api-qas-01.cfapps.us10-001.hana.ondemand.com";
 
 const api = axios.create({
   baseURL: API_URL,
@@ -30,7 +30,7 @@ api.interceptors.request.use(
 
     return config;
   },
-  (error) => Promise.reject(error)
+  (error) => Promise.reject(error),
 );
 
 // ✅ Response error log + manejo seguro de 401
@@ -93,7 +93,7 @@ api.interceptors.response.use(
     }
 
     return Promise.reject(err);
-  }
+  },
 );
 
 export default api;

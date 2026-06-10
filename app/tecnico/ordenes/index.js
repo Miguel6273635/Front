@@ -961,39 +961,94 @@ export default function ListaOrdenesTecnico() {
         headers: { "Content-Type": "application/json" },
       },
     );
-  };
-
+  }; /**
+   * Cambio realizado por: Miguel Ángel Hernández Álvarez
+   * Fecha de modificación: 08/06/2026
+   *
+   * Motivo del cambio:
+   * Se modificó la estructura del JSON para enviar el cambio de estatus
+   * de las órdenes a SAP usando el nuevo servicio WorkOrderBulkSet.
+   *
+   * Antes se enviaba la información de una orden de forma individual.
+   * Ahora se manda dentro de una estructura tipo bulk:
+   *
+   * {
+   *   BulkId: "PAQUETE_001",
+   *   WorkOrderSet: [
+   *     {
+   *       OrderId: "...",
+   *       WorkOrderHeader: { ... },
+   *       WorkOrderUserStatusSet: [ ... ]
+   *     }
+   *   ]
+   * }
+   *
+   * Esto permite que el backend/SAP reciba la información con la nueva
+   * estructura requerida para procesar una o varias órdenes en un solo paquete.
+   */
   const postChangeStatusToSap = async (orderId, statusCode = "0100") => {
+    // Limpia el número de orden para evitar espacios vacíos o valores nulos.
+    const cleanOrderId = String(orderId || "").trim();
+
+    // Normaliza el estatus a formato SAP de 4 dígitos.
+    // Ejemplo: "100" -> "0100"
     const finalStatus = normalizeCode(statusCode) || "0100";
 
+    // Nueva estructura del JSON requerida por SAP para WorkOrderBulkSet.
     const payload = {
-      OrderId: orderId,
-      WorkOrderHeader: { Orderid: orderId },
-      WorkOrderUserStatusSet: [
+      // Identificador del paquete que agrupa las órdenes enviadas.
+      BulkId: "PAQUETE_001",
+
+      // Lista de órdenes que se enviarán a SAP.
+      WorkOrderSet: [
         {
-          UserStText: finalStatus,
-          Langu: "ES",
-          Inactive: "",
+          // Número de orden principal.
+          OrderId: cleanOrderId,
+
+          // Cabecera de la orden.
+          WorkOrderHeader: {
+            Orderid: cleanOrderId,
+          },
+
+          // Lista de estatus que se aplicarán a la orden.
+          WorkOrderUserStatusSet: [
+            {
+              // Estatus final que se mandará a SAP.
+              UserStText: finalStatus,
+
+              // Idioma requerido por SAP.
+              Langu: "ES",
+
+              // Campo para indicar si el estatus queda inactivo.
+              // Vacío significa que el estatus queda activo.
+              Inactive: "",
+            },
+          ],
+
+          // Estructura de retorno para SAP.
+          Return: [],
         },
       ],
-      Return: [],
     };
 
-    console.log("[CHECKIN][STATUS][SAP]", {
-      orderId,
+    // Log para validar en consola qué orden, estatus y JSON se está enviando.
+    console.log("[CHECKIN][STATUS][BULK][SAP]", {
+      orderId: cleanOrderId,
       finalStatus,
       payload,
     });
 
+    // Envío del JSON al nuevo endpoint BulkSet.
     await api.post(
-      `/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet?sap-client=400&sap-language=ES`,
+      `/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderBulkSet?sap-client=400&sap-language=ES`,
       payload,
       {
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+        },
       },
     );
   };
-
   const applyLocalOfflineStatus = async (orderId, statusCode = "0100") => {
     const finalStatus = normalizeCode(statusCode) || "0100";
 
