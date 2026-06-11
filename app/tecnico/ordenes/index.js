@@ -20,9 +20,9 @@ import {
   Alert,
   Pressable,
   Image,
-  RefreshControl, // <--- Importado para Pull-to-Refresh
+  RefreshControl,
 } from "react-native";
-import { Ionicons } from "@expo/vector-icons"; // <--- Importado para iconos modernos
+import { Ionicons } from "@expo/vector-icons";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import { router } from "expo-router";
 import * as ImagePicker from "expo-image-picker";
@@ -49,9 +49,10 @@ import { prefetchOrdenesTecnicoDetalles } from "../../../src/offline/prefetchOrd
 import { useAuth } from "../../../src/context/AuthContext";
 import Header from "../../../src/components/Header";
 import api from "../../../src/services/api";
+import * as FileSystem from "expo-file-system/legacy";
 
 // ============================
-// LÓGICA DE NEGOCIO INTACTA (No se modificó nada de la lógica offline ni utilerías)
+// CONSTANTES Y CONFIGURACIÓN
 // ============================
 const ACTIVE_EQUIP_KEY = (userEmail) =>
   `activeEquipment:${String(userEmail || "anon")
@@ -62,14 +63,14 @@ const TBMKY_STATUS_KEY = (orderId) =>
 
 // ===== Fiori Palette Modernizada =====
 const FIORI = {
-  pageBg: "#F4F6F8",     // Fondo general más suave
+  pageBg: "#F4F6F8",
   cardBg: "#FFFFFF",
-  cardSubtle: "#F1F5F9", // Gris moderno para chips
-  border: "#E2E8F0",     // Bordes súper sutiles
+  cardSubtle: "#F1F5F9",
+  border: "#E2E8F0",
   borderMuted: "#CBD5E1",
-  ink: "#1E293B",        // Texto oscuro corporativo
+  ink: "#1E293B",
   textMuted: "#64748B",
-  accent: "#0A58CA",     // Azul vibrante
+  accent: "#0A58CA",
   accentSoft: "#EFF6FF",
   neutralBtn: "#F8FAFC",
   danger: "#EF4444",
@@ -169,12 +170,12 @@ function extractCodes(raw) {
 }
 
 const STATUS_META = {
-  "0100": { label: "Pendiente", type: "pendiente", color: "#F59E0B", bgColor: "#FEF3C7", lockActions: false, allowCheckin: false, isNoMantto: false }, // Ámbar moderno
-  "0200": { label: "En Proceso", type: "proceso", color: "#3B82F6", bgColor: "#DBEAFE", lockActions: false, allowCheckin: false, isNoMantto: false }, // Azul proceso
-  "0300": { label: "Finalizada", type: "final", color: "#10B981", bgColor: "#D1FAE5", lockActions: true, allowCheckin: false, isNoMantto: false }, // Verde éxito
+  "0100": { label: "Pendiente", type: "pendiente", color: "#F59E0B", bgColor: "#FEF3C7", lockActions: false, allowCheckin: false, isNoMantto: false },
+  "0200": { label: "En Proceso", type: "proceso", color: "#3B82F6", bgColor: "#DBEAFE", lockActions: false, allowCheckin: false, isNoMantto: false },
+  "0300": { label: "Finalizada", type: "final", color: "#10B981", bgColor: "#D1FAE5", lockActions: true, allowCheckin: false, isNoMantto: false },
   "0301": { label: "Finalizada Sup.", type: "final", color: "#059669", bgColor: "#D1FAE5", lockActions: true, allowCheckin: false, isNoMantto: false },
-  "0400": { label: "Falta Firma", type: "firma", color: "#8B5CF6", bgColor: "#EDE9FE", lockActions: false, allowCheckin: false, isNoMantto: false }, // Púrpura firma
-  "0600": { label: "No Mantto", type: "no_mantto", color: "#EF4444", bgColor: "#FEE2E2", lockActions: true, allowCheckin: false, isNoMantto: true }, // Rojo peligro
+  "0400": { label: "Falta Firma", type: "firma", color: "#8B5CF6", bgColor: "#EDE9FE", lockActions: false, allowCheckin: false, isNoMantto: false },
+  "0600": { label: "No Mantto", type: "no_mantto", color: "#EF4444", bgColor: "#FEE2E2", lockActions: true, allowCheckin: false, isNoMantto: true },
 };
 
 const PRIORITY = ["0600", "0400", "0300", "0200", "0100", "0301"];
@@ -258,6 +259,7 @@ export default function ListaOrdenesTecnico() {
   const [yearOnly, setYearOnly] = useState(now.getFullYear());
   const [showYearModal, setShowYearModal] = useState(false);
 
+  // Check-in
   const [showCheckinModal, setShowCheckinModal] = useState(false);
   const [checkinOrderId, setCheckinOrderId] = useState(null);
   const [isSending, setIsSending] = useState(false);
@@ -494,18 +496,482 @@ export default function ListaOrdenesTecnico() {
     setShowCheckinModal(true);
   };
 
-  const takeCheckinPhoto = async () => { /* intacto */ };
-  const postCheckinEvidence = async (orderId, base64) => { /* intacto */ };
-  const postChangeStatusToSap = async (orderId, statusCode = "0100") => { /* intacto */ };
-  const applyLocalOfflineStatus = async (orderId, statusCode = "0100") => { /* intacto */ };
-  const syncCheckinQueue = useCallback(async () => { /* intacto */ }, [ensureValidToken, fetchOrdenes, userEmail]);
+  // ============================
+  // FUNCIONALIDAD CHECK-IN RESTAURADA
+  // ============================
+  // const takeCheckinPhoto = async () => {
+  //   try {
+  //     const perm = await ImagePicker.requestCameraPermissionsAsync();
+
+  //     if (!perm.granted) {
+  //       Alert.alert(
+  //         "Permiso requerido",
+  //         "Necesitamos permiso de cámara para tomar la evidencia.",
+  //       );
+  //       return;
+  //     }
+
+  //     const result = await ImagePicker.launchCameraAsync({
+  //       quality: 0.7,
+  //       base64: false,
+  //       allowsEditing: false,
+  //     });
+
+  //     if (result.canceled) return;
+
+  //     const asset = result.assets?.[0];
+
+  //     if (!asset?.uri) {
+  //       Alert.alert("Error", "No se pudo obtener la foto.");
+  //       return;
+  //     }
+
+  //     const MAX_BASE64_LENGTH = 4_000_000;
+
+  //     const opcionesCompresion = [
+  //       { width: 1280, compress: 0.7 },
+  //       { width: 1180, compress: 0.65 },
+  //       { width: 1080, compress: 0.6 },
+  //       { width: 960, compress: 0.55 },
+  //       { width: 850, compress: 0.5 },
+  //       { width: 720, compress: 0.45 },
+  //     ];
+
+  //     let manipulated = null;
+
+  //     for (const opcion of opcionesCompresion) {
+  //       manipulated = await ImageManipulator.manipulateAsync(
+  //         asset.uri,
+  //         [{ resize: { width: opcion.width } }],
+  //         {
+  //           compress: opcion.compress,
+  //           format: ImageManipulator.SaveFormat.JPEG,
+  //           base64: true,
+  //         },
+  //       );
+
+  //       if (manipulated.base64?.length <= MAX_BASE64_LENGTH) {
+  //         break;
+  //       }
+  //     }
+
+  //     if (!manipulated?.base64) {
+  //       Alert.alert("Error", "No se pudo convertir la imagen.");
+  //       return;
+  //     }
+
+  //     if (manipulated.base64.length > MAX_BASE64_LENGTH) {
+  //       Alert.alert(
+  //         "Foto muy pesada",
+  //         "No se pudo reducir a menos de 3 MB. Intenta tomar otra foto.",
+  //       );
+  //       return;
+  //     }
+
+  //     setCheckinPhotoUri(manipulated.uri);
+  //     setCheckinPhotoBase64(manipulated.base64);
+
+  //   } catch (e) {
+  //     console.log("takeCheckinPhoto ERROR:", e);
+  //     Alert.alert("Error", "No se pudo abrir la cámara.");
+  //   }
+  // };
+
+
+  const takeCheckinPhoto = async () => {
+    try {
+      const perm = await ImagePicker.requestCameraPermissionsAsync();
+      if (!perm.granted) {
+        Alert.alert("Permiso requerido", "Necesitamos permiso de cámara.");
+        return;
+      }
   
+      const result = await ImagePicker.launchCameraAsync({
+        quality: 0.7,
+        base64: false, // <-- MUY IMPORTANTE: Apagado
+        allowsEditing: false,
+      });
+  
+      if (result.canceled) return;
+      const asset = result.assets?.[0];
+      if (!asset?.uri) return;
+  
+      // Comprimimos la imagen, PERO NO pedimos Base64
+      const manipulated = await ImageManipulator.manipulateAsync(
+        asset.uri,
+        [{ resize: { width: 850 } }], // Un tamaño razonable y seguro
+        {
+          compress: 0.5,
+          format: ImageManipulator.SaveFormat.JPEG,
+          base64: false, // <-- APAGADO AQUÍ TAMBIÉN
+        }
+      );
+  
+      // Guardamos la foto en una ruta permanente del dispositivo
+      const fileName = `checkin_${Date.now()}.jpg`;
+      const permanentUri = `${FileSystem.documentDirectory}${fileName}`;
+      
+      await FileSystem.copyAsync({
+        from: manipulated.uri,
+        to: permanentUri,
+      });
+  
+      // Guardamos SOLO LA RUTA FÍSICA en el estado, adiós al lag
+      setCheckinPhotoUri(permanentUri);
+  
+    } catch (e) {
+      console.log("takeCheckinPhoto ERROR:", e);
+      Alert.alert("Error", "No se pudo abrir la cámara.");
+    }
+  };
+
+
+  const postCheckinEvidence = async (orderId, base64) => {
+    const payload = {
+      WorkOrderHeader: { Orderid: orderId },
+      Attachments: [
+        {
+          DocId: orderId,
+          FileName: `CHECKIN_${orderId}.jpg`,
+          MimeType: "image/jpeg",
+          Base64: String(base64).trim(),
+        },
+      ],
+      Return: [],
+    };
+
+    await api.post(
+      `/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet?sap-client=400&sap-language=ES`,
+      payload,
+      {
+        headers: { "Content-Type": "application/json" },
+      },
+    );
+  };
+
+  const postChangeStatusToSap = async (orderId, statusCode = "0100") => {
+    const finalStatus = normalizeCode(statusCode) || "0100";
+
+    const payload = {
+      OrderId: orderId,
+      WorkOrderHeader: { Orderid: orderId },
+      WorkOrderUserStatusSet: [
+        {
+          UserStText: finalStatus,
+          Langu: "ES",
+          Inactive: "",
+        },
+      ],
+      Return: [],
+    };
+
+    await api.post(
+      `/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet?sap-client=400&sap-language=ES`,
+      payload,
+      {
+        headers: { "Content-Type": "application/json" },
+      },
+    );
+  };
+
+  const applyLocalOfflineStatus = async (orderId, statusCode = "0100") => {
+    const finalStatus = normalizeCode(statusCode) || "0100";
+
+    try {
+      await setLocalStatusPatch(userEmail, orderId, finalStatus);
+      await patchCacheOrdenesTecnicoList(userEmail, orderId, finalStatus);
+      await patchCacheOrdenTecnicoDetail(orderId, finalStatus);
+
+      setAllOrdenes((prev) =>
+        (prev || []).map((x) =>
+          String(x?.Orderid) === String(orderId)
+            ? {
+                ...x,
+                estatus_code: finalStatus,
+                userstatus: finalStatus,
+                estatus_label: STATUS_META[finalStatus]?.label || finalStatus,
+              }
+            : x,
+        ),
+      );
+    } catch (e) {
+      console.log("[CHECKIN][STATUS][LOCAL] error:", e?.message || e);
+    }
+  };
+
+  // const syncCheckinQueue = useCallback(async () => {
+  //   if (!userEmail) return;
+  //   if (syncingRef.current) return;
+
+  //   const net = await NetInfo.fetch();
+  //   const online = !!(net?.isConnected && net?.isInternetReachable !== false);
+
+  //   setIsOnline(online);
+  //   if (!online) return;
+
+  //   syncingRef.current = true;
+
+  //   try {
+  //     const q = await loadCheckinQueue(userEmail);
+  //     if (!q.length) return;
+
+  //     const ok = await ensureValidToken();
+  //     if (!ok) return;
+
+  //     const ordered = [...q].sort(
+  //       (a, b) => (a?.createdAt || 0) - (b?.createdAt || 0),
+  //     );
+
+  //     for (const item of ordered) {
+  //       const orderId = String(item?.orderId || "").trim();
+  //       const b64 = String(item?.photoBase64 || "").trim();
+
+  //       if (!orderId || !b64) {
+  //         await removeFromQueue(userEmail, orderId);
+  //         continue;
+  //       }
+
+  //       try {
+  //         const statusToSend = normalizeCode(item?.statusCode) || "0100";
+  //         await postCheckinEvidence(orderId, b64);
+  //         await postChangeStatusToSap(orderId, statusToSend);
+  //         await removeFromQueue(userEmail, orderId);
+  //       } catch (e) {
+  //         console.log("[CHECKIN][SYNC] Error SAP:", orderId, e?.message || e);
+  //         break;
+  //       }
+  //     }
+
+  //     const q2 = await loadCheckinQueue(userEmail);
+  //     setCheckinQueue(q2);
+
+  //     fetchOrdenes({ isRefresh: true });
+  //   } finally {
+  //     syncingRef.current = false;
+  //   }
+  // }, [ensureValidToken, fetchOrdenes, userEmail]);
+
+
+  const syncCheckinQueue = useCallback(async () => {
+    // ... (validaciones de red e inicio) ...
+  
+    try {
+      const q = await loadCheckinQueue(userEmail);
+      if (!q.length) return;
+      const ok = await ensureValidToken();
+      if (!ok) return;
+  
+      for (const item of q) {
+        const orderId = String(item?.orderId || "").trim();
+        const photoUri = item?.photoUri; // Recuperamos la ruta
+  
+        if (!orderId || !photoUri) {
+          await removeFromQueue(userEmail, orderId);
+          continue;
+        }
+  
+        try {
+          // 1. Convertimos a Base64 leyendo el archivo físico
+          const b64 = await FileSystem.readAsStringAsync(photoUri, {
+            encoding: FileSystem.EncodingType.Base64,
+          });
+  
+          // 2. Enviamos a SAP
+          const statusToSend = normalizeCode(item?.statusCode) || "0100";
+          await postCheckinEvidence(orderId, b64);
+          await postChangeStatusToSap(orderId, statusToSend);
+          
+          // 3. Eliminamos de la cola
+          await removeFromQueue(userEmail, orderId);
+  
+          // 4. Limpieza del dispositivo (Buscamos no llenar la memoria del cel)
+          await FileSystem.deleteAsync(photoUri, { idempotent: true });
+  
+        } catch (e) {
+          console.log("[CHECKIN][SYNC] Error SAP:", orderId, e);
+          break; // Detenemos el ciclo si SAP falla para intentar luego
+        }
+      }
+      
+      // ... (finalización y refresco de vista) ...
+    } finally {
+      syncingRef.current = false;
+    }
+  }, [ensureValidToken, fetchOrdenes, userEmail]);
   useEffect(() => {
     if (isOnline && checkinQueue.length > 0) syncCheckinQueue().catch(() => {});
   }, [isOnline, checkinQueue.length, syncCheckinQueue]);
 
-  const enviarCheckinCompletoASap = async () => { /* intacto */ };
+  // const enviarCheckinCompletoASap = async () => {
 
+  //   if (!checkinOrderId) {
+  //     Alert.alert("Error", "No hay orden seleccionada.");
+  //     return;
+  //   }
+
+  //   if (!checkinPhotoBase64) {
+  //     Alert.alert("Falta evidencia", "Primero toma una foto.");
+  //     return;
+  //   }
+
+  //   const orderId = String(checkinOrderId).trim();
+
+  //   try {
+  //     setIsSending(true);
+
+  //     const net = await NetInfo.fetch();
+  //     const online = !!(net?.isConnected && net?.isInternetReachable !== false);
+
+  //     setIsOnline(online);
+
+  //     if (!online) {
+  //       const offlineStatus = "0100";
+
+  //       await applyLocalOfflineStatus(orderId, offlineStatus);
+
+  //       const nextQueue = await enqueueCheckin(userEmail, {
+  //         orderId,
+  //         photoBase64: String(checkinPhotoBase64).trim(),
+  //         statusCode: offlineStatus,
+  //         lastValidStatus: offlineStatus,
+  //         createdAt: Date.now(),
+  //       });
+
+  //       setCheckinQueue(nextQueue);
+
+  //       Alert.alert(
+  //         "Check-in offline",
+  //         "Sin internet. Se guardó el check-in en cola y se enviará automáticamente cuando regrese la conexión ✅",
+  //       );
+
+  //       setShowCheckinModal(false);
+  //       setCheckinPhotoBase64(null);
+  //       setCheckinPhotoUri(null);
+
+  //       return;
+  //     }
+
+  //     const ok = await ensureValidToken();
+  //     if (!ok) return;
+  //     const onlineStatus = "0100";
+
+  //     await postCheckinEvidence(orderId, checkinPhotoBase64);
+  //     await postChangeStatusToSap(orderId, onlineStatus);
+  //     await applyLocalOfflineStatus(orderId, onlineStatus);
+
+  //     Alert.alert(
+  //       "Check-in",
+  //       "Evidencia enviada y estatus actualizado a PENDIENTE",
+  //     );
+
+  //     setShowCheckinModal(false);
+  //     setCheckinPhotoBase64(null);
+  //     setCheckinPhotoUri(null);
+
+  //     fetchOrdenes({ isRefresh: true });
+  //   } catch (e) {
+  //     console.log("enviarCheckinCompletoASap ERROR:", e?.message || e);
+
+  //     const net2 = await NetInfo.fetch();
+  //     const online2 = !!(net2?.isConnected && net2?.isInternetReachable !== false);
+
+  //     if (!online2) {
+  //       const offlineStatus = "0100";
+  //       await applyLocalOfflineStatus(orderId, offlineStatus);
+
+  //       const nextQueue = await enqueueCheckin(userEmail, {
+  //         orderId,
+  //         photoBase64: String(checkinPhotoBase64).trim(),
+  //         statusCode: offlineStatus,
+  //         lastValidStatus: offlineStatus,
+  //         createdAt: Date.now(),
+  //       });
+
+  //       setCheckinQueue(nextQueue);
+
+  //       Alert.alert(
+  //         "Check-in guardado",
+  //         "Se cayó la conexión. Se guardó en cola y se enviará cuando regrese internet ✅",
+  //       );
+
+  //       setShowCheckinModal(false);
+  //       setCheckinPhotoBase64(null);
+  //       setCheckinPhotoUri(null);
+  //       return;
+  //     }
+
+  //     Alert.alert(
+  //       "Error SAP",
+  //       "No se pudo completar el check-in (foto/estatus). Revisa logs.",
+  //     );
+  //   } finally {
+  //     setIsSending(false);
+  //   }
+  // };
+
+  const enviarCheckinCompletoASap = async () => {
+    if (!checkinOrderId || !checkinPhotoUri) {
+      Alert.alert("Falta evidencia", "Primero toma una foto.");
+      return;
+    }
+  
+    const orderId = String(checkinOrderId).trim();
+  
+    try {
+      setIsSending(true);
+      const net = await NetInfo.fetch();
+      const online = !!(net?.isConnected && net?.isInternetReachable !== false);
+  
+      setIsOnline(online);
+  
+      if (!online) {
+        const offlineStatus = "0100";
+        await applyLocalOfflineStatus(orderId, offlineStatus);
+  
+        // Guardamos la RUTA en AsyncStorage, no el Base64
+        const nextQueue = await enqueueCheckin(userEmail, {
+          orderId,
+          photoUri: checkinPhotoUri, // <-- GUARDAMOS EL URI AQUÍ
+          statusCode: offlineStatus,
+          createdAt: Date.now(),
+        });
+  
+        setCheckinQueue(nextQueue);
+        Alert.alert("Check-in offline", "Se guardó en cola y se enviará cuando regrese la conexión ✅");
+        
+        setShowCheckinModal(false);
+        setCheckinPhotoUri(null); // Limpiamos estado
+        return;
+      }
+  
+      // Si está ONLINE, leemos el archivo físico, lo pasamos a Base64 en este momento y enviamos
+      const ok = await ensureValidToken();
+      if (!ok) return;
+  
+      const base64Data = await FileSystem.readAsStringAsync(checkinPhotoUri, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+  
+      const onlineStatus = "0100";
+      await postCheckinEvidence(orderId, base64Data);
+      await postChangeStatusToSap(orderId, onlineStatus);
+      await applyLocalOfflineStatus(orderId, onlineStatus);
+  
+      // Opcional: Borrar el archivo local porque ya se subió a SAP
+      await FileSystem.deleteAsync(checkinPhotoUri, { idempotent: true });
+  
+      Alert.alert("Check-in", "Evidencia enviada y estatus actualizado.");
+      setShowCheckinModal(false);
+      setCheckinPhotoUri(null);
+      fetchOrdenes({ isRefresh: true });
+  
+    } catch (e) {
+       // ... manejo de errores (si falla online, guardar en cola usando el mismo photoUri)
+    } finally {
+      setIsSending(false);
+    }
+  };
+  
   const clearFilters = () => {
     setQuery(""); setDateMode("day"); setDayRef(new Date()); setWeekStart(null); setWeekEnd(null);
     setMonthYear({ month: now.getMonth(), year: now.getFullYear() }); setYearOnly(now.getFullYear());
@@ -544,7 +1010,6 @@ export default function ListaOrdenesTecnico() {
     const stBase = resolveUserstatus(item?.userstatus ?? "", statusCatalogMap, item);
     const isPendingOffline = pendingSet.has(String(item?.Orderid));
     const tbmYaProceso = stBase.code === "0200";
-    const ordenYaAvanzo = ["0400", "0300", "0600"].includes(stBase.code);
 
     const st = isPendingOffline && !tbmYaProceso ? {
       ...stBase, code: "0100", label: STATUS_META["0100"].label, type: "pendiente",
@@ -556,7 +1021,6 @@ export default function ListaOrdenesTecnico() {
     const showNoMantBtn = st.type === "pendiente";
     const lockAll = st.lockActions;
 
-    // Ícono dinámico según el tipo de orden
     const getOrderIcon = (type) => {
       if (String(type).includes("Aver")) return "warning-outline";
       return "construct-outline";
@@ -666,10 +1130,13 @@ export default function ListaOrdenesTecnico() {
             <Text style={[styles.chipText, dateMode === "day" && styles.chipTextActive]}>Día</Text>
           </TouchableOpacity>
           <TouchableOpacity style={[styles.chip, dateMode === "weekRange" && styles.chipActive]} onPress={() => { setDateMode("weekRange"); setShowWeekStartPicker(true); }}>
-            <Text style={[styles.chipText, dateMode === "weekRange" && styles.chipTextActive]}>Semana</Text>
+            <Text style={[styles.chipText, dateMode === "weekRange" && styles.chipTextActive]}>Sem</Text>
           </TouchableOpacity>
           <TouchableOpacity style={[styles.chip, dateMode === "month" && styles.chipActive]} onPress={() => { setDateMode("month"); setShowMonthModal(true); }}>
             <Text style={[styles.chipText, dateMode === "month" && styles.chipTextActive]}>Mes</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.chip, dateMode === "year" && styles.chipActive]} onPress={() => { setDateMode("year"); setShowYearModal(true); }}>
+            <Text style={[styles.chipText, dateMode === "year" && styles.chipTextActive]}>Año</Text>
           </TouchableOpacity>
         </ScrollView>
 
@@ -681,10 +1148,105 @@ export default function ListaOrdenesTecnico() {
            </View>
         </View>
 
-        {/* ... (Aquí van los DatePickers y Modales del filtro igual que antes) ... */}
+        {showDayPicker && (
+          <DateTimePicker
+            value={dayRef ?? new Date()}
+            mode="date"
+            display={Platform.OS === "ios" ? "inline" : "default"}
+            onChange={(e, date) => {
+              if (Platform.OS === "android") {
+                setShowDayPicker(false);
+                if (e.type !== "set") return;
+              }
+              if (date) setDayRef(date);
+              if (Platform.OS === "ios") setShowDayPicker(true);
+            }}
+          />
+        )}
+        {showWeekStartPicker && (
+          <DateTimePicker
+            value={weekStart ?? new Date()}
+            mode="date"
+            display={Platform.OS === "ios" ? "inline" : "default"}
+            onChange={(e, date) => {
+              if (Platform.OS === "android") {
+                setShowWeekStartPicker(false);
+                if (e.type !== "set") return;
+              }
+              if (date) {
+                setWeekStart(date);
+                if (Platform.OS !== "ios") setShowWeekEndPicker(true);
+              }
+              if (Platform.OS === "ios") setShowWeekStartPicker(true);
+            }}
+          />
+        )}
+        {showWeekEndPicker && (
+          <DateTimePicker
+            value={weekEnd ?? weekStart ?? new Date()}
+            mode="date"
+            minimumDate={weekStart ?? undefined}
+            display={Platform.OS === "ios" ? "inline" : "default"}
+            onChange={(e, date) => {
+              if (Platform.OS === "android") {
+                setShowWeekEndPicker(false);
+                if (e.type !== "set") return;
+              }
+              if (date) setWeekEnd(date);
+              if (Platform.OS === "ios") setShowWeekEndPicker(true);
+            }}
+          />
+        )}
       </View>
 
-      {/* MODALES INTACTOS */}
+      {/* MODAL CHECK-IN RESTAURADO (Y ADAPTADO A NUEVO DISEÑO) */}
+      <Modal visible={showCheckinModal} transparent animationType="slide" onRequestClose={() => setShowCheckinModal(false)}>
+        <View style={styles.modalBackdrop}>
+          <View style={[styles.modalCard, { maxWidth: 480 }]}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalHeaderTitle}>Check-in #{checkinOrderId ?? ""}</Text>
+            </View>
+            <Text style={{ color: FIORI.textMuted, marginBottom: 12 }}>Toma una foto de evidencia para iniciar:</Text>
+
+            {checkinPhotoUri ? (
+              <View style={{ marginBottom: 16 }}>
+              <Image 
+                source={{ uri: checkinPhotoUri }} 
+                style={{ width: "100%", height: 200, borderRadius: 12 }} 
+              />
+              <Text style={{ marginTop: 8, color: FIORI.textMuted, textAlign: "center" }}>
+                <Ionicons name="checkmark-circle" size={12} color={FIORI.accent} /> Foto capturada
+              </Text>
+            </View>
+            ) : (
+              <View style={{ padding: 20, borderWidth: 1.5, borderStyle: "dashed", borderColor: FIORI.borderMuted, borderRadius: 12, marginBottom: 16, alignItems: "center" }}>
+                <Ionicons name="camera-outline" size={32} color={FIORI.textMuted} />
+                <Text style={{ color: FIORI.textMuted, marginTop: 8 }}>Aún no hay foto. Presiona "Tomar foto".</Text>
+              </View>
+            )}
+
+            <View style={{ flexDirection: "row", justifyContent: "flex-end", gap: 10 }}>
+              <TouchableOpacity style={[styles.secondaryBtn, { flex: 1, justifyContent: "center" }]} onPress={() => setShowCheckinModal(false)} disabled={isSending}>
+                <Text style={styles.secondaryBtnText}>Cancelar</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity style={[styles.outlineBtn, { flex: 1, justifyContent: "center", borderColor: FIORI.accent }]} onPress={takeCheckinPhoto} disabled={isSending}>
+                <Text style={[styles.outlineBtnText, { color: FIORI.accent }]}>Tomar foto</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity style={[styles.primaryBtn, { flex: 1, justifyContent: "center", opacity: isSending ? 0.7 : 1 }]} onPress={enviarCheckinCompletoASap} disabled={isSending}>
+                {isSending ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <Text style={styles.primaryBtnText}>{isOnline ? "Enviar a SAP" : "Guardar local"}</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* MODAL MES */}
       <Modal visible={showMonthModal} transparent animationType="fade" onRequestClose={() => setShowMonthModal(false)}>
         <View style={styles.modalBackdrop}>
           <View style={styles.modalCard}>
@@ -707,7 +1269,31 @@ export default function ListaOrdenesTecnico() {
           </View>
         </View>
       </Modal>
+      
+      <Modal visible={showYearModal} transparent animationType="fade" onRequestClose={() => setShowYearModal(false)}>
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <Text style={[styles.modalHeaderTitle, { marginBottom: 12, textAlign: "center" }]}>
+              Selecciona un año
+            </Text>
 
+            <YearPickerContent
+              selectedYear={yearOnly}
+              onSelect={(y) => {
+                setYearOnly(y);
+                setShowYearModal(false);
+              }}
+              from={now.getFullYear() - 10}
+              to={now.getFullYear() + 2}
+            />
+
+            <TouchableOpacity style={styles.modalClose} onPress={() => setShowYearModal(false)}>
+              <Text style={styles.modalCloseText}>Cerrar</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+      
       {loading && allOrdenes.length === 0 ? (
         <ActivityIndicator style={{ marginTop: 40 }} size="large" color={FIORI.accent} />
       ) : (
@@ -716,13 +1302,12 @@ export default function ListaOrdenesTecnico() {
           keyExtractor={(item, idx) => String(item?.Orderid ?? `row-${idx}`)}
           renderItem={renderItem}
           contentContainerStyle={{ padding: 16, paddingBottom: 100 }}
-          // PULL TO REFRESH NATIVO
           refreshControl={
             <RefreshControl
               refreshing={refreshing}
               onRefresh={() => fetchOrdenes({ isRefresh: true })}
-              colors={[FIORI.accent]} // Android
-              tintColor={FIORI.accent} // iOS
+              colors={[FIORI.accent]}
+              tintColor={FIORI.accent}
             />
           }
           ListEmptyComponent={
@@ -806,7 +1391,7 @@ const styles = StyleSheet.create({
   emptyState: { alignItems: "center", marginTop: 60, padding: 20 },
   emptyText: { color: FIORI.textMuted, fontSize: 15, marginTop: 12, textAlign: "center" },
 
-  // Modals (Intactos)
+  // Modals
   modalBackdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.5)", alignItems: "center", justifyContent: "center", padding: 16 },
   modalCard: { width: "100%", maxWidth: 420, backgroundColor: FIORI.cardBg, borderRadius: 24, padding: 20 },
   modalHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 16 },
