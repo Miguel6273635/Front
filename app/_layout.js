@@ -23,14 +23,14 @@ export default function RootLayout() {
   useEffect(() => {
     async function prepareApp() {
       try {
-        // Aquí puedes cargar fuentes, sesión, datos iniciales, etc.
-        await new Promise((resolve) => setTimeout(resolve, 800));
+        // Aquí puedes cargar fuentes o sesión en el futuro si lo requieres.
+        // 🔴 MEJORA: Eliminamos el setTimeout de 800ms. 
+        // Ahora la app cargará tan rápido como el dispositivo lo permita.
       } catch (error) {
         console.log("Error preparando la app:", error);
       } finally {
         setAppReady(true);
-
-        // Oculta el splash nativo de Expo
+        // Oculta el splash nativo de Expo en cuanto esté lista
         await SplashScreen.hideAsync();
       }
     }

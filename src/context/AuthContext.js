@@ -295,60 +295,67 @@ export const AuthProvider = ({ children }) => {
   /* =========================
      LOAD STORAGE
      ========================= */
-  useEffect(() => {
-    const loadStorage = async () => {
-      try {
-        const storedToken =
-          (await authGet("access_token")) || (await AsyncStorage.getItem("token"));
-        const storedExp =
-          (await authGet("expires_at")) || (await AsyncStorage.getItem("token_expires_at"));
-        const storedUser =
-          (await authGet("user_json")) || (await AsyncStorage.getItem("user"));
-
-        let finalToken = storedToken;
-        let finalExp = storedExp;
-
-        if (storedToken && storedExp && isExpired(storedExp, 60)) {
-          const refreshed = await refreshAccessToken();
-
-          if (!refreshed?.ok) {
-            await clearSessionLocal();
-            setUser(null);
+     useEffect(() => {
+      const loadStorage = async () => {
+        try {
+          const storedToken =
+            (await authGet("access_token")) || (await AsyncStorage.getItem("token"));
+          const storedExp =
+            (await authGet("expires_at")) || (await AsyncStorage.getItem("token_expires_at"));
+          const storedUser =
+            (await authGet("user_json")) || (await AsyncStorage.getItem("user"));
+  
+          // Si no hay rastro del usuario en el celular, no hay sesión.
+          if (!storedToken || !storedUser || !storedExp) {
             setToken(null);
+            setUser(null);
+            setLoading(false);
             return;
           }
-
-          finalToken =
-            refreshed?.accessToken ||
-            (await authGet("access_token")) ||
-            (await AsyncStorage.getItem("token"));
-
-          finalExp =
-            refreshed?.expiresAt ||
-            (await authGet("expires_at")) ||
-            (await AsyncStorage.getItem("token_expires_at"));
-        }
-
-        if (finalToken && storedUser && finalExp && !isExpired(finalExp, 60)) {
-          setToken(finalToken);
-          setUser(JSON.parse(storedUser));
-          await scheduleRefresh();
-        } else {
+  
+          const isTokenExpired = isExpired(storedExp, 60);
+  
+          if (isTokenExpired) {
+            // El token caducó. Intentamos refrescarlo.
+            const refreshed = await refreshAccessToken();
+  
+            if (!refreshed?.ok) {
+              // 🔴 AQUÍ ESTÁ LA MAGIA PARA EL SÓTANO:
+              // Si falló por falta de internet, LO DEJAMOS ENTRAR a la BD Local.
+              if (refreshed?.reason === "offline") {
+                console.log("[AUTH] Token caducado pero no hay red. Manteniendo sesión offline.");
+                setToken(storedToken); // Usamos el token viejo temporalmente
+                setUser(JSON.parse(storedUser));
+              } else {
+                // Si falló por otra razón (ej. su cuenta fue dada de baja en Azure), sí lo deslogueamos.
+                await clearSessionLocal();
+                setUser(null);
+                setToken(null);
+              }
+            } else {
+              // Se refrescó con éxito en Azure
+              setToken(refreshed.accessToken);
+              setUser(JSON.parse(storedUser));
+              await scheduleRefresh();
+            }
+          } else {
+            // El token sigue vivo y es válido
+            setToken(storedToken);
+            setUser(JSON.parse(storedUser));
+            await scheduleRefresh();
+          }
+  
+        } catch (e) {
+          console.log("[LOAD STORAGE ERROR]", e?.message || e);
           setToken(null);
           setUser(null);
+        } finally {
+          setLoading(false);
         }
-      } catch (e) {
-        console.log("[LOAD STORAGE ERROR]", e?.message || e);
-        setToken(null);
-        setUser(null);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    loadStorage();
-  }, []);
-
+      };
+  
+      loadStorage();
+    }, []);
   /* =========================
      SSO INICIAR
      ========================= */
