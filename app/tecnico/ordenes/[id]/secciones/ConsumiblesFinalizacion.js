@@ -189,7 +189,7 @@ export default function ConsumiblesFinalizacion({
   const coverageKey = safeUpper(coberturaTipo);
   const effectiveCoverageKey = ["BASICA", "MEDIA", "SEMI"].includes(coverageKey)
     ? coverageKey
-    : "BASICA";
+    : "Sin cobertura";
 
   const pairsForCoverage = useMemo(() => {
     if (effectiveCoverageKey === "MEDIA") return COVERAGE_PAIRS.MEDIA;

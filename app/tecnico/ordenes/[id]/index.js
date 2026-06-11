@@ -228,8 +228,7 @@ function fmtDMY(val) {
   return `${dd}/${mm}/${yyyy}`;
 }
 
-const opKey = (orderId, op) =>
-  `${orderId}-${op.activity || op.Activity || ""}`;
+const opKey = (orderId, op) => `${orderId}-${op.activity || op.Activity || ""}`;
 
 /* ====== SAP helpers para fechas/horas y prorrateo ====== */
 function msToMinutesRounded(ms) {
@@ -552,14 +551,12 @@ function detectTipoMantenimiento(orden) {
 
 function detectCoberturaFromShortText(shortText) {
   const s = String(shortText || "").toUpperCase();
-  const idx = s.indexOf("COBERTURA");
-  if (idx < 0) return null;
 
-  const tail = s.slice(idx);
-  if (tail.includes("COBERTURABASICA")) return "BASICA";
-  if (tail.includes("COBERTURAMEDIA")) return "MEDIA";
-  if (tail.includes("COBERTURASEMI")) return "SEMI";
-  return null;
+  if (s.includes("COBERTURA BASICA")) return "BASICA";
+  if (s.includes("COBERTURA MEDIA")) return "MEDIA";
+  if (s.includes("COBERTURA SEMI")) return "SEMI";
+
+  return "SIN COBERTURA";
 }
 
 /* ====================== Estatus ====================== */
@@ -2295,10 +2292,7 @@ export default function DetalleOrden() {
 
   function hacerPreviewConColumnasManuales(html = "") {
     return String(html || "")
-      .replaceAll(
-        'class="ubicGrid"',
-        'class="ubicGrid previewManualGrid"'
-      )
+      .replaceAll('class="ubicGrid"', 'class="ubicGrid previewManualGrid"')
       .replace(
         "</head>",
         `
@@ -2334,7 +2328,7 @@ export default function DetalleOrden() {
             }
           }
         </style>
-        </head>`
+        </head>`,
       );
   }
 
@@ -2389,7 +2383,8 @@ export default function DetalleOrden() {
         ).trim(),
         avisoCliente: String(avisoCliente || "").trim(),
         notaTecnico: String(notaTecnico || "").trim(),
-        coberturaTipo: coberturaTipo || null,
+        coberturaTipo:
+          coberturaTipo || orden?.cobertura_tipo || "SIN COBERTURA",
         consumibles,
         startMs: orderStartedAtMs,
         finishMs: draftFinishMs,
@@ -2404,7 +2399,9 @@ export default function DetalleOrden() {
         base64: true,
       });
 
-      const pdfBase64ConPaginas = await addPageNumbersToPdfBase64(result.base64);
+      const pdfBase64ConPaginas = await addPageNumbersToPdfBase64(
+        result.base64,
+      );
 
       await FileSystem.writeAsStringAsync(result.uri, pdfBase64ConPaginas, {
         encoding: FileSystem.EncodingType.Base64,
@@ -2641,7 +2638,8 @@ export default function DetalleOrden() {
         ).trim(),
         avisoCliente: String(avisoCliente || "").trim(),
         notaTecnico: String(notaTecnico || "").trim(),
-        coberturaTipo: coberturaTipo || null,
+        coberturaTipo:
+          coberturaTipo || orden?.cobertura_tipo || "SIN COBERTURA",
         consumibles,
         startMs: effectiveStartMs,
         finishMs,
@@ -2656,19 +2654,21 @@ export default function DetalleOrden() {
 
       try {
         const result = await Print.printToFileAsync({
-        html: String(html || ""),
-        base64: true,
-      });
+          html: String(html || ""),
+          base64: true,
+        });
 
-      const pdfBase64ConPaginas = await addPageNumbersToPdfBase64(result.base64);
+        const pdfBase64ConPaginas = await addPageNumbersToPdfBase64(
+          result.base64,
+        );
 
-      await FileSystem.writeAsStringAsync(result.uri, pdfBase64ConPaginas, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
+        await FileSystem.writeAsStringAsync(result.uri, pdfBase64ConPaginas, {
+          encoding: FileSystem.EncodingType.Base64,
+        });
 
-      pdfUri = result.uri;
-      pdfBase64 = pdfBase64ConPaginas;
-      setMantPdfUri(result.uri);
+        pdfUri = result.uri;
+        pdfBase64 = pdfBase64ConPaginas;
+        setMantPdfUri(result.uri);
       } catch (e) {
         console.warn("No se pudo generar PDF (base64):", e?.message || e);
         setMantPdfUri(null);

@@ -32,6 +32,7 @@ import Signature from "react-native-signature-canvas";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Print from "expo-print";
 import * as FileSystem from "expo-file-system/legacy";
+import * as Sharing from "expo-sharing";
 
 import {
   loadOrdenTecnicoDetail,
@@ -512,8 +513,144 @@ function isValidEmail(email) {
     .toLowerCase();
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
 }
+const PENDING_PDFS_DIR = `${FileSystem.documentDirectory}pdfs_no_enviados/`;
+const PENDING_PDFS_INDEX_KEY = "pendingFailedSignaturePdfs:index";
 
+async function ensurePendingPdfsDir() {
+  const info = await FileSystem.getInfoAsync(PENDING_PDFS_DIR);
+
+  if (!info.exists) {
+    await FileSystem.makeDirectoryAsync(PENDING_PDFS_DIR, {
+      intermediates: true,
+    });
+  }
+}
+
+function sanitizeFileName(value) {
+  return String(value || "")
+    .replace(/[^\w.-]/g, "_")
+    .replace(/_+/g, "_");
+}
+
+async function readFailedPdfsIndex() {
+  try {
+    const raw = await AsyncStorage.getItem(PENDING_PDFS_INDEX_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+async function writeFailedPdfsIndex(items) {
+  await AsyncStorage.setItem(
+    PENDING_PDFS_INDEX_KEY,
+    JSON.stringify(items || []),
+  );
+}
+
+async function saveFailedSignaturePdf({
+  orderId,
+  tempUri,
+  fileName,
+  clienteEmail,
+  clienteNombre,
+  clienteCargo,
+  comentarioCliente,
+  reason,
+}) {
+  await ensurePendingPdfsDir();
+
+  const cleanOrderId = sanitizeFileName(orderId);
+  const cleanFileName = sanitizeFileName(
+    fileName || `orden_${cleanOrderId}.pdf`,
+  );
+  const finalFileName = `${cleanOrderId}_${Date.now()}_${cleanFileName}`;
+  const finalUri = `${PENDING_PDFS_DIR}${finalFileName}`;
+
+  await FileSystem.copyAsync({
+    from: tempUri,
+    to: finalUri,
+  });
+
+  const prev = await readFailedPdfsIndex();
+
+  const item = {
+    id: `${orderId}_${Date.now()}`,
+    orderId: String(orderId),
+    fileName: finalFileName,
+    uri: finalUri,
+    clienteEmail: String(clienteEmail || ""),
+    clienteNombre: String(clienteNombre || ""),
+    clienteCargo: String(clienteCargo || ""),
+    comentarioCliente: String(comentarioCliente || ""),
+    reason: String(reason || "No se pudo enviar a SAP"),
+    createdAt: new Date().toISOString(),
+  };
+
+  await writeFailedPdfsIndex([item, ...prev]);
+
+  return item;
+}
+
+async function deleteFailedPdfItem(item) {
+  try {
+    if (!item?.uri) return;
+
+    const prev = await readFailedPdfsIndex();
+    const next = prev.filter((x) => x.uri !== item.uri);
+
+    await writeFailedPdfsIndex(next);
+
+    await FileSystem.deleteAsync(item.uri, {
+      idempotent: true,
+    }).catch(() => {});
+  } catch (e) {
+    console.warn("[PDF NO ENVIADO] Error eliminando:", e?.message || e);
+  }
+}
+
+async function shareFailedPdf(item) {
+  try {
+    if (!item?.uri) {
+      Alert.alert("PDF no disponible", "No se encontró la ruta del archivo.");
+      return;
+    }
+
+    const info = await FileSystem.getInfoAsync(item.uri);
+
+    if (!info.exists) {
+      Alert.alert(
+        "PDF no encontrado",
+        "El archivo ya no existe en el dispositivo.",
+      );
+      return;
+    }
+
+    const available = await Sharing.isAvailableAsync();
+
+    if (!available) {
+      Alert.alert(
+        "Compartir no disponible",
+        "Este dispositivo no permite compartir archivos desde la app.",
+      );
+      return;
+    }
+
+    await Sharing.shareAsync(item.uri, {
+      mimeType: "application/pdf",
+      dialogTitle: `Compartir PDF orden ${item.orderId}`,
+      UTI: "com.adobe.pdf",
+    });
+  } catch (e) {
+    Alert.alert(
+      "Error al compartir",
+      e?.message || "No se pudo compartir el PDF.",
+    );
+  }
+}
 export default function PendienteFirmaIndex() {
+  const [showFailedPdfsModal, setShowFailedPdfsModal] = useState(false);
+  const [failedPdfs, setFailedPdfs] = useState([]);
   const { user, ensureValidToken, token } = useAuth();
 
   const userEmail = safeStr(
@@ -976,6 +1113,26 @@ export default function PendienteFirmaIndex() {
   };
   //Miguel Angel agregado para lo de agrupador de los pdf en uno solo const sendSelectedOrders = async () => {}
   // PARALELIZACIÓN CONTROLADA POR LOTES PARA EVITAR CONGELAMIENTO EN +4 ÓRDENES
+  const loadFailedPdfs = useCallback(async () => {
+    const items = await readFailedPdfsIndex();
+    const validItems = [];
+
+    for (const item of items) {
+      try {
+        const info = await FileSystem.getInfoAsync(item.uri);
+
+        if (info.exists) {
+          validItems.push(item);
+        }
+      } catch {}
+    }
+
+    if (validItems.length !== items.length) {
+      await writeFailedPdfsIndex(validItems);
+    }
+
+    setFailedPdfs(validItems);
+  }, []);
   const sendSelectedOrders = async () => {
     const email = String(clienteEmail || "").trim();
     const nombre = String(clienteNombre || "").trim();
@@ -1013,8 +1170,8 @@ export default function PendienteFirmaIndex() {
     }
 
     if (hasFaults) {
-      setErrors(localErrors);
-      setModalStep(1);
+      // Nota: setErrors y setModalStep no están definidos en tu archivo,
+      // pero mantengo la lógica de rechazo
       setShowFirmaModal(true);
       return;
     }
@@ -1050,187 +1207,167 @@ export default function PendienteFirmaIndex() {
               total: selectedIds.length,
               current: "Iniciando empaquetado...",
             });
-
             const results = [];
             const toWorkOrders = [];
-
+            const tempPdfsByOrder = {};
             const tiempoInicioCronometro = performance.now();
 
             try {
               console.log("==============================================");
               console.log(
-                `[BULK] Preparando ${selectedIds.length} órdenes en bloques de memoria controlada.`,
+                `[BULK] Preparando ${selectedIds.length} órdenes. PDF secuencial optimizado.`,
               );
 
-              // CONFIGURACIÓN DE CONCURRENCIA: Procesamos de 2 en 2 para mantener la UI fluida
-              const TAMANO_BLOQUE = 2;
+              // REGLA CRÍTICA: Procesamiento Secuencial (For...of)
+              // Nunca usar Promise.all para PDFs en dispositivos móviles
+              for (let i = 0; i < selectedIds.length; i++) {
+                const orderId = String(selectedIds[i]).trim();
 
-              for (let i = 0; i < selectedIds.length; i += TAMANO_BLOQUE) {
-                const bloqueIds = selectedIds.slice(i, i + TAMANO_BLOQUE);
+                // Actualizar UI inmediatamente
+                setSendProgress((prev) => ({
+                  ...prev,
+                  current: `Generando PDF #${orderId}`,
+                }));
 
-                // Mapeamos el sub-bloque actual a promesas concurrentes
-                const promesasBloque = bloqueIds.map(
-                  async (idSeleccionado, indexDentroDelBloque) => {
-                    const posicionReal = i + indexDentroDelBloque;
-                    const orderId = String(idSeleccionado).trim();
+                // Forzamos un micro-descanso para que React Native pinte la pantalla (evita congelamientos)
+                await new Promise((resolve) => setTimeout(resolve, 10));
 
-                    try {
-                      const pending = await loadPendingSign(orderId);
-                      const checkedMap = pending?.checkedMap || null;
+                try {
+                  const pending = await loadPendingSign(orderId);
+                  const checkedMap = pending?.checkedMap || null;
 
-                      if (!checkedMap || !Object.keys(checkedMap).length) {
-                        throw new Error(
-                          "No hay operaciones guardadas (pendingSign) para esta orden. Entra al detalle y marca/guarda primero.",
-                        );
-                      }
-
-                      const ordenFull = await fetchOrdenFullForPdf({
-                        apiClient: api,
-                        token,
-                        orderId,
-                      });
-
-                      const tipo = detectTipoMantenimiento(ordenFull);
-                      const consumibles = Array.isArray(pending?.consumibles)
-                        ? pending.consumibles
-                        : [];
-                      const notaTecnico = String(
-                        pending?.notaTecnico || "",
-                      ).trim();
-
-                      const startedMs = Number.isFinite(
-                        pending?.orderStartedAtMs,
-                      )
-                        ? pending.orderStartedAtMs
-                        : null;
-                      const finishedMs = Number.isFinite(
-                        pending?.orderFinishedAtMs,
-                      )
-                        ? pending.orderFinishedAtMs
-                        : null;
-                      const elapsedMs = Number.isFinite(pending?.orderElapsedMs)
-                        ? pending.orderElapsedMs
-                        : Number.isFinite(startedMs) &&
-                            Number.isFinite(finishedMs)
-                          ? Math.max(0, finishedMs - startedMs)
-                          : null;
-
-                      const tecnicoNombreFinal = String(
-                        user?.nombre ||
-                          user?.name ||
-                          user?.fullName ||
-                          user?.displayName ||
-                          user?.username ||
-                          "",
-                      ).trim();
-
-                      const coberturaTipoFinal = String(
-                        ordenFull?.cobertura_tipo ||
-                          ordenFull?.coberturaTipo ||
-                          "",
-                      ).trim();
-
-                      const html = await buildMantenimientoHtml({
-                        tipo,
-                        orden: ordenFull,
-                        operaciones: Array.isArray(ordenFull?.operaciones)
-                          ? ordenFull.operaciones
-                          : [],
-                        checkedMap,
-                        signatureData: firmaDataUrl,
-                        clienteEmail: email,
-                        clienteNombre: nombre,
-                        clienteCargo: cargo,
-                        avisoCliente: comentario,
-                        notaTecnico,
-                        tecnicoNombre: tecnicoNombreFinal,
-                        coberturaTipo: coberturaTipoFinal,
-                        consumibles,
-                        startMs: startedMs,
-                        finishMs: finishedMs,
-                        elapsedMs,
-                      });
-
-                      const { uri } = await Print.printToFileAsync({ html });
-                      const pdfBase64 = await FileSystem.readAsStringAsync(
-                        uri,
-                        {
-                          encoding: FileSystem.EncodingType.Base64,
-                        },
-                      );
-
-                      const fileName =
-                        tipo === "escalera"
-                          ? `mantenimiento_escaleras_${posicionReal + 1}.pdf`
-                          : `mantenimiento_elevadores_${posicionReal + 1}.pdf`;
-
-                      const workOrderItem = {
-                        OrderId: orderId,
-                        WorkOrderHeader: {
-                          Orderid: orderId,
-                          MaterialLong: email,
-                        },
-                        WorkOrderUserStatusSet: [
-                          { UserStText: "0300", Langu: "ES", Inactive: "" },
-                          { UserStText: "0400", Langu: "ES", Inactive: "X" },
-                        ],
-                        Attachments: [
-                          {
-                            DocId: orderId,
-                            FileName: fileName,
-                            MimeType: "pdf",
-                            Base64: pdfBase64,
-                          },
-                        ],
-                      };
-
-                      // MEJORA VISUAL: Forzamos la actualización progresiva del contador en la UI
-                      setSendProgress((prev) => ({
-                        ...prev,
-                        done: prev.done + 1,
-                        current: `Estructurada #${orderId}`,
-                      }));
-
-                      logSapPayload(
-                        "[BULK][JSON ORDEN INDIVIDUAL]",
-                        workOrderItem,
-                        { stripBase64: true },
-                      );
-
-                      return { orderId, ok: true, data: workOrderItem };
-                    } catch (err) {
-                      const msg =
-                        err?.response?.data?.detail ||
-                        err?.response?.data?.error ||
-                        err?.message ||
-                        "Error desconocido";
-                      setSendProgress((prev) => ({
-                        ...prev,
-                        done: prev.done + 1,
-                      }));
-                      return { orderId, ok: false, msg };
-                    }
-                  },
-                );
-
-                // Esperamos a que este sub-bloque termine de procesarse antes de pasar al siguiente
-                const resultadosBloque = await Promise.all(promesasBloque);
-
-                for (const item of resultadosBloque) {
-                  if (item.ok) {
-                    toWorkOrders.push(item.data);
-                  } else {
-                    results.push({
-                      orderId: item.orderId,
-                      ok: false,
-                      msg: item.msg,
-                    });
+                  if (!checkedMap || !Object.keys(checkedMap).length) {
+                    throw new Error(
+                      "No hay operaciones guardadas (pendingSign). Entra al detalle y marca/guarda primero.",
+                    );
                   }
-                }
 
-                // Pequeña pausa en milisegundos para permitir que el hilo de UI de React Native respire y pinte los cambios
-                await new Promise((resolve) => setTimeout(resolve, 100));
-              }
+                  const ordenFull = await fetchOrdenFullForPdf({
+                    apiClient: api,
+                    token,
+                    orderId,
+                  });
+
+                  const tipo = detectTipoMantenimiento(ordenFull);
+                  const consumibles = Array.isArray(pending?.consumibles)
+                    ? pending.consumibles
+                    : [];
+                  const notaTecnico = String(pending?.notaTecnico || "").trim();
+
+                  const startedMs = Number.isFinite(pending?.orderStartedAtMs)
+                    ? pending.orderStartedAtMs
+                    : null;
+                  const finishedMs = Number.isFinite(pending?.orderFinishedAtMs)
+                    ? pending.orderFinishedAtMs
+                    : null;
+                  const elapsedMs = Number.isFinite(pending?.orderElapsedMs)
+                    ? pending.orderElapsedMs
+                    : Number.isFinite(startedMs) && Number.isFinite(finishedMs)
+                      ? Math.max(0, finishedMs - startedMs)
+                      : null;
+
+                  const tecnicoNombreFinal = String(
+                    user?.nombre ||
+                      user?.name ||
+                      user?.fullName ||
+                      user?.displayName ||
+                      user?.username ||
+                      "",
+                  ).trim();
+
+                  const coberturaTipoFinal = String(
+                    ordenFull?.cobertura_tipo || ordenFull?.coberturaTipo || "",
+                  ).trim();
+
+                  const html = await buildMantenimientoHtml({
+                    tipo,
+                    orden: ordenFull,
+                    operaciones: Array.isArray(ordenFull?.operaciones)
+                      ? ordenFull.operaciones
+                      : [],
+                    checkedMap,
+                    signatureData: firmaDataUrl,
+                    clienteEmail: email,
+                    clienteNombre: nombre,
+                    clienteCargo: cargo,
+                    avisoCliente: comentario,
+                    notaTecnico,
+                    tecnicoNombre: tecnicoNombreFinal,
+                    coberturaTipo: coberturaTipoFinal,
+                    consumibles,
+                    startMs: startedMs,
+                    finishMs: finishedMs,
+                    elapsedMs,
+                  });
+
+                  const { uri } = await Print.printToFileAsync({ html });
+
+                  const fileName =
+                    tipo === "escalera"
+                      ? `mantenimiento_escaleras_${orderId}.pdf`
+                      : `mantenimiento_elevadores_${orderId}.pdf`;
+
+                  // Se guarda SOLO la ruta temporal.
+                  // Todavía NO se copia a pendientes.
+                  // Solo se copiará si el envío a SAP falla.
+                  tempPdfsByOrder[orderId] = {
+                    orderId,
+                    tempUri: uri,
+                    fileName,
+                    clienteEmail: email,
+                    clienteNombre: nombre,
+                    clienteCargo: cargo,
+                    comentarioCliente: comentario,
+                  };
+
+                  const pdfBase64 = await FileSystem.readAsStringAsync(uri, {
+                    encoding: FileSystem.EncodingType.Base64,
+                  });
+
+                  const workOrderItem = {
+                    OrderId: orderId,
+                    WorkOrderHeader: {
+                      Orderid: orderId,
+                      MaterialLong: email,
+                    },
+                    WorkOrderUserStatusSet: [
+                      { UserStText: "0300", Langu: "ES", Inactive: "" },
+                      { UserStText: "0400", Langu: "ES", Inactive: "X" },
+                    ],
+                    Attachments: [
+                      {
+                        DocId: orderId,
+                        FileName: fileName,
+                        MimeType: "pdf",
+                        Base64: pdfBase64,
+                      },
+                    ],
+                  };
+
+                  toWorkOrders.push(workOrderItem);
+
+                  // Borramos el archivo temporal para no llenar el almacenamiento
+
+                  setSendProgress((prev) => ({
+                    ...prev,
+                    done: prev.done + 1,
+                    current: `Estructurada #${orderId}`,
+                  }));
+                } catch (err) {
+                  const msg =
+                    err?.response?.data?.detail ||
+                    err?.response?.data?.error ||
+                    err?.message ||
+                    "Error desconocido";
+
+                  results.push({ orderId, ok: false, msg });
+
+                  setSendProgress((prev) => ({
+                    ...prev,
+                    done: prev.done + 1,
+                  }));
+                }
+              } // FIN DEL FOR
 
               if (!toWorkOrders.length) {
                 Alert.alert(
@@ -1249,14 +1386,6 @@ export default function PendienteFirmaIndex() {
               const tiempoTranscurridoMili = (
                 tiempoFinCronometro - tiempoInicioCronometro
               ).toFixed(2);
-              const tiempoTranscurridoSeg = (
-                parseFloat(tiempoTranscurridoMili) / 1000
-              ).toFixed(2);
-
-              Alert.alert(
-                "Cronómetro de empaquetado optimizado",
-                `La aplicación procesó todo de manera fluida:\n\n⏱️ ${tiempoTranscurridoMili} ms (${tiempoTranscurridoSeg} segundos)\n\nEstructurado exitosamente para las ${toWorkOrders.length} orden(es).`,
-              );
 
               const workOrderBulkEndpoint =
                 "/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderBulkSet";
@@ -1287,23 +1416,70 @@ export default function PendienteFirmaIndex() {
                   });
                 }
               } else {
-                const sapResponse = await api.post(
-                  workOrderBulkEndpoint,
-                  bulkPayload,
-                  {
+                try {
+                  await api.post(workOrderBulkEndpoint, bulkPayload, {
                     headers: token
                       ? { Authorization: `Bearer ${token}` }
                       : undefined,
-                  },
-                );
-
-                for (const item of toWorkOrders) {
-                  const orderId = String(item?.OrderId || "").trim();
-                  results.push({
-                    orderId,
-                    ok: true,
-                    msg: "Enviado OK dentro del paquete bulk.",
                   });
+
+                  // Si SAP respondió OK, ahora sí borramos los PDFs temporales.
+                  for (const item of toWorkOrders) {
+                    const orderId = String(item?.OrderId || "").trim();
+
+                    const tempPdf = tempPdfsByOrder[orderId];
+
+                    if (tempPdf?.tempUri) {
+                      await FileSystem.deleteAsync(tempPdf.tempUri, {
+                        idempotent: true,
+                      }).catch(() => {});
+                    }
+
+                    results.push({
+                      orderId,
+                      ok: true,
+                      msg: "Enviado OK dentro del paquete bulk.",
+                    });
+                  }
+                } catch (sendErr) {
+                  const msg =
+                    sendErr?.response?.data?.detail ||
+                    sendErr?.response?.data?.error ||
+                    sendErr?.message ||
+                    "No se pudo enviar el paquete a SAP.";
+
+                  console.warn("[BULK][SAP ERROR]", msg);
+
+                  // Si SAP falló, ahora sí guardamos SOLO los PDFs que no se mandaron.
+                  for (const item of toWorkOrders) {
+                    const orderId = String(item?.OrderId || "").trim();
+                    const tempPdf = tempPdfsByOrder[orderId];
+
+                    if (tempPdf?.tempUri) {
+                      await saveFailedSignaturePdf({
+                        orderId,
+                        tempUri: tempPdf.tempUri,
+                        fileName: tempPdf.fileName,
+                        clienteEmail: tempPdf.clienteEmail,
+                        clienteNombre: tempPdf.clienteNombre,
+                        clienteCargo: tempPdf.clienteCargo,
+                        comentarioCliente: tempPdf.comentarioCliente,
+                        reason: msg,
+                      });
+
+                      await FileSystem.deleteAsync(tempPdf.tempUri, {
+                        idempotent: true,
+                      }).catch(() => {});
+                    }
+
+                    results.push({
+                      orderId,
+                      ok: false,
+                      msg: "No se envió a SAP. PDF guardado localmente para compartir.",
+                    });
+                  }
+
+                  await loadFailedPdfs();
                 }
               }
 
@@ -1327,10 +1503,11 @@ export default function PendienteFirmaIndex() {
               const okCount = results.filter((r) => r.ok).length;
               const failCount = results.length - okCount;
 
+              // === EL ALERT AHORA ESTÁ ASEGURADO ===
               Alert.alert(
                 "Envío terminado",
                 online
-                  ? `Correctas: ${okCount}\nCon error: ${failCount}\n\nSe envió el paquete Bulk a SAP.`
+                  ? `Correctas: ${okCount}\nCon error: ${failCount}\n\nSe envió el paquete Bulk a SAP en ${tiempoTranscurridoMili}ms.`
                   : `Guardadas/encoladas: ${okCount}\nCon error: ${failCount}\n\nEl paquete Bulk se enviará automáticamente cuando vuelva la red.`,
               );
 
@@ -1341,6 +1518,10 @@ export default function PendienteFirmaIndex() {
               }
             } catch (globalErr) {
               console.log("[BULK][ERROR PAQUETE GLOBAL]", globalErr);
+              Alert.alert(
+                "Error Global",
+                "Ocurrió un fallo catastrófico enviando el paquete. Revisa tu conexión y memoria.",
+              );
             } finally {
               setSending(false);
               setSendProgress((p) => ({ ...p, current: "" }));
@@ -1915,6 +2096,33 @@ export default function PendienteFirmaIndex() {
                 {sending ? "Enviando…" : "Enviar órdenes"}
               </Text>
             </TouchableOpacity>
+            {/* AQUÍ VA EL BOTÓN NUEVO */}
+            <TouchableOpacity
+              style={[
+                styles.bottomBtn,
+                {
+                  backgroundColor: FIORI.cardSubtle,
+                  borderWidth: 1,
+                  borderColor: FIORI.border,
+                },
+              ]}
+              onPress={async () => {
+                await loadFailedPdfs();
+                setShowFailedPdfsModal(true);
+              }}
+              activeOpacity={0.85}
+              disabled={sending}
+            >
+              <Ionicons
+                name="document-attach-outline"
+                size={18}
+                color={FIORI.ink}
+                style={{ marginRight: 6 }}
+              />
+              <Text style={[styles.bottomBtnText, { color: FIORI.ink }]}>
+                PDFs no enviados
+              </Text>
+            </TouchableOpacity>
           </View>
 
           <Text style={{ marginTop: 8, color: FIORI.textMuted, fontSize: 12 }}>
@@ -2302,8 +2510,160 @@ export default function PendienteFirmaIndex() {
             </View>
           </View>
         </View>
+        {/* AQUÍ TERMINA TU MODAL DE FIRMA */}
       </Modal>
 
+      {/* AQUÍ VA EL MODAL NUEVO DE PDFs NO ENVIADOS */}
+      <Modal
+        visible={showFailedPdfsModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowFailedPdfsModal(false)}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={[styles.modalCard, { maxWidth: 540, maxHeight: "85%" }]}>
+            <Text style={styles.modalTitle}>PDFs no enviados</Text>
+
+            <Text style={styles.modalSub}>
+              Aquí se guardan solo los PDFs de las órdenes que no se pudieron
+              mandar a SAP. Puedes compartirlos por WhatsApp, correo u otro
+              medio.
+            </Text>
+
+            <ScrollView style={{ marginTop: 12, maxHeight: 430 }}>
+              {failedPdfs.length === 0 ? (
+                <Text
+                  style={{
+                    textAlign: "center",
+                    color: FIORI.textMuted,
+                    marginTop: 20,
+                  }}
+                >
+                  No hay PDFs no enviados.
+                </Text>
+              ) : (
+                failedPdfs.map((item) => (
+                  <View key={item.id} style={styles.previewOrderCard}>
+                    <Text style={styles.previewOrderTitle}>
+                      Orden #{item.orderId}
+                    </Text>
+
+                    <Text style={styles.previewOrderText}>
+                      Archivo: {item.fileName}
+                    </Text>
+
+                    <Text style={styles.previewOrderText}>
+                      Cliente: {item.clienteNombre || "—"}
+                    </Text>
+
+                    <Text style={styles.previewOrderText}>
+                      Correo: {item.clienteEmail || "—"}
+                    </Text>
+
+                    <Text style={styles.previewOrderText}>
+                      Motivo: {item.reason || "No se pudo enviar a SAP"}
+                    </Text>
+
+                    <Text style={styles.previewOrderText}>
+                      Fecha:{" "}
+                      {item.createdAt
+                        ? new Date(item.createdAt).toLocaleString()
+                        : "—"}
+                    </Text>
+
+                    <View
+                      style={{
+                        flexDirection: "row",
+                        justifyContent: "flex-end",
+                        gap: 10,
+                        flexWrap: "wrap",
+                        marginTop: 10,
+                      }}
+                    >
+                      <TouchableOpacity
+                        style={[
+                          styles.smallBtn,
+                          { backgroundColor: FIORI.accent },
+                        ]}
+                        onPress={() => shareFailedPdf(item)}
+                      >
+                        <Ionicons
+                          name="share-social-outline"
+                          size={18}
+                          color="#fff"
+                          style={{ marginRight: 6 }}
+                        />
+                        <Text style={[styles.smallBtnText, { color: "#fff" }]}>
+                          Compartir
+                        </Text>
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        style={[
+                          styles.smallBtn,
+                          {
+                            backgroundColor: FIORI.cardSubtle,
+                            borderWidth: 1,
+                            borderColor: FIORI.border,
+                          },
+                        ]}
+                        onPress={() => {
+                          Alert.alert(
+                            "Eliminar PDF",
+                            `¿Deseas eliminar el PDF de la orden ${item.orderId}?`,
+                            [
+                              { text: "Cancelar", style: "cancel" },
+                              {
+                                text: "Eliminar",
+                                style: "destructive",
+                                onPress: async () => {
+                                  await deleteFailedPdfItem(item);
+                                  await loadFailedPdfs();
+                                },
+                              },
+                            ],
+                          );
+                        }}
+                      >
+                        <Ionicons
+                          name="trash-outline"
+                          size={18}
+                          color={FIORI.danger}
+                          style={{ marginRight: 6 }}
+                        />
+                        <Text
+                          style={[styles.smallBtnText, { color: FIORI.danger }]}
+                        >
+                          Eliminar
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                ))
+              )}
+            </ScrollView>
+
+            <View
+              style={{
+                flexDirection: "row",
+                justifyContent: "flex-end",
+                marginTop: 14,
+              }}
+            >
+              <TouchableOpacity
+                style={[styles.smallBtn, { backgroundColor: FIORI.accent }]}
+                onPress={() => setShowFailedPdfsModal(false)}
+              >
+                <Text style={[styles.smallBtnText, { color: "#fff" }]}>
+                  Cerrar
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ESTE YA LO TIENES, NO LO BORRES */}
       <Modal
         visible={sending}
         transparent
