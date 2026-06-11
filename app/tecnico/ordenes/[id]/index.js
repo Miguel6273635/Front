@@ -18,6 +18,7 @@ import { WebView } from "react-native-webview";
 import Header from "../../../../src/components/Header";
 import api from "../../../../src/services/api";
 import { useAuth } from "../../../../src/context/AuthContext";
+import { addPageNumbersToPdfBase64 } from "../../../../src/services/pdf/addPageNumbersToPdf";
 import { useLocalSearchParams, router } from "expo-router";
 
 import {
@@ -228,11 +229,7 @@ function fmtDMY(val) {
 }
 
 const opKey = (orderId, op) =>
-  `${orderId}-${op.activity || op.Activity || ""}${
-    op.subactivity || op.SubActivity
-      ? `-${op.subactivity || op.SubActivity}`
-      : ""
-  }`;
+  `${orderId}-${op.activity || op.Activity || ""}`;
 
 /* ====== SAP helpers para fechas/horas y prorrateo ====== */
 function msToMinutesRounded(ms) {
@@ -339,8 +336,7 @@ function buildConfirmationPayloadFromSelectedOps({
     const map = new Map();
     for (const op of ops) {
       const act = String(op.activity || op.Activity || "").trim();
-      const sub = String(op.subactivity || op.SubActivity || "").trim();
-      const key = `${act}__${sub}`;
+      const key = `${act}`;
       if (!map.has(key)) map.set(key, op);
     }
     return Array.from(map.values());
@@ -372,10 +368,7 @@ function buildConfirmationPayloadFromSelectedOps({
     Mail: String(user?.correo || user?.email || "").trim(),
     ConfirmationOrderSet: selectedOps.map((op, idx) => {
       const actRaw = String(op.activity || op.Activity || "").trim();
-      const subRaw = String(op.subactivity || op.SubActivity || "").trim();
-
       const Operation = actRaw.padStart(4, "0");
-      const SubActivity = subRaw ? subRaw.padStart(4, "0") : "";
       const w = windows[idx];
 
       const row = {
@@ -391,8 +384,6 @@ function buildConfirmationPayloadFromSelectedOps({
         ExecFinTime: sapTimePTFromMs(w.end),
         FinConf: "X",
       };
-
-      if (SubActivity) row.SubActivity = SubActivity;
       return row;
     }),
     ConfirmationMaterialSet,
@@ -522,17 +513,14 @@ function normalizeOpsFromBackend(ops = []) {
   if (!Array.isArray(ops)) return [];
   return ops.map((op) => {
     const Activity = op.Activity || op.activity || op.Vornr || "";
-    const SubActivity = op.SubActivity || op.subactivity || op.Uvorn || "";
     const Description = op.Description || op.description || op.Ltxa1 || "";
     const StandardTextKey = op.StandardTextKey || op.standardTextKey || "";
 
     return {
       ...op,
       activity: String(Activity || ""),
-      subactivity: String(SubActivity || ""),
       description: String(Description || ""),
       Activity: String(Activity || ""),
-      SubActivity: String(SubActivity || ""),
       Description: String(Description || ""),
       StandardTextKey: String(StandardTextKey || ""),
       standardTextKey: String(StandardTextKey || ""),
@@ -874,12 +862,16 @@ export default function DetalleOrden() {
 
   const baseStatusCode = pickCurrentStatusCode(orden);
 
+  const isAdvancedStatus = ["0400", "0300", "0600"].includes(baseStatusCode);
+
+  // ✅ Solo mostrar 0100 por check-in pendiente si la orden NO avanzó.
+  // Si ya está 0400, 0300 o 0600, respetamos ese estatus.
   const statusCode =
-    hasPendingOfflineCheckin && baseStatusCode !== "0200"
+    hasPendingOfflineCheckin && !isAdvancedStatus && baseStatusCode !== "0200"
       ? "0100"
       : baseStatusCode;
   const statusLabel =
-    hasPendingOfflineCheckin && statusCode !== "0200"
+    hasPendingOfflineCheckin && !isAdvancedStatus && statusCode !== "0200"
       ? "CHECK-IN PENDIENTE (OFFLINE)"
       : resolveStatusLabelFromCode(
           statusCode,
@@ -943,23 +935,50 @@ export default function DetalleOrden() {
   };
 
   const applyLocalOrderStatus = async (orderId, code) => {
-    const statusCodeStr = String(code || "").trim();
+    const statusCodeStr = normalizeCode(code);
     const statusLabelStr = resolveStatusLabelFromCode(statusCodeStr);
+
+    const localPatch = {
+      estatus_code: statusCodeStr,
+      userstatus: statusCodeStr,
+      UserStatus: statusCodeStr,
+      UserStText: statusCodeStr,
+      estatus_label: statusLabelStr,
+
+      // ✅ Extra para que la pantalla identifique bien 0400
+      isPendingSignature: statusCodeStr === "0400",
+      isFinal: statusCodeStr === "0300" || statusCodeStr === "0600",
+    };
 
     setOrden((prev) => ({
       ...(prev || {}),
-      estatus_code: statusCodeStr,
-      userstatus: statusCodeStr,
-      estatus_label: statusLabelStr,
+      ...localPatch,
     }));
 
     try {
       await setLocalStatusPatch(userEmail, orderId, statusCodeStr);
       await patchCacheOrdenesTecnicoList(userEmail, orderId, statusCodeStr);
       await patchCacheOrdenTecnicoDetail(orderId, statusCodeStr);
-      if (statusCodeStr !== "0200") {
+
+      // ✅ Guardar también el detalle completo con el estatus nuevo
+      const cached = await loadOrdenTecnicoDetail(orderId);
+      const base = cached?.data || orden || {};
+
+      await safeSaveDetailIfWindow(orderId, {
+        ...(base || {}),
+        ...localPatch,
+      });
+
+      // ✅ Si ya avanzó a 0400/0300/0600, quitamos marca vieja de TBM/check-in
+      if (["0400", "0300", "0600"].includes(statusCodeStr)) {
         await AsyncStorage.removeItem(`tbmky_status_${String(orderId).trim()}`);
       }
+
+      console.log("[DETALLE][STATUS][LOCAL]", {
+        orderId,
+        statusCodeStr,
+        statusLabelStr,
+      });
     } catch (e) {
       console.log("[DETALLE] applyLocalOrderStatus error:", e?.message || e);
     }
@@ -2019,6 +2038,9 @@ export default function DetalleOrden() {
 
         await applyLocalOrderStatus(orderId, "0400");
 
+        setFinalizeMode(false);
+        router.replace("/tecnico/ordenes");
+
         Alert.alert(
           "Guardado offline",
           "La orden quedó en pendiente de firma. Las operaciones/consumibles y el estatus 0400 se enviarán cuando vuelva el internet.",
@@ -2270,6 +2292,52 @@ export default function DetalleOrden() {
       setSavingPending0400(false);
     }
   };
+
+  function hacerPreviewConColumnasManuales(html = "") {
+    return String(html || "")
+      .replaceAll(
+        'class="ubicGrid"',
+        'class="ubicGrid previewManualGrid"'
+      )
+      .replace(
+        "</head>",
+        `
+        <style>
+          @media screen {
+            html, body {
+              width: 816px !important;
+              min-width: 816px !important;
+            }
+
+            .pagina {
+              width: 796px !important;
+              min-width: 796px !important;
+            }
+
+            .previewManualGrid {
+              display: grid !important;
+              grid-template-columns: 1fr 1fr !important;
+              column-gap: 10px !important;
+            }
+
+            .previewManualGrid .opItem {
+              width: 100% !important;
+              display: table !important;
+            }
+
+            .previewManualGrid .opItem:nth-child(odd) {
+              grid-column: 1;
+            }
+
+            .previewManualGrid .opItem:nth-child(even) {
+              grid-column: 2;
+            }
+          }
+        </style>
+        </head>`
+      );
+  }
+
   const generarVistaPreviaPdfAntesFirma = async () => {
     try {
       const orderId = String(orden?.Orderid || id || "").trim();
@@ -2328,13 +2396,21 @@ export default function DetalleOrden() {
         elapsedMs: draftElapsedMs,
       });
 
-      setMantHtmlPreview(String(html || ""));
+      const htmlPreview = hacerPreviewConColumnasManuales(html);
+      setMantHtmlPreview(htmlPreview);
 
-      const { uri } = await Print.printToFileAsync({
+      const result = await Print.printToFileAsync({
         html: String(html || ""),
+        base64: true,
       });
 
-      setMantPdfUri(uri);
+      const pdfBase64ConPaginas = await addPageNumbersToPdfBase64(result.base64);
+
+      await FileSystem.writeAsStringAsync(result.uri, pdfBase64ConPaginas, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+
+      setMantPdfUri(result.uri);
     } catch (error) {
       console.log("[PDF PREVIEW] Error:", error);
       setShowMantPreview(false);
@@ -2483,8 +2559,7 @@ export default function DetalleOrden() {
         const map = new Map();
         for (const op of ops) {
           const act = String(op.activity || op.Activity || "").trim();
-          const sub = String(op.subactivity || op.SubActivity || "").trim();
-          const key = `${act}__${sub}`;
+          const key = `${act}`;
           if (!map.has(key)) map.set(key, op);
         }
         return Array.from(map.values());
@@ -2523,10 +2598,7 @@ export default function DetalleOrden() {
         Mail: String(userEmail || "").trim(), // 👈 AQUI
         ConfirmationOrderSet: selectedOps.map((op, idx) => {
           const actRaw = String(op.activity || op.Activity || "").trim();
-          const subRaw = String(op.subactivity || op.SubActivity || "").trim();
-
           const Operation = actRaw.padStart(4, "0");
-          const SubActivity = subRaw ? subRaw.padStart(4, "0") : "";
           const w = windows[idx];
 
           const row = {
@@ -2542,8 +2614,6 @@ export default function DetalleOrden() {
             ExecFinTime: sapTimePTFromMs(w.end),
             FinConf: "X",
           };
-
-          if (SubActivity) row.SubActivity = SubActivity;
           return row;
         }),
         ConfirmationMaterialSet,
@@ -2578,21 +2648,27 @@ export default function DetalleOrden() {
         elapsedMs: elapsedNow,
       });
 
-      setMantHtmlPreview(String(html || ""));
+      const htmlPreview = hacerPreviewConColumnasManuales(html);
+      setMantHtmlPreview(htmlPreview);
 
       let pdfBase64 = "";
       let pdfUri = null;
 
       try {
-        const { uri } = await Print.printToFileAsync({
-          html: String(html || ""),
-        });
-        pdfUri = uri;
-        setMantPdfUri(uri);
+        const result = await Print.printToFileAsync({
+        html: String(html || ""),
+        base64: true,
+      });
 
-        pdfBase64 = await FileSystem.readAsStringAsync(uri, {
-          encoding: FileSystem.EncodingType.Base64,
-        });
+      const pdfBase64ConPaginas = await addPageNumbersToPdfBase64(result.base64);
+
+      await FileSystem.writeAsStringAsync(result.uri, pdfBase64ConPaginas, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+
+      pdfUri = result.uri;
+      pdfBase64 = pdfBase64ConPaginas;
+      setMantPdfUri(result.uri);
       } catch (e) {
         console.warn("No se pudo generar PDF (base64):", e?.message || e);
         setMantPdfUri(null);
@@ -3250,7 +3326,7 @@ export default function DetalleOrden() {
           <View style={[styles.modalCard, { maxWidth: 720, height: "90%" }]}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>
-                Vista previa · Reporte de mantenimiento
+                Reporte de mantenimiento (vista previa)
               </Text>
               <TouchableOpacity
                 onPress={() => {

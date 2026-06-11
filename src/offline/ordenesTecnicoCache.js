@@ -5,7 +5,8 @@ export const OFFLINE_DAYS_BEFORE = 8;
 export const OFFLINE_DAYS_AFTER = 8;
 
 const LIST_KEY = (userEmail) => `ordenesTecnico:list:${userEmail || "unknown"}`;
-const DETAIL_KEY = (orderId) => `ordenesTecnico:detail:${String(orderId || "").trim()}`;
+const DETAIL_KEY = (orderId) =>
+  `ordenesTecnico:detail:${String(orderId || "").trim()}`;
 const META_KEY = (userEmail) => `ordenesTecnico:meta:${userEmail || "unknown"}`;
 
 // --- helpers fecha ---
@@ -155,11 +156,13 @@ function sanitizeDetailForCache(detail) {
   if (!detail || typeof detail !== "object") return null;
 
   const ops = Array.isArray(detail?.operaciones) ? detail.operaciones : [];
+
   const opsSlim = ops.map((op) => ({
     id: op?.id,
     Usr02: op?.Usr02 ?? op?.usr02,
     Activity: op?.Activity ?? op?.activity ?? op?.Vornr,
-    SubActivity: op?.SubActivity ?? op?.subactivity ?? op?.Uvorn,
+    //Cambios agregados por lo del campo de subactivity Miguel Angel 04/06/2026
+    //SubActivity: op?.SubActivity ?? op?.subactivity ?? op?.Uvorn,
     Description: op?.Description ?? op?.description ?? op?.Ltxa1,
     StandardTextKey: op?.StandardTextKey ?? op?.standardTextKey,
     estatus: op?.estatus,
@@ -233,7 +236,12 @@ export async function saveOrdenTecnicoDetail(orderId, data) {
   }
 
   if (bytes > MAX_DETAIL_BYTES) {
-    console.log("[OFFLINE] Detalle demasiado grande, NO se guarda:", orderId, "bytes:", bytes);
+    console.log(
+      "[OFFLINE] Detalle demasiado grande, NO se guarda:",
+      orderId,
+      "bytes:",
+      bytes,
+    );
     return false;
   }
 
@@ -262,8 +270,12 @@ export async function loadOrdenTecnicoDetail(orderId) {
 export async function pruneDetallesNoUsados(orderIdsKeep = []) {
   try {
     const keys = await AsyncStorage.getAllKeys();
-    const detailKeys = keys.filter((k) => k.startsWith("ordenesTecnico:detail:"));
-    const keepSet = new Set(orderIdsKeep.map((x) => `ordenesTecnico:detail:${String(x).trim()}`));
+    const detailKeys = keys.filter((k) =>
+      k.startsWith("ordenesTecnico:detail:"),
+    );
+    const keepSet = new Set(
+      orderIdsKeep.map((x) => `ordenesTecnico:detail:${String(x).trim()}`),
+    );
     const toDelete = detailKeys.filter((k) => !keepSet.has(k));
     if (toDelete.length) await AsyncStorage.multiRemove(toDelete);
   } catch {
@@ -279,7 +291,9 @@ export async function pruneDetallesByWindow(userEmail, window) {
   try {
     const cached = await loadOrdenesTecnicoList(userEmail);
     const list = cached?.data || [];
-    const keepIds = list.map((x) => String(x?.Orderid ?? "").trim()).filter(Boolean);
+    const keepIds = list
+      .map((x) => String(x?.Orderid ?? "").trim())
+      .filter(Boolean);
 
     await pruneDetallesNoUsados(keepIds);
     return { ok: true, keep: keepIds.length };

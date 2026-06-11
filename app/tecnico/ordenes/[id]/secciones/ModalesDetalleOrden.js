@@ -78,11 +78,7 @@ export default function ModalesDetalleOrden({
   }, [showSignModal]);
 
   const titleOp = selectedOp
-    ? `${safeStr(selectedOp.activity || selectedOp.Activity)}${
-        safeStr(selectedOp.subactivity || selectedOp.SubActivity)
-          ? " / " + safeStr(selectedOp.subactivity || selectedOp.SubActivity)
-          : ""
-      }`
+    ? safeStr(selectedOp.activity || selectedOp.Activity)
     : "";
 
   const closeSign = () => {
@@ -437,7 +433,7 @@ export default function ModalesDetalleOrden({
                       color="#0A6ED1"
                     />
                     <Text style={signStyles.previewPdfBtnText}>
-                      Visualizar PDF antes de firmar
+                      Visualizar datos antes de firmar
                     </Text>
                   </TouchableOpacity>
 

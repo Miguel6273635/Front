@@ -118,7 +118,7 @@ export async function upsertSapQueueItem({
       (x) =>
         x &&
         safeStr(x.orderId) === item.orderId &&
-        safeStr(x.dedupeKey || x.key) === item.dedupeKey
+        safeStr(x.dedupeKey || x.key) === item.dedupeKey,
     );
 
     if (idx >= 0) {
@@ -155,7 +155,11 @@ export async function removeSapQueueItemsByKey({ orderId, dedupeKey }) {
   const before = q.length;
 
   const next = q.filter(
-    (x) => !(safeStr(x.orderId) === orderIdNorm && safeStr(x.dedupeKey || x.key) === k)
+    (x) =>
+      !(
+        safeStr(x.orderId) === orderIdNorm &&
+        safeStr(x.dedupeKey || x.key) === k
+      ),
   );
 
   await saveQueue(next);
@@ -178,7 +182,9 @@ export async function processSapQueue({ ensureValidToken, apiInstance } = {}) {
   let q = await loadQueue();
   if (!q.length) return { ok: true, processed: 0, remaining: 0 };
 
-  q = q.filter((x) => x && (safeStr(x.endpoint) || x.type === "PENDIENTE_FIRMA_0300"));
+  q = q.filter(
+    (x) => x && (safeStr(x.endpoint) || x.type === "PENDIENTE_FIRMA_0300"),
+  );
 
   const keep = [];
   let processed = 0;
@@ -205,25 +211,61 @@ export async function processSapQueue({ ensureValidToken, apiInstance } = {}) {
       // - luego status 0300
       // =========================
       if (item.type === "PENDIENTE_FIRMA_0300") {
+        const endpoint = safeStr(item.endpoint);
+
+        console.log("[SAP QUEUE] Procesando PENDIENTE_FIRMA_0300:", {
+          orderId: item.orderId,
+          endpoint,
+          hasPayload: !!item.payload,
+          hasHeader: !!item.payload?.WorkOrderHeader,
+          hasStatus: Array.isArray(item.payload?.WorkOrderUserStatusSet),
+          hasAttachments: Array.isArray(item.payload?.Attachments),
+        });
+
+        // NUEVO FLUJO: un solo JSON con PDF + estatus 0300
+        if (
+          endpoint &&
+          item.payload?.WorkOrderHeader &&
+          Array.isArray(item.payload?.WorkOrderUserStatusSet) &&
+          Array.isArray(item.payload?.Attachments)
+        ) {
+          await apiInstance.post(endpoint, item.payload);
+
+          console.log("[SAP QUEUE] OK PENDIENTE_FIRMA_0300 payload único:", {
+            orderId: item.orderId,
+          });
+
+          processed++;
+          continue;
+        }
+
+        // FLUJO VIEJO: compatibilidad por si tienes órdenes anteriores en cola
         const attachmentEndpoint = safeStr(item?.payload?.attachmentEndpoint);
         const statusEndpoint = safeStr(item?.payload?.statusEndpoint);
 
         const attachmentPayload = item?.payload?.attachmentPayload;
         const statusPayload = item?.payload?.statusPayload;
 
-        if (!attachmentEndpoint || !attachmentPayload) {
-          throw new Error("Queue item PENDIENTE_FIRMA_0300 sin attachment válido");
+        if (
+          attachmentEndpoint &&
+          attachmentPayload &&
+          statusEndpoint &&
+          statusPayload
+        ) {
+          await apiInstance.post(attachmentEndpoint, attachmentPayload);
+          await apiInstance.post(statusEndpoint, statusPayload);
+
+          console.log("[SAP QUEUE] OK PENDIENTE_FIRMA_0300 payload viejo:", {
+            orderId: item.orderId,
+          });
+
+          processed++;
+          continue;
         }
 
-        if (!statusEndpoint || !statusPayload) {
-          throw new Error("Queue item PENDIENTE_FIRMA_0300 sin status válido");
-        }
-
-        await apiInstance.post(attachmentEndpoint, attachmentPayload);
-        await apiInstance.post(statusEndpoint, statusPayload);
-
-        processed++;
-        continue;
+        throw new Error(
+          `Queue item PENDIENTE_FIRMA_0300 inválido para orden ${item.orderId}`,
+        );
       }
 
       const method = normalizeMethod(item.method).toLowerCase();

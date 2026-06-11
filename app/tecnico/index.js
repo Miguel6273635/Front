@@ -116,7 +116,7 @@ export default function TecnicoHome() {
           <Text style={styles.dateText}>
             {new Date().toLocaleDateString('es-ES', { weekday: 'long', month: 'long', day: 'numeric' }).toUpperCase()}
           </Text>
-          <Text style={styles.greetingText}>Listo para tu jornada, {nombreDashboard}.</Text>
+          <Text style={styles.greetingText}>Listo para tu jornada</Text>
         </View>
 
         {/* ESTRUCTURA BENTO BOX */}
@@ -180,8 +180,7 @@ const COLORS = {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.pageBg },
-  // 1. Aumentamos el paddingBottom para dar más "aire" al final y evitar que el último elemento quede pegado.
-  scrollContent: { padding: 20, paddingBottom: 120 },
+  scrollContent: { padding: 20, paddingBottom: 100 },
   
   // Header Text
   greetingSection: { marginBottom: 24 },
@@ -215,7 +214,7 @@ const styles = StyleSheet.create({
   // Square Cards
   squareCard: {
     flex: 1,
-    height: 125, 
+    height: 140,
     borderRadius: 28,
     padding: 20,
     justifyContent: "space-between",
@@ -225,7 +224,6 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 4 },
     elevation: 2,
   },
-  
   squareLight: { backgroundColor: COLORS.cardBg },
   squareDark: { backgroundColor: COLORS.accentDark },
   squareHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" },

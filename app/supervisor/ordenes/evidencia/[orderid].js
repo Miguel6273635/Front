@@ -88,6 +88,8 @@ function normalizeSupervisorOps(ops = []) {
         op?.activity || op?.Activity || op?.Vornr || "",
       ).trim();
 
+      //CAMBIOS MIGUEL 03/06/2026 quitando el campo de SubActivity
+      /*
       const subactivity = String(
         op?.subactivity || op?.SubActivity || op?.Uvorn || "",
       ).trim();
@@ -97,28 +99,43 @@ function normalizeSupervisorOps(ops = []) {
         activity,
         subactivity,
       };
+      */
+      return {
+        ...op,
+        activity,
+      };
     })
     .filter((op) => !!op.activity);
 }
 
 function getOpId(orderId, op, index) {
   const activity = String(op?.activity || op?.Activity || "").trim();
+  //cambios agregados para quitar lo del campo del subactivit
+  /*
   const subactivity = String(op?.subactivity || op?.SubActivity || "").trim();
 
   return (
     `${orderId}-${activity}${subactivity ? `-${subactivity}` : ""}` ||
     `op-${index}`
   );
-}
+*/
 
+  return `${orderId}-${activity}-${index}`;
+}
 function getOpText(op) {
   const activity = String(op?.activity || op?.Activity || "").trim();
+  const desc = String(op?.description || op?.Description || "").trim();
+  //cambios agregados para quitar lo del campo del subactivit
+  /* 
   const subactivity = String(op?.subactivity || op?.SubActivity || "").trim();
   const desc = String(op?.description || op?.Description || "").trim();
 
   return `${activity}${subactivity ? `-${subactivity}` : ""}${
     desc ? ` · ${desc}` : ""
   }`;
+
+*/
+  return `${activity}${desc ? ` · ${desc}` : ""}`;
 }
 
 function buildSupervisorConfirmationPayload({
@@ -147,10 +164,15 @@ function buildSupervisorConfirmationPayload({
     Order: "S1",
     ConfirmationOrderSet: selectedOps.map((op, idx) => {
       const actRaw = String(op.activity || "").trim();
+      //const subRaw = String(op.subactivity || "").trim();
+      /*
       const subRaw = String(op.subactivity || "").trim();
 
       const Operation = actRaw.padStart(4, "0");
       const SubActivity = subRaw ? subRaw.padStart(4, "0") : "";
+
+      */
+      const Operation = actRaw.padStart(4, "0");
       const w = windows[idx];
 
       const row = {
@@ -166,8 +188,8 @@ function buildSupervisorConfirmationPayload({
         ExecFinTime: sapTimePTFromMs(w.end),
         FinConf: "X",
       };
-
-      if (SubActivity) row.SubActivity = SubActivity;
+      // se elimino el if por lo del campo del SubActivity cambios Miguel Anel 03/06/2026
+      // if (SubActivity) row.SubActivity = SubActivity;
 
       return row;
     }),

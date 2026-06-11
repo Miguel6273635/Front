@@ -544,6 +544,7 @@ export default function ListaOrdenesTecnico() {
     const stBase = resolveUserstatus(item?.userstatus ?? "", statusCatalogMap, item);
     const isPendingOffline = pendingSet.has(String(item?.Orderid));
     const tbmYaProceso = stBase.code === "0200";
+    const ordenYaAvanzo = ["0400", "0300", "0600"].includes(stBase.code);
 
     const st = isPendingOffline && !tbmYaProceso ? {
       ...stBase, code: "0100", label: STATUS_META["0100"].label, type: "pendiente",

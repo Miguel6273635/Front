@@ -818,7 +818,7 @@ export default function ListaOrdenesSupervisor() {
 
   return (
     <View style={styles.container}>
-      <Header title="Órdenes del Supervisor" />
+      <Header title="Ordenes del Supervisor" />
 
       <View style={styles.filtersWrap}>
         <View style={styles.searchWrap}>

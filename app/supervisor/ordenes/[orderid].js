@@ -449,8 +449,9 @@ export default function DetalleOrdenSupervisor() {
           ) : (
             operaciones.map((op, idx) => {
               const activity = String(op?.Activity || "").padStart(4, "0");
-              const sub = String(op?.SubActivity || "");
-              const opId = `${activity}-${sub}-${idx}`;
+              //comentado por Miguel 03/06/2026 para quitar SubActivity
+              //const sub = String(op?.SubActivity || "");
+              const opId = `${activity}-${idx}`;
 
               const opRawStatus =
                 op?.userstatus ??
@@ -477,9 +478,7 @@ export default function DetalleOrdenSupervisor() {
                   <View style={styles.operationHeaderStatic}>
                     <View style={{ flex: 1 }}>
                       <Text style={styles.operationTitle}>
-                        {activity}
-                        {sub ? `.${sub}` : ""} —{" "}
-                        {op?.Description || "Sin descripción"}
+                        {activity} — {op?.Description || "Sin descripción"}
                       </Text>
 
                       <View style={styles.opBadgeRow}>

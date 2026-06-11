@@ -32,13 +32,18 @@ export default function SideDrawer() {
   const { user, logout } = useAuth();
 
   const homeRoute =
-    user?.rol_id === 1 ? "/admin" : user?.rol_id === 2 ? "/supervisor" : "/tecnico";
+    user?.rol_id === 1
+      ? "/admin"
+      : user?.rol_id === 2
+        ? "/supervisor"
+        : "/tecnico";
 
-  const slideX = useRef(new Animated.Value(-320)).current;
+  // 👉 Empieza oculto a la derecha
+  const slideX = useRef(new Animated.Value(320)).current;
 
   useEffect(() => {
     Animated.timing(slideX, {
-      toValue: open ? 0 : -320,
+      toValue: open ? 0 : 320,
       duration: 220,
       useNativeDriver: true,
     }).start();
@@ -51,7 +56,10 @@ export default function SideDrawer() {
 
   const handleLogout = () => {
     Alert.alert("Cerrar sesión", "¿Deseas cerrar sesión?", [
-      { text: "Cancelar", style: "cancel" },
+      {
+        text: "Cancelar",
+        style: "cancel",
+      },
       {
         text: "Cerrar sesión",
         style: "destructive",
@@ -78,6 +86,19 @@ export default function SideDrawer() {
         onPress: () => router.push("/perfil"),
       },
       {
+        key: "info",
+        label: "Info",
+        icon: "information-circle-outline",
+        onPress: () => router.push("/info"),
+      },
+      //cambios agregados Miguel Angel para el nuevo boton de informacion del telefono.
+      {
+        key: "diagnostico",
+        label: "Diagnóstico",
+        icon: "phone-portrait-outline",
+        onPress: () => router.push("/diagnostico"),
+      },
+      {
         key: "logout",
         label: "Cerrar sesión",
         icon: "log-out-outline",
@@ -85,23 +106,47 @@ export default function SideDrawer() {
         onPress: handleLogout,
       },
     ],
-    [homeRoute, router]
+    [homeRoute, router],
   );
 
   const avatarSource = user?.photo ? { uri: user.photo } : null;
 
   return (
-    <Modal visible={open} transparent animationType="none" onRequestClose={closeDrawer}>
+    <Modal
+      visible={open}
+      transparent
+      animationType="none"
+      onRequestClose={closeDrawer}
+    >
       <View style={styles.root}>
         <Pressable style={styles.overlay} onPress={closeDrawer} />
 
-        <Animated.View style={[styles.panel, { transform: [{ translateX: slideX }] }]}>
+        <Animated.View
+          style={[
+            styles.panel,
+            {
+              transform: [
+                {
+                  translateX: slideX,
+                },
+              ],
+            },
+          ]}
+        >
           <View style={styles.profile}>
             <View style={styles.avatarWrap}>
               {avatarSource ? (
-                <Image source={avatarSource} style={styles.avatarImage} resizeMode="cover" />
+                <Image
+                  source={avatarSource}
+                  style={styles.avatarImage}
+                  resizeMode="cover"
+                />
               ) : (
-                <Ionicons name="person-circle-outline" size={46} color={FIORI.accent} />
+                <Ionicons
+                  name="person-circle-outline"
+                  size={46}
+                  color={FIORI.accent}
+                />
               )}
             </View>
 
@@ -109,12 +154,13 @@ export default function SideDrawer() {
               <Text style={styles.name} numberOfLines={1}>
                 {user?.nombre || user?.name || "Usuario"}
               </Text>
+
               <Text style={styles.role} numberOfLines={1}>
                 {user?.rol_id === 1
                   ? "Administrador"
                   : user?.rol_id === 2
-                  ? "Supervisor"
-                  : "Técnico"}
+                    ? "Supervisor"
+                    : "Técnico"}
               </Text>
             </View>
           </View>
@@ -134,7 +180,10 @@ export default function SideDrawer() {
                 color={it.danger ? FIORI.danger : FIORI.ink}
                 style={{ width: 28 }}
               />
-              <Text style={[styles.itemText, it.danger && styles.itemTextDanger]}>
+
+              <Text
+                style={[styles.itemText, it.danger && styles.itemTextDanger]}
+              >
                 {it.label}
               </Text>
             </TouchableOpacity>
@@ -146,28 +195,49 @@ export default function SideDrawer() {
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1 },
-  overlay: { ...StyleSheet.absoluteFillObject, backgroundColor: FIORI.overlay },
+  root: {
+    flex: 1,
+  },
+
+  overlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: FIORI.overlay,
+  },
 
   panel: {
     position: "absolute",
-    left: 0,
+
+    right: 0,
     top: 0,
     bottom: 0,
+
     width: 300,
+
     backgroundColor: FIORI.panelBg,
-    borderTopRightRadius: 24,
-    borderBottomRightRadius: 24,
-    paddingTop: Platform.select({ ios: 54, android: 40 }),
+
+    borderTopLeftRadius: 24,
+    borderBottomLeftRadius: 24,
+
+    paddingTop: Platform.select({
+      ios: 54,
+      android: 40,
+    }),
+
     paddingHorizontal: 16,
+
     ...Platform.select({
       ios: {
         shadowColor: "#000",
         shadowOpacity: 0.15,
         shadowRadius: 12,
-        shadowOffset: { width: 4, height: 0 },
+        shadowOffset: {
+          width: -4,
+          height: 0,
+        },
       },
-      android: { elevation: 10 },
+      android: {
+        elevation: 10,
+      },
     }),
   },
 
@@ -182,11 +252,15 @@ const styles = StyleSheet.create({
     width: 54,
     height: 54,
     borderRadius: 18,
+
     alignItems: "center",
     justifyContent: "center",
+
     backgroundColor: "#F3F6FB",
+
     borderWidth: 1,
     borderColor: FIORI.border,
+
     overflow: "hidden",
   },
 
@@ -196,24 +270,45 @@ const styles = StyleSheet.create({
     borderRadius: 18,
   },
 
-  name: { fontSize: 16, fontWeight: "700", color: FIORI.ink },
-  role: { marginTop: 2, fontSize: 13, color: FIORI.muted },
+  name: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: FIORI.ink,
+  },
 
-  divider: { height: 1, backgroundColor: FIORI.border, marginVertical: 10 },
+  role: {
+    marginTop: 2,
+    fontSize: 13,
+    color: FIORI.muted,
+  },
+
+  divider: {
+    height: 1,
+    backgroundColor: FIORI.border,
+    marginVertical: 10,
+  },
 
   item: {
     flexDirection: "row",
     alignItems: "center",
+
     paddingVertical: 12,
+
     borderRadius: 14,
+
     paddingHorizontal: 10,
   },
 
-  itemText: { fontSize: 15, color: FIORI.ink, fontWeight: "600" },
+  itemText: {
+    fontSize: 15,
+    color: FIORI.ink,
+    fontWeight: "600",
+  },
 
   itemDanger: {
     backgroundColor: "rgba(235,87,87,0.08)",
   },
+
   itemTextDanger: {
     color: FIORI.danger,
     fontWeight: "800",

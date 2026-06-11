@@ -46,7 +46,8 @@ function normalizeOpsFromBackend(ops = []) {
 
   return ops.map((op) => {
     const Activity = op.Activity || op.activity || op.Vornr || "";
-    const SubActivity = op.SubActivity || op.subactivity || op.Uvorn || "";
+    //Cambios agregados por lo del campo de subactivity Miguel Angel 04/06/2026
+    //const SubActivity = op.SubActivity || op.subactivity || op.Uvorn || "";
     const Description = op.Description || op.description || op.Ltxa1 || "";
     const StandardTextKey = op.StandardTextKey || op.standardTextKey || "";
 
@@ -54,11 +55,13 @@ function normalizeOpsFromBackend(ops = []) {
       ...op,
       id: op.id,
       activity: String(Activity || ""),
-      subactivity: String(SubActivity || ""),
+      //Cambios agregados por lo del campo de subactivity Miguel Angel 04/06/2026
+      // subactivity: String(SubActivity || ""),
       description: String(Description || ""),
       standardTextKey: String(StandardTextKey || ""),
       Activity: String(Activity || ""),
-      SubActivity: String(SubActivity || ""),
+      //Cambios agregados por lo del campo de subactivity Miguel Angel 04/06/2026
+      //SubActivity: String(SubActivity || ""),
       Description: String(Description || ""),
       StandardTextKey: String(StandardTextKey || ""),
     };
@@ -66,13 +69,24 @@ function normalizeOpsFromBackend(ops = []) {
 }
 
 // id estable para operaciones
+//Cambios agregados por lo del campo de subactivity Miguel Angel 04/06/2026
+/*
 const opKey = (orderId, op) =>
   `${orderId}-${op.activity || op.Activity || ""}${
     op.subactivity || op.SubActivity
       ? `-${op.subactivity || op.SubActivity}`
       : ""
   }`;
+*/
 
+const opKey = (orderId, op, idx) => {
+  const activity = String(op.activity || op.Activity || "").trim();
+  const usr02 = String(op.Usr02 || op.usr02 || "SIN UBICACIÓN").trim();
+  const desc = String(op.description || op.Description || "").trim();
+  const stk = String(op.standardTextKey || op.StandardTextKey || "").trim();
+
+  return `${orderId}-${activity}-${usr02}-${desc}-${stk}-${idx}`;
+};
 // helper para leer results OData
 function odataResults(res) {
   return res?.data?.d?.results || res?.data?.results || [];
@@ -119,7 +133,7 @@ function pickFinishDate(baseOrden) {
 
 async function fetchHeaderDetalle(orderId) {
   const resOrden = await api.get(
-    `/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet('${orderId}')?$format=json`
+    `/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet('${orderId}')?$format=json`,
   );
 
   return odataEntity(resOrden);
@@ -128,7 +142,7 @@ async function fetchHeaderDetalle(orderId) {
 async function fetchAddresses(orderIdReal) {
   try {
     const resAddr = await api.get(
-      `/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet('${orderIdReal}')/ToAddresses?$format=json`
+      `/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet('${orderIdReal}')/ToAddresses?$format=json`,
     );
 
     const results = odataResults(resAddr);
@@ -143,7 +157,7 @@ async function fetchAddresses(orderIdReal) {
     console.log(
       "[prefetch][addresses] no se pudieron cargar:",
       orderIdReal,
-      e?.response?.data || e?.message || e
+      e?.response?.data || e?.message || e,
     );
 
     return {
@@ -156,13 +170,13 @@ async function fetchAddresses(orderIdReal) {
 async function fetchPartners(orderIdReal) {
   try {
     const resPartners = await api.get(
-      `/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet('${orderIdReal}')/ToPartners?$format=json`
+      `/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet('${orderIdReal}')/ToPartners?$format=json`,
     );
 
     const partners = odataResults(resPartners);
 
     const re = (partners || []).find(
-      (p) => String(p?.PartnRoleOld || "").trim() === "RE"
+      (p) => String(p?.PartnRoleOld || "").trim() === "RE",
     );
 
     const emailFromPartners = String(re?.Mail1 || re?.Mail2 || "").trim();
@@ -175,7 +189,7 @@ async function fetchPartners(orderIdReal) {
     console.log(
       "[prefetch][partners] no se pudieron cargar:",
       orderIdReal,
-      e?.response?.data || e?.message || e
+      e?.response?.data || e?.message || e,
     );
 
     return {
@@ -199,9 +213,9 @@ async function fetchOperaciones(orderIdReal) {
       resOps?.data ||
       [];
 
-    ops = normalizeOpsFromBackend(rawOps).map((o) => ({
+    ops = normalizeOpsFromBackend(rawOps).map((o, idx) => ({
       ...o,
-      id: o.id || opKey(orderIdReal, o),
+      id: o.id || opKey(orderIdReal, o, idx),
     }));
 
     console.log("[prefetch][ops] cargadas desde /api/operaciones/sap:", {
@@ -214,21 +228,20 @@ async function fetchOperaciones(orderIdReal) {
     console.log(
       "[prefetch][ops] falló /api/operaciones/sap, intentando ToOperations:",
       orderIdReal,
-      e1?.response?.data || e1?.message || e1
+      e1?.response?.data || e1?.message || e1,
     );
   }
 
   try {
     // ✅ Fallback al OData original
     const resOps = await api.get(
-      `/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet('${orderIdReal}')/ToOperations?$format=json`
+      `/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet('${orderIdReal}')/ToOperations?$format=json`,
     );
 
     const rawOps = odataResults(resOps);
-
-    ops = normalizeOpsFromBackend(rawOps).map((o) => ({
+    ops = normalizeOpsFromBackend(rawOps).map((o, idx) => ({
       ...o,
-      id: o.id || opKey(orderIdReal, o),
+      id: o.id || opKey(orderIdReal, o, idx),
     }));
 
     console.log("[prefetch][ops] cargadas desde ToOperations:", {
@@ -241,7 +254,7 @@ async function fetchOperaciones(orderIdReal) {
     console.log(
       "[prefetch][ops] no se pudieron cargar operaciones:",
       orderIdReal,
-      e2?.response?.data || e2?.message || e2
+      e2?.response?.data || e2?.message || e2,
     );
 
     return [];
@@ -275,7 +288,7 @@ export async function prefetchOrdenesTecnicoDetalles({
         const baseOrden = await fetchHeaderDetalle(orderId);
 
         const orderIdReal = String(
-          baseOrden?.Orderid || baseOrden?.OrderId || orderId
+          baseOrden?.Orderid || baseOrden?.OrderId || orderId,
         ).trim();
 
         const startDate = pickStartDate(baseOrden);
@@ -304,8 +317,7 @@ export async function prefetchOrdenesTecnicoDetalles({
           baseOrden?.shortText ??
           "";
 
-        const coberturaDetectada =
-          detectCoberturaFromShortText(shortTextValue);
+        const coberturaDetectada = detectCoberturaFromShortText(shortTextValue);
 
         // 3) Addresses
         const { cliente, direccion } = await fetchAddresses(orderIdReal);
@@ -322,21 +334,21 @@ export async function prefetchOrdenesTecnicoDetalles({
             baseOrden?.userstatus ??
             baseOrden?.UserSt ??
             baseOrden?.userSt ??
-            ""
+            "",
         ).trim();
 
         const estatusCodeRaw = String(
           baseOrden?.estatus_code ??
             baseOrden?.EstatusCode ??
             baseOrden?.StatusCode ??
-            ""
+            "",
         ).trim();
 
         const estatusLabelRaw = String(
           baseOrden?.estatus_label ??
             baseOrden?.EstatusLabel ??
             baseOrden?.StatusText ??
-            ""
+            "",
         ).trim();
 
         const detail = {
@@ -348,15 +360,9 @@ export async function prefetchOrdenesTecnicoDetalles({
             baseOrden?.OrderTypeTxt ||
             null,
 
-          equipment:
-            baseOrden?.equipment ||
-            baseOrden?.Equipment ||
-            null,
+          equipment: baseOrden?.equipment || baseOrden?.Equipment || null,
 
-          plant:
-            baseOrden?.plant ||
-            baseOrden?.Plant ||
-            null,
+          plant: baseOrden?.plant || baseOrden?.Plant || null,
 
           // ✅ Importante para que el cache offline lo acepte
           start_date: startDate,
@@ -402,7 +408,7 @@ export async function prefetchOrdenesTecnicoDetalles({
         console.log(
           "[prefetch] fail order:",
           orderId,
-          e?.response?.data || e?.message || e
+          e?.response?.data || e?.message || e,
         );
 
         fail++;
@@ -412,7 +418,7 @@ export async function prefetchOrdenesTecnicoDetalles({
 
   const workers = Array.from(
     { length: Math.max(1, Number(concurrency) || 1) },
-    () => worker()
+    () => worker(),
   );
 
   await Promise.all(workers);
