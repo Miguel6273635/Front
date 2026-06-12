@@ -302,30 +302,6 @@ function detectTipoMantenimiento(orden) {
   if (raw.includes("escal")) return "escalera";
   return "elevador";
 }
-//cambios agregados para la eliminacion del campo de SubActivity 04/06/2026Miguel Angel
-/*
-function normalizeOpsForPdf(ops = []) {
-  if (!Array.isArray(ops)) return [];
-  return ops.map((op) => {
-    const Activity = op.Activity || op.activity || op.Vornr || "";
-    const SubActivity = op.SubActivity || op.subactivity || op.Uvorn || "";
-    const Description = op.Description || op.description || op.Ltxa1 || "";
-    const StandardTextKey = op.StandardTextKey || op.standardTextKey || "";
-
-    return {
-      ...op,
-      activity: String(Activity || ""),
-      subactivity: String(SubActivity || ""),
-      description: String(Description || ""),
-      Activity: String(Activity || ""),
-      SubActivity: String(SubActivity || ""),
-      Description: String(Description || ""),
-      StandardTextKey: String(StandardTextKey || ""),
-      standardTextKey: String(StandardTextKey || ""),
-    };
-  });
-}
-  */
 
 function normalizeOpsForPdf(ops = []) {
   if (!Array.isArray(ops)) return [];
@@ -488,6 +464,7 @@ function logSapPayload(label, payload, { stripBase64 = false } = {}) {
     console.log("[LOG SAP PAYLOAD ERROR]", e?.message || e);
   }
 }
+
 function nowMs() {
   return typeof performance !== "undefined" && performance.now
     ? performance.now()
@@ -514,7 +491,8 @@ function isValidEmail(email) {
 }
 
 export default function PendienteFirmaIndex() {
-  const { user, ensureValidToken, token } = useAuth();
+  // SE ELIMINÓ ensureValidToken DE AQUÍ
+  const { user, token } = useAuth();
 
   const userEmail = safeStr(
     user?.correo || user?.email || user?.upn || user?.username,
@@ -698,8 +676,7 @@ export default function PendienteFirmaIndex() {
           return;
         }
 
-        const ok = await ensureValidToken();
-        if (!ok) return;
+        // SE ELIMINÓ LÍNEA ensureValidToken()
 
         const req = getSapRequestRange();
 
@@ -766,15 +743,15 @@ export default function PendienteFirmaIndex() {
       }
     },
     [
-      ensureValidToken,
       userEmail,
       dateMode,
       dayRef,
       start,
       end,
       getSapRequestRange,
-    ],
+    ], // ensureValidToken removido del arreglo de dependencias
   );
+
   const processPendingQueue = useCallback(
     async (source = "unknown") => {
       if (queueProcessingRef.current) {
@@ -805,19 +782,13 @@ export default function PendienteFirmaIndex() {
           return;
         }
 
-        const ok = await ensureValidToken();
-
-        if (!ok) {
-          console.log("[PENDIENTE FIRMA] Token no válido, no se procesa cola");
-          return;
-        }
+        // SE ELIMINÓ LÍNEA ensureValidToken()
 
         console.log(
           "[PENDIENTE FIRMA] Internet disponible. Procesando cola...",
         );
 
         const queueResult = await processSapQueue({
-          ensureValidToken,
           apiInstance: api,
         });
 
@@ -838,8 +809,9 @@ export default function PendienteFirmaIndex() {
         queueProcessingRef.current = false;
       }
     },
-    [ensureValidToken, token, userEmail, fetchOrdenes0400],
+    [token, userEmail, fetchOrdenes0400], // ensureValidToken removido
   );
+
   useEffect(() => {
     const unsubscribe = NetInfo.addEventListener((state) => {
       const online = !!(
@@ -974,7 +946,7 @@ export default function PendienteFirmaIndex() {
   const onSignatureEmpty = () => {
     Alert.alert("Firma vacía", "El cliente no firmó. Intenta de nuevo.");
   };
-  //Miguel Angel agregado para lo de agrupador de los pdf en uno solo const sendSelectedOrders = async () => {}
+
   // PARALELIZACIÓN CONTROLADA POR LOTES PARA EVITAR CONGELAMIENTO EN +4 ÓRDENES
   const sendSelectedOrders = async () => {
     const email = String(clienteEmail || "").trim();
@@ -1013,8 +985,7 @@ export default function PendienteFirmaIndex() {
     }
 
     if (hasFaults) {
-      setErrors(localErrors);
-      setModalStep(1);
+      Alert.alert("Error de validación", "Por favor completa todos los campos del cliente.");
       setShowFirmaModal(true);
       return;
     }
@@ -1027,10 +998,7 @@ export default function PendienteFirmaIndex() {
     const net = await NetInfo.fetch();
     const online = !!(net?.isConnected && net?.isInternetReachable !== false);
 
-    if (online) {
-      const ok = await ensureValidToken();
-      if (!ok) return;
-    }
+    // SE ELIMINÓ LÍNEA ensureValidToken()
 
     Alert.alert(
       "Confirmar envío",

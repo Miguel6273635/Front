@@ -1,4 +1,3 @@
-// app/tecnico/ordenes/index.js
 import React, {
   useEffect,
   useMemo,
@@ -44,7 +43,8 @@ import {
   patchCacheOrdenesTecnicoList,
   patchCacheOrdenTecnicoDetail,
 } from "../../../src/offline/ordenesTecnicoLocalPatch";
-import { prefetchOrdenesTecnicoDetalles } from "../../../src/offline/prefetchOrdenesTecnico";
+
+import { bootstrapPrefetchOrdenesTecnico } from "../../../src/offline/bootstrapSyncTecnico";
 
 import { useAuth } from "../../../src/context/AuthContext";
 import Header from "../../../src/components/Header";
@@ -236,7 +236,7 @@ async function removeFromQueue(userEmail, orderId) {
 // COMPONENTE PRINCIPAL
 // ============================
 export default function ListaOrdenesTecnico() {
-  const { user, ensureValidToken } = useAuth();
+  const { user } = useAuth();
   const userEmail = user?.correo || user?.email || user?.username || null;
 
   const [allOrdenes, setAllOrdenes] = useState([]);
@@ -301,24 +301,6 @@ export default function ListaOrdenesTecnico() {
     return { start: atStartOfDay(s), end: atEndOfDay(e) };
   }, [dateMode, dayRef, weekStart, weekEnd, monthYear, yearOnly]);
 
-  const getSapRequestRange = useCallback(() => {
-    if (dateMode === "all" || dateMode === "month" || dateMode === "year" || dateMode === "weekRange") {
-      const s = atStartOfDay(start);
-      const e = atEndOfDay(end);
-      return { startDate: s, endDate: e, startStr: formatLocalYmd(s), endStr: formatLocalYmd(e) };
-    }
-    if (dateMode === "day") {
-      const s = atStartOfDay(dayRef);
-      const e = atEndOfDay(dayRef);
-      return { startDate: s, endDate: e, startStr: formatLocalYmd(s), endStr: formatLocalYmd(e) };
-    }
-    const e = atEndOfDay(new Date());
-    const s = new Date();
-    s.setDate(s.getDate() - 90);
-    const ss = atStartOfDay(s);
-    return { startDate: ss, endDate: e, startStr: formatLocalYmd(ss), endStr: formatLocalYmd(e) };
-  }, [dateMode, start, end, dayRef]);
-
   const applyTbmkyOfflineStatuses = useCallback(async (data = []) => {
     try {
       const arr = Array.isArray(data) ? data : [];
@@ -373,85 +355,115 @@ export default function ListaOrdenesTecnico() {
     return () => unsub();
   }, []);
 
+  // ============================
+  // LÓGICA NINJA: STALE-WHILE-REVALIDATE (CON LOGS VISIBLES)
+  // ============================
+  const cargarLocalDeInmediato = useCallback(async (origen = "Desconocido") => {
+    try {
+      if (!userEmail) return;
+      const cached = await loadOrdenesTecnicoList(userEmail);
+      if (cached?.data?.length) {
+        const patchedData = await applyTbmkyOfflineStatuses(cached.data);
+        setAllOrdenes(patchedData);
+        console.log(`📂 [SQLITE] (${origen}) Se pintaron ${patchedData.length} órdenes en pantalla desde el celular.`);
+      } else {
+        console.log(`📂 [SQLITE] (${origen}) Base de datos local vacía.`);
+      }
+    } catch (e) {
+      console.log("❌ [SQLITE] Error leyendo local", e);
+    } finally {
+      setLoading(false);
+    }
+  }, [userEmail, applyTbmkyOfflineStatuses]);
+
+  useFocusEffect(
+    useCallback(() => {
+      console.log("\n==========================================");
+      console.log("👀 PANTALLA DE ÓRDENES ENFOCADA");
+      
+      // 1. Cargamos rápido lo local
+      cargarLocalDeInmediato("Arranque Inmediato");
+
+      // 2. Buscamos de fondo con cronómetro de 4 segundos
+      const actualizarSilenciosamente = async () => {
+        if (!userEmail) return;
+        const net = await NetInfo.fetch();
+        if (!net.isConnected || !net.isInternetReachable) {
+           console.log("📡 [NINJA SYNC] No hay internet. Manteniendo datos de SQLite únicamente.");
+           console.log("==========================================\n");
+           return;
+        }
+
+        try {
+          console.log("🥷 [NINJA SYNC] Buscando cambios en SAP (Carrera de 60 Segundos iniciada)...");
+          const startTime = Date.now();
+
+          // Promesa del cronómetro
+          const timeoutPromise = new Promise((_, reject) =>
+            setTimeout(() => reject(new Error("TIEMPO_AGOTADO")), 60000)
+          );
+
+          // Competición: Si SAP tarda más de 4s, abortamos
+          await Promise.race([
+            bootstrapPrefetchOrdenesTecnico(String(userEmail).trim()),
+            timeoutPromise
+          ]);
+
+          const timeTaken = Date.now() - startTime;
+          console.log(`✅ [NINJA SYNC] ¡SAP GANÓ LA CARRERA! (Respondió en ${timeTaken}ms). Datos actualizados.`);
+          console.log("🔄 [NINJA SYNC] Refrescando la pantalla con lo nuevo...");
+          
+          // Recargamos SQLite para ver lo nuevo
+          await cargarLocalDeInmediato("Post-SAP Sync");
+          console.log("==========================================\n");
+
+        } catch (error) {
+          if (error.message === "TIEMPO_AGOTADO") {
+            console.log("⏱️ [NINJA SYNC] ¡EL CRONÓMETRO GANÓ! SAP tardó demasiado (>60000ms).");
+            console.log("🤫 [NINJA SYNC] Abortado silenciosamente. El usuario no lo nota y sigue usando datos locales.");
+            console.log("==========================================\n");
+          } else {
+            console.log("❌ [NINJA SYNC] Error SAP silencioso:", error.message || error);
+            console.log("==========================================\n");
+          }
+        }
+      };
+
+      actualizarSilenciosamente();
+    }, [userEmail, cargarLocalDeInmediato])
+  );
+
+  // Función tradicional de refresco para el "PULL TO REFRESH" manual del usuario
   const fetchOrdenes = useCallback(
     async ({ isRefresh = false } = {}) => {
       try {
         if (isRefresh) setRefreshing(true);
-        else setLoading(true);
-
-        if (!isRefresh) {
-          const cached = await loadOrdenesTecnicoList(userEmail);
-          if (cached?.data?.length) {
-            const patchedData = await applyTbmkyOfflineStatuses(cached.data);
-            setAllOrdenes(patchedData);
-            setLoading(false);
-          }
-        }
-
         const net = await NetInfo.fetch();
         const online = !!(net?.isConnected && net?.isInternetReachable !== false);
         setIsOnline(online);
 
         if (!online) {
-          const cached = await loadOrdenesTecnicoList(userEmail);
-          if (!cached?.data?.length) {
-            Alert.alert("Sin conexión", "No hay internet y no hay datos guardados aún.");
-          } else {
-            const patchedData = await applyTbmkyOfflineStatuses(cached.data);
-            setAllOrdenes(patchedData);
-          }
-          return;
+           if (isRefresh) Alert.alert("Sin red", "Mostrando datos locales.");
+           await cargarLocalDeInmediato("Pull-To-Refresh Offline");
+           return;
         }
 
-        const req = getSapRequestRange();
-        const params = new URLSearchParams({ start: req.startStr, end: req.endStr, mode: "range" });
-        if (userEmail) params.set("user", userEmail);
+        if (userEmail) {
+          console.log("🔄 [PULL TO REFRESH] Usuario solicitó refresco manual...");
+          await bootstrapPrefetchOrdenesTecnico(String(userEmail).trim());
+          await cargarLocalDeInmediato("Pull-To-Refresh Online");
+        }
 
-        const okToken = await ensureValidToken();
-        if (!okToken) return;
-
-        const res = await api.get(`/api/ordenes/sap/list?${params.toString()}`);
-        const data = Array.isArray(res.data) ? res.data : [];
-
-        setAllOrdenes(data);
-
-        const offlineWin = buildOfflineWindow(new Date());
-        const offlineOnly = filterOrdenesByWindow(data, offlineWin.start, offlineWin.end);
-        await saveOrdenesTecnicoList(userEmail, offlineOnly, offlineWin);
-
-        const keepIds = offlineOnly.map((x) => x?.Orderid).filter(Boolean);
-        await pruneDetallesNoUsados(keepIds);
-
-        const MAX_PREFETCH = 12;
-        const today = new Date();
-        const distToToday = (order) => {
-          const d = parseSapDate(order?.start_date);
-          if (!d) return 999999999;
-          return Math.abs(d.getTime() - today.getTime());
-        };
-        const offlineSorted = [...offlineOnly].sort((a, b) => distToToday(a) - distToToday(b));
-        const idsToPrefetch = offlineSorted.map((x) => x?.Orderid).filter(Boolean).slice(0, MAX_PREFETCH);
-
-        prefetchOrdenesTecnicoDetalles({ orderIds: idsToPrefetch, token: null, concurrency: 3 }).catch(console.log);
       } catch (error) {
-        const cached = await loadOrdenesTecnicoList(userEmail);
-        if (cached?.data?.length) {
-          const patchedData = await applyTbmkyOfflineStatuses(cached.data);
-          setAllOrdenes(patchedData);
-        } else {
-          Alert.alert("Error", error?.response?.data?.error || "No se pudieron cargar las órdenes.");
-        }
+         console.log("Error en refresco manual", error);
       } finally {
-        setLoading(false);
         setRefreshing(false);
       }
     },
-    [ensureValidToken, userEmail, dateMode, getSapRequestRange, applyTbmkyOfflineStatuses],
+    [userEmail, cargarLocalDeInmediato]
   );
 
   useEffect(() => { fetchStatusCatalog(); }, []);
-  useEffect(() => { fetchOrdenes(); }, [fetchOrdenes]);
-  useFocusEffect(useCallback(() => { fetchOrdenes({ isRefresh: true }); }, [fetchOrdenes]));
 
   useEffect(() => {
     const filtered = (allOrdenes || []).filter((item) => {
@@ -496,88 +508,6 @@ export default function ListaOrdenesTecnico() {
     setShowCheckinModal(true);
   };
 
-  // ============================
-  // FUNCIONALIDAD CHECK-IN RESTAURADA
-  // ============================
-  // const takeCheckinPhoto = async () => {
-  //   try {
-  //     const perm = await ImagePicker.requestCameraPermissionsAsync();
-
-  //     if (!perm.granted) {
-  //       Alert.alert(
-  //         "Permiso requerido",
-  //         "Necesitamos permiso de cámara para tomar la evidencia.",
-  //       );
-  //       return;
-  //     }
-
-  //     const result = await ImagePicker.launchCameraAsync({
-  //       quality: 0.7,
-  //       base64: false,
-  //       allowsEditing: false,
-  //     });
-
-  //     if (result.canceled) return;
-
-  //     const asset = result.assets?.[0];
-
-  //     if (!asset?.uri) {
-  //       Alert.alert("Error", "No se pudo obtener la foto.");
-  //       return;
-  //     }
-
-  //     const MAX_BASE64_LENGTH = 4_000_000;
-
-  //     const opcionesCompresion = [
-  //       { width: 1280, compress: 0.7 },
-  //       { width: 1180, compress: 0.65 },
-  //       { width: 1080, compress: 0.6 },
-  //       { width: 960, compress: 0.55 },
-  //       { width: 850, compress: 0.5 },
-  //       { width: 720, compress: 0.45 },
-  //     ];
-
-  //     let manipulated = null;
-
-  //     for (const opcion of opcionesCompresion) {
-  //       manipulated = await ImageManipulator.manipulateAsync(
-  //         asset.uri,
-  //         [{ resize: { width: opcion.width } }],
-  //         {
-  //           compress: opcion.compress,
-  //           format: ImageManipulator.SaveFormat.JPEG,
-  //           base64: true,
-  //         },
-  //       );
-
-  //       if (manipulated.base64?.length <= MAX_BASE64_LENGTH) {
-  //         break;
-  //       }
-  //     }
-
-  //     if (!manipulated?.base64) {
-  //       Alert.alert("Error", "No se pudo convertir la imagen.");
-  //       return;
-  //     }
-
-  //     if (manipulated.base64.length > MAX_BASE64_LENGTH) {
-  //       Alert.alert(
-  //         "Foto muy pesada",
-  //         "No se pudo reducir a menos de 3 MB. Intenta tomar otra foto.",
-  //       );
-  //       return;
-  //     }
-
-  //     setCheckinPhotoUri(manipulated.uri);
-  //     setCheckinPhotoBase64(manipulated.base64);
-
-  //   } catch (e) {
-  //     console.log("takeCheckinPhoto ERROR:", e);
-  //     Alert.alert("Error", "No se pudo abrir la cámara.");
-  //   }
-  // };
-
-
   const takeCheckinPhoto = async () => {
     try {
       const perm = await ImagePicker.requestCameraPermissionsAsync();
@@ -585,29 +515,27 @@ export default function ListaOrdenesTecnico() {
         Alert.alert("Permiso requerido", "Necesitamos permiso de cámara.");
         return;
       }
-  
+
       const result = await ImagePicker.launchCameraAsync({
         quality: 0.7,
-        base64: false, // <-- MUY IMPORTANTE: Apagado
+        base64: false,
         allowsEditing: false,
       });
-  
+
       if (result.canceled) return;
       const asset = result.assets?.[0];
       if (!asset?.uri) return;
-  
-      // Comprimimos la imagen, PERO NO pedimos Base64
+
       const manipulated = await ImageManipulator.manipulateAsync(
         asset.uri,
-        [{ resize: { width: 850 } }], // Un tamaño razonable y seguro
+        [{ resize: { width: 850 } }],
         {
           compress: 0.5,
           format: ImageManipulator.SaveFormat.JPEG,
-          base64: false, // <-- APAGADO AQUÍ TAMBIÉN
+          base64: false, 
         }
       );
-  
-      // Guardamos la foto en una ruta permanente del dispositivo
+
       const fileName = `checkin_${Date.now()}.jpg`;
       const permanentUri = `${FileSystem.documentDirectory}${fileName}`;
       
@@ -615,16 +543,23 @@ export default function ListaOrdenesTecnico() {
         from: manipulated.uri,
         to: permanentUri,
       });
-  
-      // Guardamos SOLO LA RUTA FÍSICA en el estado, adiós al lag
+
+      const fileInfo = await FileSystem.getInfoAsync(permanentUri);
+      
+      if (fileInfo.exists) {
+        console.log("✅ ÉXITO: El archivo existe físicamente.");
+      } else {
+        Alert.alert("Error", "No se pudo escribir el archivo físico en tu celular.");
+        return; 
+      }
+
       setCheckinPhotoUri(permanentUri);
-  
+
     } catch (e) {
       console.log("takeCheckinPhoto ERROR:", e);
-      Alert.alert("Error", "No se pudo abrir la cámara.");
+      Alert.alert("Error", "No se pudo abrir la cámara o guardar la foto.");
     }
   };
-
 
   const postCheckinEvidence = async (orderId, base64) => {
     const payload = {
@@ -699,215 +634,45 @@ export default function ListaOrdenesTecnico() {
     }
   };
 
-  // const syncCheckinQueue = useCallback(async () => {
-  //   if (!userEmail) return;
-  //   if (syncingRef.current) return;
-
-  //   const net = await NetInfo.fetch();
-  //   const online = !!(net?.isConnected && net?.isInternetReachable !== false);
-
-  //   setIsOnline(online);
-  //   if (!online) return;
-
-  //   syncingRef.current = true;
-
-  //   try {
-  //     const q = await loadCheckinQueue(userEmail);
-  //     if (!q.length) return;
-
-  //     const ok = await ensureValidToken();
-  //     if (!ok) return;
-
-  //     const ordered = [...q].sort(
-  //       (a, b) => (a?.createdAt || 0) - (b?.createdAt || 0),
-  //     );
-
-  //     for (const item of ordered) {
-  //       const orderId = String(item?.orderId || "").trim();
-  //       const b64 = String(item?.photoBase64 || "").trim();
-
-  //       if (!orderId || !b64) {
-  //         await removeFromQueue(userEmail, orderId);
-  //         continue;
-  //       }
-
-  //       try {
-  //         const statusToSend = normalizeCode(item?.statusCode) || "0100";
-  //         await postCheckinEvidence(orderId, b64);
-  //         await postChangeStatusToSap(orderId, statusToSend);
-  //         await removeFromQueue(userEmail, orderId);
-  //       } catch (e) {
-  //         console.log("[CHECKIN][SYNC] Error SAP:", orderId, e?.message || e);
-  //         break;
-  //       }
-  //     }
-
-  //     const q2 = await loadCheckinQueue(userEmail);
-  //     setCheckinQueue(q2);
-
-  //     fetchOrdenes({ isRefresh: true });
-  //   } finally {
-  //     syncingRef.current = false;
-  //   }
-  // }, [ensureValidToken, fetchOrdenes, userEmail]);
-
-
   const syncCheckinQueue = useCallback(async () => {
-    // ... (validaciones de red e inicio) ...
-  
     try {
       const q = await loadCheckinQueue(userEmail);
       if (!q.length) return;
-      const ok = await ensureValidToken();
-      if (!ok) return;
-  
+
       for (const item of q) {
         const orderId = String(item?.orderId || "").trim();
-        const photoUri = item?.photoUri; // Recuperamos la ruta
-  
+        const photoUri = item?.photoUri; 
+
         if (!orderId || !photoUri) {
           await removeFromQueue(userEmail, orderId);
           continue;
         }
-  
+
         try {
-          // 1. Convertimos a Base64 leyendo el archivo físico
           const b64 = await FileSystem.readAsStringAsync(photoUri, {
             encoding: FileSystem.EncodingType.Base64,
           });
-  
-          // 2. Enviamos a SAP
+
           const statusToSend = normalizeCode(item?.statusCode) || "0100";
           await postCheckinEvidence(orderId, b64);
           await postChangeStatusToSap(orderId, statusToSend);
           
-          // 3. Eliminamos de la cola
           await removeFromQueue(userEmail, orderId);
-  
-          // 4. Limpieza del dispositivo (Buscamos no llenar la memoria del cel)
           await FileSystem.deleteAsync(photoUri, { idempotent: true });
-  
+
         } catch (e) {
           console.log("[CHECKIN][SYNC] Error SAP:", orderId, e);
-          break; // Detenemos el ciclo si SAP falla para intentar luego
+          break; 
         }
       }
-      
-      // ... (finalización y refresco de vista) ...
     } finally {
       syncingRef.current = false;
     }
-  }, [ensureValidToken, fetchOrdenes, userEmail]);
+  }, [userEmail]);
+
   useEffect(() => {
     if (isOnline && checkinQueue.length > 0) syncCheckinQueue().catch(() => {});
   }, [isOnline, checkinQueue.length, syncCheckinQueue]);
-
-  // const enviarCheckinCompletoASap = async () => {
-
-  //   if (!checkinOrderId) {
-  //     Alert.alert("Error", "No hay orden seleccionada.");
-  //     return;
-  //   }
-
-  //   if (!checkinPhotoBase64) {
-  //     Alert.alert("Falta evidencia", "Primero toma una foto.");
-  //     return;
-  //   }
-
-  //   const orderId = String(checkinOrderId).trim();
-
-  //   try {
-  //     setIsSending(true);
-
-  //     const net = await NetInfo.fetch();
-  //     const online = !!(net?.isConnected && net?.isInternetReachable !== false);
-
-  //     setIsOnline(online);
-
-  //     if (!online) {
-  //       const offlineStatus = "0100";
-
-  //       await applyLocalOfflineStatus(orderId, offlineStatus);
-
-  //       const nextQueue = await enqueueCheckin(userEmail, {
-  //         orderId,
-  //         photoBase64: String(checkinPhotoBase64).trim(),
-  //         statusCode: offlineStatus,
-  //         lastValidStatus: offlineStatus,
-  //         createdAt: Date.now(),
-  //       });
-
-  //       setCheckinQueue(nextQueue);
-
-  //       Alert.alert(
-  //         "Check-in offline",
-  //         "Sin internet. Se guardó el check-in en cola y se enviará automáticamente cuando regrese la conexión ✅",
-  //       );
-
-  //       setShowCheckinModal(false);
-  //       setCheckinPhotoBase64(null);
-  //       setCheckinPhotoUri(null);
-
-  //       return;
-  //     }
-
-  //     const ok = await ensureValidToken();
-  //     if (!ok) return;
-  //     const onlineStatus = "0100";
-
-  //     await postCheckinEvidence(orderId, checkinPhotoBase64);
-  //     await postChangeStatusToSap(orderId, onlineStatus);
-  //     await applyLocalOfflineStatus(orderId, onlineStatus);
-
-  //     Alert.alert(
-  //       "Check-in",
-  //       "Evidencia enviada y estatus actualizado a PENDIENTE",
-  //     );
-
-  //     setShowCheckinModal(false);
-  //     setCheckinPhotoBase64(null);
-  //     setCheckinPhotoUri(null);
-
-  //     fetchOrdenes({ isRefresh: true });
-  //   } catch (e) {
-  //     console.log("enviarCheckinCompletoASap ERROR:", e?.message || e);
-
-  //     const net2 = await NetInfo.fetch();
-  //     const online2 = !!(net2?.isConnected && net2?.isInternetReachable !== false);
-
-  //     if (!online2) {
-  //       const offlineStatus = "0100";
-  //       await applyLocalOfflineStatus(orderId, offlineStatus);
-
-  //       const nextQueue = await enqueueCheckin(userEmail, {
-  //         orderId,
-  //         photoBase64: String(checkinPhotoBase64).trim(),
-  //         statusCode: offlineStatus,
-  //         lastValidStatus: offlineStatus,
-  //         createdAt: Date.now(),
-  //       });
-
-  //       setCheckinQueue(nextQueue);
-
-  //       Alert.alert(
-  //         "Check-in guardado",
-  //         "Se cayó la conexión. Se guardó en cola y se enviará cuando regrese internet ✅",
-  //       );
-
-  //       setShowCheckinModal(false);
-  //       setCheckinPhotoBase64(null);
-  //       setCheckinPhotoUri(null);
-  //       return;
-  //     }
-
-  //     Alert.alert(
-  //       "Error SAP",
-  //       "No se pudo completar el check-in (foto/estatus). Revisa logs.",
-  //     );
-  //   } finally {
-  //     setIsSending(false);
-  //   }
-  // };
 
   const enviarCheckinCompletoASap = async () => {
     if (!checkinOrderId || !checkinPhotoUri) {
@@ -928,10 +693,9 @@ export default function ListaOrdenesTecnico() {
         const offlineStatus = "0100";
         await applyLocalOfflineStatus(orderId, offlineStatus);
   
-        // Guardamos la RUTA en AsyncStorage, no el Base64
         const nextQueue = await enqueueCheckin(userEmail, {
           orderId,
-          photoUri: checkinPhotoUri, // <-- GUARDAMOS EL URI AQUÍ
+          photoUri: checkinPhotoUri, 
           statusCode: offlineStatus,
           createdAt: Date.now(),
         });
@@ -940,13 +704,9 @@ export default function ListaOrdenesTecnico() {
         Alert.alert("Check-in offline", "Se guardó en cola y se enviará cuando regrese la conexión ✅");
         
         setShowCheckinModal(false);
-        setCheckinPhotoUri(null); // Limpiamos estado
+        setCheckinPhotoUri(null); 
         return;
       }
-  
-      // Si está ONLINE, leemos el archivo físico, lo pasamos a Base64 en este momento y enviamos
-      const ok = await ensureValidToken();
-      if (!ok) return;
   
       const base64Data = await FileSystem.readAsStringAsync(checkinPhotoUri, {
         encoding: FileSystem.EncodingType.Base64,
@@ -957,7 +717,6 @@ export default function ListaOrdenesTecnico() {
       await postChangeStatusToSap(orderId, onlineStatus);
       await applyLocalOfflineStatus(orderId, onlineStatus);
   
-      // Opcional: Borrar el archivo local porque ya se subió a SAP
       await FileSystem.deleteAsync(checkinPhotoUri, { idempotent: true });
   
       Alert.alert("Check-in", "Evidencia enviada y estatus actualizado.");
@@ -966,7 +725,7 @@ export default function ListaOrdenesTecnico() {
       fetchOrdenes({ isRefresh: true });
   
     } catch (e) {
-       // ... manejo de errores (si falla online, guardar en cola usando el mismo photoUri)
+       console.log("Error checkin online", e);
     } finally {
       setIsSending(false);
     }
@@ -1000,9 +759,6 @@ export default function ListaOrdenesTecnico() {
     );
   };
 
-  // ============================
-  // TARJETA DE ORDEN MODERNIZADA
-  // ============================
   const renderItem = ({ item }) => {
     const startLabel = formatDateDMY(item.start_date);
     const finishLabel = formatDateDMY(item.finish_date);
@@ -1199,7 +955,6 @@ export default function ListaOrdenesTecnico() {
         )}
       </View>
 
-      {/* MODAL CHECK-IN RESTAURADO (Y ADAPTADO A NUEVO DISEÑO) */}
       <Modal visible={showCheckinModal} transparent animationType="slide" onRequestClose={() => setShowCheckinModal(false)}>
         <View style={styles.modalBackdrop}>
           <View style={[styles.modalCard, { maxWidth: 480 }]}>
@@ -1246,7 +1001,6 @@ export default function ListaOrdenesTecnico() {
         </View>
       </Modal>
 
-      {/* MODAL MES */}
       <Modal visible={showMonthModal} transparent animationType="fade" onRequestClose={() => setShowMonthModal(false)}>
         <View style={styles.modalBackdrop}>
           <View style={styles.modalCard}>
@@ -1328,7 +1082,6 @@ export default function ListaOrdenesTecnico() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: FIORI.pageBg },
 
-  // Filters
   filtersWrap: {
     paddingHorizontal: 16, paddingTop: 16, paddingBottom: 10,
     backgroundColor: FIORI.cardBg, borderBottomColor: FIORI.border, borderBottomWidth: 1,
@@ -1353,7 +1106,6 @@ const styles = StyleSheet.create({
   statusInfoRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 8 },
   activeRangeText: { color: FIORI.textMuted, fontSize: 12, fontWeight: "500" },
 
-  // Modern Cards
   card: {
     backgroundColor: FIORI.cardBg, borderRadius: 20, padding: 16, marginBottom: 16,
     borderWidth: 1, borderColor: FIORI.border,
@@ -1391,7 +1143,6 @@ const styles = StyleSheet.create({
   emptyState: { alignItems: "center", marginTop: 60, padding: 20 },
   emptyText: { color: FIORI.textMuted, fontSize: 15, marginTop: 12, textAlign: "center" },
 
-  // Modals
   modalBackdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.5)", alignItems: "center", justifyContent: "center", padding: 16 },
   modalCard: { width: "100%", maxWidth: 420, backgroundColor: FIORI.cardBg, borderRadius: 24, padding: 20 },
   modalHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 16 },

@@ -1,12 +1,9 @@
-// src/services/api.js
 import axios from "axios";
 import Constants from "expo-constants";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { isOnline } from "../offline/net";
 
 const extra = Constants.expoConfig?.extra || {};
 
-// UNA SOLA BASE (BTP QAS)
 export const API_URL =
   extra.API_BASE_URL_PROD ||
   "https://my-node-api-qas-01.cfapps.us10-001.hana.ondemand.com";
@@ -16,7 +13,21 @@ const api = axios.create({
   timeout: 45000,
 });
 
-// ✅ Request interceptor
+// Pila para agrupar peticiones mientras se renueva el token
+let isRefreshing = false;
+let failedQueue = [];
+
+const processQueue = (error, token = null) => {
+  failedQueue.forEach((prom) => {
+    if (error) {
+      prom.reject(error);
+    } else {
+      prom.resolve(token);
+    }
+  });
+  failedQueue = [];
+};
+
 api.interceptors.request.use(
   async (config) => {
     const token = await AsyncStorage.getItem("token");
@@ -33,64 +44,66 @@ api.interceptors.request.use(
   (error) => Promise.reject(error),
 );
 
-// ✅ Response error log + manejo seguro de 401
 api.interceptors.response.use(
   (res) => res,
   async (err) => {
+    const originalRequest = err.config;
     const status = err?.response?.status;
-    const original = err?.config;
 
-    console.log("[API ERROR]", {
-      message: err?.message,
-      url: err?.config?.url,
-      baseURL: err?.config?.baseURL,
-      status,
-      data: err?.response?.data,
-    });
+    // Si recibimos 401 y no es una petición que ya intentamos reintentar
+    if (status === 401 && !originalRequest._retry) {
+      console.log("🚨 [API INTERCEPTOR] Error 401 detectado. Token posiblemente expirado.");
+      
+      if (isRefreshing) {
+        // Si ya hay otra petición renovando el token, formamos esta en la cola
+        return new Promise(function (resolve, reject) {
+          failedQueue.push({ resolve, reject });
+        })
+          .then((token) => {
+            originalRequest.headers.Authorization = `Bearer ${token}`;
+            return api(originalRequest);
+          })
+          .catch((err) => {
+            return Promise.reject(err);
+          });
+      }
 
-    const online = await isOnline();
-
-    /*
-      Si no hay internet, NO cerramos sesión.
-      Dejamos que la pantalla o servicio maneje el error offline.
-    */
-    if (!online) {
-      console.log("[API ERROR] Sin internet. No se cierra sesión.");
-      return Promise.reject(err);
-    }
-
-    /*
-      Si hay internet y el backend responde 401:
-      intentamos refrescar token una sola vez.
-    */
-    if (status === 401 && original && !original._retry) {
-      original._retry = true;
+      originalRequest._retry = true;
+      isRefreshing = true;
 
       try {
-        const auth = globalThis.__AUTH__;
-        const ok = await auth?.ensureValidToken?.();
-
-        if (ok) {
-          const newToken = await AsyncStorage.getItem("token");
-
+        // Llamamos a la función global que inyectamos desde AuthContext
+        if (globalThis.__AUTH__ && typeof globalThis.__AUTH__.refreshAzureToken === "function") {
+          const newToken = await globalThis.__AUTH__.refreshAzureToken();
+          
           if (newToken) {
-            original.headers.Authorization = `Bearer ${newToken}`;
+            console.log("🌟 [API INTERCEPTOR] Token renovado. Reintentando petición...");
+            processQueue(null, newToken);
+            originalRequest.headers.Authorization = `Bearer ${newToken}`;
+            return api(originalRequest);
+          } else {
+             // Si la renovación falló de plano
+             processQueue(new Error("Refresh token failed"));
+             return Promise.reject(err);
           }
-
-          return api(original);
+        } else {
+           console.log("⚠️ [API INTERCEPTOR] La función de renovación no está lista.");
+           return Promise.reject(err);
         }
-
-        /*
-          Solo cerramos sesión si:
-          - hay internet
-          - hubo 401 real del backend
-          - no se pudo renovar token
-        */
-        await auth?.logout?.();
-      } catch (e) {
-        console.log("[API 401 HANDLER ERROR]", e?.message || e);
+      } catch (refreshError) {
+        processQueue(refreshError, null);
+        return Promise.reject(refreshError);
+      } finally {
+        isRefreshing = false;
       }
     }
+
+    // Para cualquier otro error (500, timeouts, etc.)
+    console.log("[API ERROR]", {
+      message: err?.message,
+      url: originalRequest?.url,
+      status,
+    });
 
     return Promise.reject(err);
   },

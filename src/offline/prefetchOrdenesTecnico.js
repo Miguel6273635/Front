@@ -3,6 +3,7 @@ import {
   saveOrdenTecnicoDetail,
   shouldCacheDetailByOrder,
   buildOfflineWindow,
+  saveOrdenesTecnicoList, // 🔴 NUEVO: Importación agregada para la función maestra
 } from "./ordenesTecnicoCache";
 
 function pickSecondAddress(results = []) {
@@ -69,16 +70,6 @@ function normalizeOpsFromBackend(ops = []) {
 }
 
 // id estable para operaciones
-//Cambios agregados por lo del campo de subactivity Miguel Angel 04/06/2026
-/*
-const opKey = (orderId, op) =>
-  `${orderId}-${op.activity || op.Activity || ""}${
-    op.subactivity || op.SubActivity
-      ? `-${op.subactivity || op.SubActivity}`
-      : ""
-  }`;
-*/
-
 const opKey = (orderId, op, idx) => {
   const activity = String(op.activity || op.Activity || "").trim();
   const usr02 = String(op.Usr02 || op.usr02 || "SIN UBICACIÓN").trim();
@@ -87,6 +78,7 @@ const opKey = (orderId, op, idx) => {
 
   return `${orderId}-${activity}-${usr02}-${desc}-${stk}-${idx}`;
 };
+
 // helper para leer results OData
 function odataResults(res) {
   return res?.data?.d?.results || res?.data?.results || [];
@@ -203,7 +195,6 @@ async function fetchOperaciones(orderIdReal) {
   let ops = [];
 
   try {
-    // ✅ Primero usamos el mismo endpoint que usa la pantalla de detalle.
     const resOps = await api.get(`/api/operaciones/sap/${String(orderIdReal)}`);
 
     const rawOps =
@@ -233,7 +224,6 @@ async function fetchOperaciones(orderIdReal) {
   }
 
   try {
-    // ✅ Fallback al OData original
     const resOps = await api.get(
       `/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet('${orderIdReal}')/ToOperations?$format=json`,
     );
@@ -284,7 +274,6 @@ export async function prefetchOrdenesTecnicoDetalles({
       const orderId = ids[idx];
 
       try {
-        // 1) Header detalle
         const baseOrden = await fetchHeaderDetalle(orderId);
 
         const orderIdReal = String(
@@ -309,7 +298,6 @@ export async function prefetchOrdenesTecnicoDetalles({
           continue;
         }
 
-        // 2) ShortText / cobertura
         const shortTextValue =
           baseOrden?.ShortText ??
           baseOrden?.shorttext ??
@@ -319,14 +307,8 @@ export async function prefetchOrdenesTecnicoDetalles({
 
         const coberturaDetectada = detectCoberturaFromShortText(shortTextValue);
 
-        // 3) Addresses
         const { cliente, direccion } = await fetchAddresses(orderIdReal);
-
-        // 4) Partners
-        const { partners, emailFromPartners } =
-          await fetchPartners(orderIdReal);
-
-        // 5) Operaciones
+        const { partners, emailFromPartners } = await fetchPartners(orderIdReal);
         const ops = await fetchOperaciones(orderIdReal);
 
         const userstatusRaw = String(
@@ -364,15 +346,12 @@ export async function prefetchOrdenesTecnicoDetalles({
 
           plant: baseOrden?.plant || baseOrden?.Plant || null,
 
-          // ✅ Importante para que el cache offline lo acepte
           start_date: startDate,
           finish_date: finishDate,
 
-          // ✅ ShortText consistente
           ShortText: shortTextValue || null,
           short_text: shortTextValue || null,
 
-          // ✅ Cobertura offline
           cobertura_tipo: coberturaDetectada || null,
 
           userstatus: userstatusRaw || null,
@@ -424,4 +403,56 @@ export async function prefetchOrdenesTecnicoDetalles({
   await Promise.all(workers);
 
   return { ok, skip, fail, window: win };
+}
+
+// ==========================================
+// 🔴 NUEVO: FUNCIÓN MAESTRA PARA EL BACKGROUND FETCH
+// ==========================================
+export async function prefetchOrdenesTecnico(userEmail = null) {
+  try {
+    console.log("[PREFETCH MASTER] Iniciando sincronización de órdenes...");
+
+    // 1. Obtenemos la ventana de tiempo offline (ej. hoy +- 8 días)
+    const win = buildOfflineWindow(new Date());
+
+    // 2. Formateamos las fechas como las espera tu API de SAP (YYYY-MM-DD)
+    const startStr = win.start.toISOString().split("T")[0];
+    const endStr = win.end.toISOString().split("T")[0];
+
+    // 3. Construimos los parámetros de la petición
+    const params = new URLSearchParams({
+      start: startStr,
+      end: endStr,
+      mode: "range",
+    });
+    if (userEmail) params.set("user", userEmail);
+
+    // 4. Traemos la lista principal de órdenes de SAP
+    const res = await api.get(`/api/ordenes/sap/list?${params.toString()}`);
+    const data = Array.isArray(res.data) ? res.data : [];
+
+    // 5. Guardamos la lista principal en el caché local
+    await saveOrdenesTecnicoList(userEmail, data, win);
+
+    // 6. Extraemos los IDs de las órdenes que acabamos de descargar
+    const orderIds = data.map((x) => x?.Orderid).filter(Boolean);
+
+    console.log(`[PREFETCH MASTER] Se encontraron ${orderIds.length} órdenes. Descargando detalles...`);
+
+    // 7. Llamamos a tu función detallada con los IDs obtenidos
+    const resultadoDetalles = await prefetchOrdenesTecnicoDetalles({
+      orderIds,
+      concurrency: 3, 
+    });
+
+    console.log("[PREFETCH MASTER] Sincronización finalizada:", resultadoDetalles);
+    return resultadoDetalles;
+
+  } catch (error) {
+    console.log(
+      "[PREFETCH MASTER] Error catastrófico:",
+      error?.response?.data || error?.message || error
+    );
+    throw error; // Propagamos el error para que TaskManager lo detecte
+  }
 }
