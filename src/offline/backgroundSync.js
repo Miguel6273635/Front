@@ -11,6 +11,10 @@ import NetInfo from "@react-native-community/netinfo";
 import * as BackgroundFetch from "expo-background-fetch";
 import * as TaskManager from "expo-task-manager";
 
+import { syncTecnicoPendingActions } from "./tecnicoPendingSync";
+import { bootstrapPrefetchConsumiblesCatalogo } from "./bootstrapConsumiblesCatalogo";import { syncTecnicoPendingActions } from "./tecnicoPendingSync";
+import { bootstrapPrefetchConsumiblesCatalogo } from "./bootstrapConsumiblesCatalogo";
+
 import api from "../services/api";
 import { runOutboxSync } from "./syncEngine";
 import { bootstrapPrefetchOrdenesSupervisor } from "./bootstrapSync";
@@ -275,9 +279,75 @@ export async function runBackgroundSyncNow(options = {}) {
           e?.response?.data || e?.message || e,
         );
       }
-    } else if (rolId === 3) {
-      prefetchResult = await runTecnicoPrefetch(user);
-    } else {
+   } else if (rolId === 3) {
+  let tecnicoPendingResult = null;
+  let tecnicoPrefetchResult = null;
+  let consumiblesResult = null;
+
+  try {
+    tecnicoPendingResult = await syncTecnicoPendingActions(user, api, {
+      limit: 5,
+    });
+  } catch (e) {
+    tecnicoPendingResult = {
+      ok: false,
+      reason: "tecnico_pending_error",
+      error: e?.message || String(e),
+    };
+  }
+
+  tecnicoPrefetchResult = await runTecnicoPrefetch(user);
+
+  try {
+    consumiblesResult = await bootstrapPrefetchConsumiblesCatalogo();
+  } catch (e) {
+    consumiblesResult = {
+      ok: false,
+      reason: "consumibles_prefetch_error",
+      error: e?.message || String(e),
+    };
+  }
+
+  prefetchResult = {
+    tecnicoPendingResult,
+    tecnicoPrefetchResult,
+    consumiblesResult,
+  };
+}} else if (rolId === 3) {
+  let tecnicoPendingResult = null;
+  let tecnicoPrefetchResult = null;
+  let consumiblesResult = null;
+
+  try {
+    tecnicoPendingResult = await syncTecnicoPendingActions(user, api, {
+      limit: 5,
+    });
+  } catch (e) {
+    tecnicoPendingResult = {
+      ok: false,
+      reason: "tecnico_pending_error",
+      error: e?.message || String(e),
+    };
+  }
+
+  tecnicoPrefetchResult = await runTecnicoPrefetch(user);
+
+  try {
+    consumiblesResult = await bootstrapPrefetchConsumiblesCatalogo();
+  } catch (e) {
+    consumiblesResult = {
+      ok: false,
+      reason: "consumibles_prefetch_error",
+      error: e?.message || String(e),
+    };
+  }
+
+  prefetchResult = {
+    tecnicoPendingResult,
+    tecnicoPrefetchResult,
+    consumiblesResult,
+  };
+} else {
       prefetchResult = {
         ok: false,
         reason: "role_without_prefetch",
