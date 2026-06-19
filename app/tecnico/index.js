@@ -18,8 +18,7 @@ import Header from "../../src/components/Header";
 
 import { useAuth } from "../../src/context/AuthContext";
 import { useOffline } from "../../src/offline/OfflineProvider";
-import { bootstrapPrefetchOrdenesTecnico } from "../../src/offline/bootstrapSyncTecnico";
-import { bootstrapPrefetchConsumiblesCatalogo } from "../../src/offline/bootstrapConsumiblesCatalogo";
+import { runBackgroundSyncNow } from "../../src/offline/backgroundSync";
 
 // ====== Datos del menú (tiles) ======
 const TILES = [
@@ -82,10 +81,7 @@ function FioriTile({ title, icon, badge, onPress, disabled = false }) {
       <View style={styles.tileHeader}>
         <Image
           source={icon}
-          style={[
-            styles.tileIcon,
-            disabled && { opacity: 0.4 },
-          ]}
+          style={[styles.tileIcon, disabled && { opacity: 0.4 }]}
           resizeMode="contain"
         />
 
@@ -97,10 +93,7 @@ function FioriTile({ title, icon, badge, onPress, disabled = false }) {
       </View>
 
       <Text
-        style={[
-          styles.tileTitle,
-          disabled && styles.tileTitleDisabled,
-        ]}
+        style={[styles.tileTitle, disabled && styles.tileTitleDisabled]}
         numberOfLines={2}
       >
         {title}
@@ -129,43 +122,46 @@ export default function TecnicoHome() {
 
       const subscription = BackHandler.addEventListener(
         "hardwareBackPress",
-        onBackPress
+        onBackPress,
       );
 
       return () => subscription.remove();
-    }, [])
+    }, []),
   );
 
+  /*
+    Sincronización silenciosa del técnico.
+
+    Antes aquí se ejecutaba directamente:
+      - bootstrapPrefetchOrdenesTecnico()
+      - bootstrapPrefetchConsumiblesCatalogo()
+
+    Eso podía hacer que el home o las pantallas del técnico se sintieran pesadas.
+
+    Ahora solo disparamos runBackgroundSyncNow sin bloquear la pantalla.
+    backgroundSync.js se encarga de:
+      - enviar pendientes
+      - actualizar órdenes offline 8 días antes y 8 días después
+      - actualizar consumibles/catálogos
+      - hacerlo por rol
+  */
   useEffect(() => {
-    const email =
-      user?.email ||
-      user?.Email ||
-      user?.username ||
-      user?.Userstatus ||
-      null;
+    if (!user) return;
+    if (!dbReady) return;
 
-    if (!online || !dbReady || !email) return;
+    if (!online) {
+      console.log("[TECNICO HOME] Sin internet. Se usará información offline.");
+      return;
+    }
 
-    bootstrapPrefetchOrdenesTecnico(String(email).trim())
+    runBackgroundSyncNow({
+      source: "tecnico_home",
+    })
       .then((r) => {
-        console.log("[OFFLINE] prefetch tecnico:", r);
+        console.log("[TECNICO HOME] Sync segundo plano:", r);
       })
       .catch((e) => {
-        console.log(
-          "[OFFLINE] prefetch tecnico error:",
-          e?.message || e
-        );
-      });
-
-    bootstrapPrefetchConsumiblesCatalogo()
-      .then((r) => {
-        console.log("[OFFLINE] prefetch consumibles:", r);
-      })
-      .catch((e) => {
-        console.log(
-          "[OFFLINE] prefetch consumibles error:",
-          e?.message || e
-        );
+        console.log("[TECNICO HOME] Sync error:", e?.message || e);
       });
   }, [online, dbReady, user]);
 

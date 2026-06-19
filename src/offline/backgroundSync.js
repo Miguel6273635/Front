@@ -2,22 +2,22 @@
 // Sincronización en segundo plano para Mike-dev
 // Objetivo:
 // 1. Enviar cola pendiente cuando haya red estable.
-// 2. Actualizar órdenes offline sin trabar la app.
-// 3. Ejecutar por rol: técnico o supervisor.
-// 4. Guardar última sincronización.
+// 2. Enviar pendientes específicos del técnico.
+// 3. Actualizar órdenes offline sin trabar la app.
+// 4. Actualizar consumibles/catálogos.
+// 5. Ejecutar por rol: técnico o supervisor.
+// 6. Guardar última sincronización.
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import NetInfo from "@react-native-community/netinfo";
 import * as BackgroundFetch from "expo-background-fetch";
 import * as TaskManager from "expo-task-manager";
 
-import { syncTecnicoPendingActions } from "./tecnicoPendingSync";
-import { bootstrapPrefetchConsumiblesCatalogo } from "./bootstrapConsumiblesCatalogo";import { syncTecnicoPendingActions } from "./tecnicoPendingSync";
-import { bootstrapPrefetchConsumiblesCatalogo } from "./bootstrapConsumiblesCatalogo";
-
 import api from "../services/api";
 import { runOutboxSync } from "./syncEngine";
 import { bootstrapPrefetchOrdenesSupervisor } from "./bootstrapSync";
+import { syncTecnicoPendingActions } from "./tecnicoPendingSync";
+import { bootstrapPrefetchConsumiblesCatalogo } from "./bootstrapConsumiblesCatalogo";
 
 const BACKGROUND_SYNC_TASK = "MITSU_BACKGROUND_SYNC_TASK";
 
@@ -28,11 +28,6 @@ const BG_RUNNING_KEY = "background_sync_running";
 
 const DEFAULT_MINIMUM_INTERVAL_SECONDS = 15 * 60; // 15 minutos
 
-/**
- * Lee el usuario guardado.
- * Primero intenta el usuario que registramos para background.
- * Si no existe, usa el user normal de AuthContext.
- */
 async function getStoredUser() {
   try {
     const bgRaw = await AsyncStorage.getItem(BG_USER_KEY);
@@ -48,13 +43,6 @@ async function getStoredUser() {
   }
 }
 
-/**
- * Revisa red estable.
- * Para envío pesado usamos:
- * - WiFi
- * - Celular 4G
- * - Celular 5G
- */
 export async function getBackgroundNetworkState() {
   const st = await NetInfo.fetch();
 
@@ -66,6 +54,7 @@ export async function getBackgroundNetworkState() {
   ).toLowerCase();
 
   const isWifi = type === "wifi";
+
   const isGoodCellular =
     type === "cellular" &&
     (cellularGeneration === "4g" || cellularGeneration === "5g");
@@ -81,9 +70,6 @@ export async function getBackgroundNetworkState() {
   };
 }
 
-/**
- * Evita que se ejecuten dos sincronizaciones al mismo tiempo.
- */
 async function isSyncRunning() {
   const value = await AsyncStorage.getItem(BG_RUNNING_KEY);
   return value === "1";
@@ -97,9 +83,6 @@ async function setSyncRunning(value) {
   }
 }
 
-/**
- * Guarda resultado para poder mostrarlo en pantalla si lo necesitas.
- */
 async function saveSyncResult(result) {
   try {
     const now = new Date();
@@ -122,11 +105,19 @@ async function saveSyncResult(result) {
   }
 }
 
-/**
- * Intenta ejecutar prefetch técnico.
- * Lo hacemos con require dinámico para no romper el build si todavía no agregas
- * la función maestra prefetchOrdenesTecnico en prefetchOrdenesTecnico.js.
- */
+function getUserEmail(user) {
+  return (
+    user?.correo ||
+    user?.email ||
+    user?.Email ||
+    user?.username ||
+    user?.mail ||
+    user?.preferred_username ||
+    user?.upn ||
+    null
+  );
+}
+
 async function runTecnicoPrefetch(user) {
   try {
     const tecnicoModule = require("./prefetchOrdenesTecnico");
@@ -144,13 +135,7 @@ async function runTecnicoPrefetch(user) {
       };
     }
 
-    const userEmail =
-      user?.correo ||
-      user?.email ||
-      user?.mail ||
-      user?.preferred_username ||
-      user?.upn ||
-      null;
+    const userEmail = getUserEmail(user);
 
     return await fn(userEmail);
   } catch (e) {
@@ -167,13 +152,83 @@ async function runTecnicoPrefetch(user) {
   }
 }
 
-/**
- * Sincronización principal.
- * Esta función se puede correr:
- * - En segundo plano.
- * - Al abrir la app.
- * - Cuando vuelve internet.
- */
+async function runSupervisorPrefetch() {
+  try {
+    return await bootstrapPrefetchOrdenesSupervisor();
+  } catch (e) {
+    console.log(
+      "[BACKGROUND SYNC] Error supervisor:",
+      e?.response?.data || e?.message || e,
+    );
+
+    return {
+      ok: false,
+      reason: "supervisor_prefetch_error",
+      error: e?.message || String(e),
+    };
+  }
+}
+
+async function runTecnicoFullSync(user) {
+  let tecnicoPendingResult = null;
+  let tecnicoPrefetchResult = null;
+  let consumiblesResult = null;
+
+  try {
+    tecnicoPendingResult = await syncTecnicoPendingActions(user, api, {
+      limit: 5,
+    });
+  } catch (e) {
+    console.log(
+      "[BACKGROUND SYNC] Error pendientes técnico:",
+      e?.response?.data || e?.message || e,
+    );
+
+    tecnicoPendingResult = {
+      ok: false,
+      reason: "tecnico_pending_error",
+      error: e?.message || String(e),
+    };
+  }
+
+  try {
+    tecnicoPrefetchResult = await runTecnicoPrefetch(user);
+  } catch (e) {
+    console.log(
+      "[BACKGROUND SYNC] Error prefetch técnico:",
+      e?.response?.data || e?.message || e,
+    );
+
+    tecnicoPrefetchResult = {
+      ok: false,
+      reason: "tecnico_prefetch_error",
+      error: e?.message || String(e),
+    };
+  }
+
+  try {
+    consumiblesResult = await bootstrapPrefetchConsumiblesCatalogo();
+  } catch (e) {
+    console.log(
+      "[BACKGROUND SYNC] Error consumibles técnico:",
+      e?.response?.data || e?.message || e,
+    );
+
+    consumiblesResult = {
+      ok: false,
+      reason: "consumibles_prefetch_error",
+      error: e?.message || String(e),
+    };
+  }
+
+  return {
+    ok: true,
+    tecnicoPendingResult,
+    tecnicoPrefetchResult,
+    consumiblesResult,
+  };
+}
+
 export async function runBackgroundSyncNow(options = {}) {
   const { force = false, source = "manual" } = options;
 
@@ -217,10 +272,6 @@ export async function runBackgroundSyncNow(options = {}) {
       return result;
     }
 
-    /**
-     * Si no es red estable, no mandamos pendientes ni descargamos datos pesados.
-     * Esto evita que se queden a medias los envíos.
-     */
     if (!network.stable) {
       const result = {
         ok: false,
@@ -236,118 +287,33 @@ export async function runBackgroundSyncNow(options = {}) {
     console.log("[BACKGROUND SYNC] Iniciando sincronización:", {
       source,
       rol_id: user?.rol_id,
+      email: getUserEmail(user),
       network,
     });
 
-    /**
-     * 1. Primero enviar pendientes.
-     * Esto es importante para que cuando regrese buena red, se mande lo guardado.
-     */
     let outboxResult = null;
 
     try {
       outboxResult = await runOutboxSync(api, { limit: 10 });
     } catch (e) {
+      console.log("[BACKGROUND SYNC] Error outbox:", e?.message || e);
+
       outboxResult = {
         ok: false,
         reason: "outbox_error",
         error: e?.message || String(e),
       };
-
-      console.log("[BACKGROUND SYNC] Error outbox:", e?.message || e);
     }
 
-    /**
-     * 2. Luego actualizar offline por rol.
-     */
     let prefetchResult = null;
 
     const rolId = Number(user?.rol_id);
 
     if (rolId === 2) {
-      try {
-        prefetchResult = await bootstrapPrefetchOrdenesSupervisor();
-      } catch (e) {
-        prefetchResult = {
-          ok: false,
-          reason: "supervisor_prefetch_error",
-          error: e?.message || String(e),
-        };
-
-        console.log(
-          "[BACKGROUND SYNC] Error supervisor:",
-          e?.response?.data || e?.message || e,
-        );
-      }
-   } else if (rolId === 3) {
-  let tecnicoPendingResult = null;
-  let tecnicoPrefetchResult = null;
-  let consumiblesResult = null;
-
-  try {
-    tecnicoPendingResult = await syncTecnicoPendingActions(user, api, {
-      limit: 5,
-    });
-  } catch (e) {
-    tecnicoPendingResult = {
-      ok: false,
-      reason: "tecnico_pending_error",
-      error: e?.message || String(e),
-    };
-  }
-
-  tecnicoPrefetchResult = await runTecnicoPrefetch(user);
-
-  try {
-    consumiblesResult = await bootstrapPrefetchConsumiblesCatalogo();
-  } catch (e) {
-    consumiblesResult = {
-      ok: false,
-      reason: "consumibles_prefetch_error",
-      error: e?.message || String(e),
-    };
-  }
-
-  prefetchResult = {
-    tecnicoPendingResult,
-    tecnicoPrefetchResult,
-    consumiblesResult,
-  };
-}} else if (rolId === 3) {
-  let tecnicoPendingResult = null;
-  let tecnicoPrefetchResult = null;
-  let consumiblesResult = null;
-
-  try {
-    tecnicoPendingResult = await syncTecnicoPendingActions(user, api, {
-      limit: 5,
-    });
-  } catch (e) {
-    tecnicoPendingResult = {
-      ok: false,
-      reason: "tecnico_pending_error",
-      error: e?.message || String(e),
-    };
-  }
-
-  tecnicoPrefetchResult = await runTecnicoPrefetch(user);
-
-  try {
-    consumiblesResult = await bootstrapPrefetchConsumiblesCatalogo();
-  } catch (e) {
-    consumiblesResult = {
-      ok: false,
-      reason: "consumibles_prefetch_error",
-      error: e?.message || String(e),
-    };
-  }
-
-  prefetchResult = {
-    tecnicoPendingResult,
-    tecnicoPrefetchResult,
-    consumiblesResult,
-  };
-} else {
+      prefetchResult = await runSupervisorPrefetch();
+    } else if (rolId === 3) {
+      prefetchResult = await runTecnicoFullSync(user);
+    } else {
       prefetchResult = {
         ok: false,
         reason: "role_without_prefetch",
@@ -361,12 +327,7 @@ export async function runBackgroundSyncNow(options = {}) {
       network,
       user: {
         rol_id: user?.rol_id,
-        email:
-          user?.correo ||
-          user?.email ||
-          user?.mail ||
-          user?.preferred_username ||
-          null,
+        email: getUserEmail(user),
       },
       outboxResult,
       prefetchResult,
@@ -396,10 +357,6 @@ export async function runBackgroundSyncNow(options = {}) {
   }
 }
 
-/**
- * Definición de la tarea.
- * Debe quedar fuera de componentes React.
- */
 TaskManager.defineTask(BACKGROUND_SYNC_TASK, async () => {
   try {
     console.log("[BACKGROUND FETCH] Android despertó la app");
@@ -415,7 +372,8 @@ TaskManager.defineTask(BACKGROUND_SYNC_TASK, async () => {
     if (
       result?.reason === "offline" ||
       result?.reason === "network_not_stable" ||
-      result?.reason === "no_user"
+      result?.reason === "no_user" ||
+      result?.reason === "sync_already_running"
     ) {
       return BackgroundFetch.BackgroundFetchResult.NoData;
     }
@@ -427,10 +385,6 @@ TaskManager.defineTask(BACKGROUND_SYNC_TASK, async () => {
   }
 });
 
-/**
- * Registra la tarea de segundo plano.
- * Se debe llamar cuando ya existe usuario y dbReady.
- */
 export async function registerBackgroundSync(user = null, options = {}) {
   const {
     minimumInterval = DEFAULT_MINIMUM_INTERVAL_SECONDS,
@@ -492,10 +446,6 @@ export async function registerBackgroundSync(user = null, options = {}) {
   }
 }
 
-/**
- * Cancela la tarea.
- * Útil al cerrar sesión.
- */
 export async function unregisterBackgroundSync() {
   try {
     const isRegistered =
@@ -524,10 +474,6 @@ export async function unregisterBackgroundSync() {
   }
 }
 
-/**
- * Lee la última sincronización.
- * Lo puedes usar para mostrarlo en pantalla.
- */
 export async function getLastBackgroundSyncInfo() {
   try {
     const values = await AsyncStorage.multiGet([
