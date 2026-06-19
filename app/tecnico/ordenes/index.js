@@ -31,10 +31,6 @@ import { useFocusEffect } from "@react-navigation/native";
 
 import {
   loadOrdenesTecnicoList,
-  saveOrdenesTecnicoList,
-  pruneDetallesNoUsados,
-  buildOfflineWindow,
-  filterOrdenesByWindow,
 } from "../../../src/offline/ordenesTecnicoCache";
 
 import {
@@ -42,8 +38,8 @@ import {
   patchCacheOrdenesTecnicoList,
   patchCacheOrdenTecnicoDetail,
 } from "../../../src/offline/ordenesTecnicoLocalPatch";
-// Prefetch de detalles (para no entrar a cada orden)
-import { prefetchOrdenesTecnicoDetalles } from "../../../src/offline/prefetchOrdenesTecnico";
+import { outboxAdd } from "../../../src/offline/db";
+import { runBackgroundSyncNow } from "../../../src/offline/backgroundSync";
 
 import { useAuth } from "../../../src/context/AuthContext";
 import Header from "../../../src/components/Header";
@@ -380,6 +376,74 @@ async function removeFromQueue(userEmail, orderId) {
   return next;
 }
 
+
+function makeOutboxId(prefix, orderId) {
+  const safeOrder = String(orderId || "sin_orden").trim();
+  return `${prefix}_${safeOrder}_${Date.now()}_${Math.random()
+    .toString(36)
+    .slice(2, 8)}`;
+}
+
+function buildCheckinEvidenceRequest(orderId, base64) {
+  const cleanOrderId = String(orderId || "").trim();
+
+  const payload = {
+    WorkOrderHeader: { Orderid: cleanOrderId },
+    Attachments: [
+      {
+        DocId: cleanOrderId,
+        FileName: `CHECKIN_${cleanOrderId}.jpg`,
+        MimeType: "image/jpeg",
+        Base64: String(base64 || "").trim(),
+      },
+    ],
+    Return: [],
+  };
+
+  return {
+    method: "POST",
+    url: "/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet?sap-client=400&sap-language=ES",
+    body: payload,
+    headers: {
+      "Content-Type": "application/json",
+    },
+  };
+}
+
+function buildCheckinStatusRequest(orderId, statusCode = "0100") {
+  const cleanOrderId = String(orderId || "").trim();
+  const finalStatus = normalizeCode(statusCode) || "0100";
+
+  const payload = {
+    BulkId: `CHECKIN_${cleanOrderId}`,
+    WorkOrderSet: [
+      {
+        OrderId: cleanOrderId,
+        WorkOrderHeader: {
+          Orderid: cleanOrderId,
+        },
+        WorkOrderUserStatusSet: [
+          {
+            UserStText: finalStatus,
+            Langu: "ES",
+            Inactive: "",
+          },
+        ],
+        Return: [],
+      },
+    ],
+  };
+
+  return {
+    method: "POST",
+    url: "/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderBulkSet?sap-client=400&sap-language=ES",
+    body: payload,
+    headers: {
+      "Content-Type": "application/json",
+    },
+  };
+}
+
 export default function ListaOrdenesTecnico() {
   const { user, ensureValidToken } = useAuth();
 
@@ -621,148 +685,148 @@ export default function ListaOrdenesTecnico() {
    * - ONLINE: muestra TODO lo que regrese SAP según filtros
    * - OFFLINE CACHE: guarda SOLO ventana hoy±8 días
    */
-  const fetchOrdenes = useCallback(
-    async ({ isRefresh = false } = {}) => {
-      try {
-        if (isRefresh) setRefreshing(true);
-        else setLoading(true);
+  /**
+   * Carga de órdenes optimizada para técnico:
+   * - La pantalla primero lee la cache offline.
+   * - No espera SAP para poder pintar la lista.
+   * - La actualización pesada se manda a backgroundSync.
+   * - La ventana offline se mantiene en hoy ± 8 días desde prefetchOrdenesTecnico.
+   */
+ const fetchOrdenes = useCallback(
+  async ({ isRefresh = false } = {}) => {
+    try {
+      if (isRefresh) setRefreshing(true);
+      else setLoading(true);
 
-        // 0) Carga rápida desde cache SOLO si NO es refresh
-        if (!isRefresh) {
-          const cached = await loadOrdenesTecnicoList(userEmail);
+      const cached = await loadOrdenesTecnicoList(userEmail);
 
-          if (cached?.data?.length) {
-            const patchedData = await applyTbmkyOfflineStatuses(cached.data);
-            setAllOrdenes(patchedData);
-            setLoading(false);
-          }
-        }
-
-        // 1) ¿hay internet?
-        const net = await NetInfo.fetch();
-        const online = !!(
-          net?.isConnected && net?.isInternetReachable !== false
-        );
-
-        setIsOnline(online);
-
-        // 2) OFFLINE: usa cache
-        if (!online) {
-          const cached = await loadOrdenesTecnicoList(userEmail);
-
-          if (!cached?.data?.length) {
-            Alert.alert(
-              "Sin conexión",
-              "No hay internet y no hay datos guardados aún.",
-            );
-          } else {
-            const patchedData = await applyTbmkyOfflineStatuses(cached.data);
-            setAllOrdenes(patchedData);
-          }
-
-          return;
-        }
-
-        // 3) ONLINE: pide rango REAL según filtros
-        const req = getSapRequestRange();
-
-        console.log("[ORDENES] Request SAP range:", {
-          dateMode,
-          start: req.startStr,
-          end: req.endStr,
-          user: userEmail,
-        });
-
-        const params = new URLSearchParams({
-          start: req.startStr,
-          end: req.endStr,
-          mode: "range",
-        });
-
-        if (userEmail) params.set("user", userEmail);
-
-        const okToken = await ensureValidToken();
-        if (!okToken) return;
-
-        const res = await api.get(`/api/ordenes/sap/list?${params.toString()}`);
-        const data = Array.isArray(res.data) ? res.data : [];
-
-        // 4) UI: muestra TODO lo de SAP
-        setAllOrdenes(data);
-
-        // 5) OFFLINE CACHE: guarda SOLO ventana hoy±8
-        const offlineWin = buildOfflineWindow(new Date());
-
-        const offlineOnly = filterOrdenesByWindow(
-          data,
-          offlineWin.start,
-          offlineWin.end,
-        );
-
-        await saveOrdenesTecnicoList(userEmail, offlineOnly, offlineWin);
-
-        // 6) Limpieza: conserva detalles solo de órdenes en ventana
-        const keepIds = offlineOnly.map((x) => x?.Orderid).filter(Boolean);
-        await pruneDetallesNoUsados(keepIds);
-
-        // 7) PREFETCH: SOLO ventana y poquitos
-        const MAX_PREFETCH = 12;
-
-        const today = new Date();
-
-        const distToToday = (order) => {
-          const d = parseSapDate(order?.start_date);
-          if (!d) return 999999999;
-          return Math.abs(d.getTime() - today.getTime());
-        };
-
-        const offlineSorted = [...offlineOnly].sort(
-          (a, b) => distToToday(a) - distToToday(b),
-        );
-
-        const idsToPrefetch = offlineSorted
-          .map((x) => x?.Orderid)
-          .filter(Boolean)
-          .slice(0, MAX_PREFETCH);
-
-        prefetchOrdenesTecnicoDetalles({
-          orderIds: idsToPrefetch,
-          token: null,
-          concurrency: 3,
-        }).catch((e) =>
-          console.log("prefetchOrdenesTecnicoDetalles ERROR:", e?.message || e),
-        );
-      } catch (error) {
-        console.error(
-          "Error al cargar órdenes (SAP):",
-          error?.response?.data || error,
-        );
-
-        const cached = await loadOrdenesTecnicoList(userEmail);
-
-        if (cached?.data?.length) {
-          const patchedData = await applyTbmkyOfflineStatuses(cached.data);
-          setAllOrdenes(patchedData);
-        } else {
-          const serverMsg =
-            error?.response?.data?.error ||
-            "No se pudieron cargar las órdenes desde SAP";
-
-          Alert.alert("Error", serverMsg);
-        }
-      } finally {
-        setLoading(false);
-        setRefreshing(false);
+      if (cached?.data?.length) {
+        const patchedData = await applyTbmkyOfflineStatuses(cached.data);
+        setAllOrdenes(patchedData);
       }
-    },
-    [
-      ensureValidToken,
-      userEmail,
-      dateMode,
-      getSapRequestRange,
-      applyTbmkyOfflineStatuses,
-    ],
-  );
+
+      const net = await NetInfo.fetch();
+      const onlineNow = !!(
+        net?.isConnected && net?.isInternetReachable !== false
+      );
+
+      setIsOnline(onlineNow);
+
+      if (!onlineNow) {
+        if (!cached?.data?.length) {
+          Alert.alert(
+            "Sin conexión",
+            "No hay internet y todavía no hay órdenes guardadas en el dispositivo.",
+          );
+        }
+
+        return;
+      }
+
+      /*
+        IMPORTANTE:
+        - Para Día podemos dejar que use cache/background.
+        - Para Año, Mes, Semana o Todas, sí necesitamos pedir el rango real a SAP.
+        Si no hacemos esto, solo filtra las órdenes que ya estaban guardadas offline.
+      */
+      const debeConsultarSapPorFiltro =
+        dateMode === "all" ||
+        dateMode === "month" ||
+        dateMode === "year" ||
+        dateMode === "weekRange";
+
+      if (!debeConsultarSapPorFiltro) {
+        runBackgroundSyncNow({
+          source: isRefresh ? "tecnico_ordenes_refresh" : "tecnico_ordenes",
+        })
+          .then(async (r) => {
+            console.log("[ORDENES] Sync segundo plano finalizada:", r);
+
+            const updated = await loadOrdenesTecnicoList(userEmail);
+
+            if (updated?.data?.length) {
+              const patchedUpdated = await applyTbmkyOfflineStatuses(
+                updated.data,
+              );
+
+              setAllOrdenes(patchedUpdated);
+            }
+          })
+          .catch((e) => {
+            console.log("[ORDENES] Sync segundo plano error:", e?.message || e);
+          });
+
+        return;
+      }
+
+      const okToken = await ensureValidToken();
+      if (!okToken) return;
+
+      const req = getSapRequestRange();
+
+      console.log("[ORDENES][FILTRO] Consultando SAP por rango:", {
+        dateMode,
+        start: req.startStr,
+        end: req.endStr,
+        user: userEmail,
+      });
+
+      const params = new URLSearchParams({
+        start: req.startStr,
+        end: req.endStr,
+        mode: "range",
+      });
+
+      if (userEmail) {
+        params.set("user", userEmail);
+      }
+
+      const res = await api.get(`/api/ordenes/sap/list?${params.toString()}`);
+      const data = Array.isArray(res.data) ? res.data : [];
+
+      const patchedSapData = await applyTbmkyOfflineStatuses(data);
+
+      setAllOrdenes(patchedSapData);
+
+      /*
+        Después de traer el rango grande, también lanzamos background
+        para que actualice pendientes/catálogos sin bloquear.
+      */
+      runBackgroundSyncNow({
+        source: `tecnico_ordenes_filtro_${dateMode}`,
+      }).catch((e) => {
+        console.log("[ORDENES] Background después de filtro:", e?.message || e);
+      });
+    } catch (error) {
+      console.error(
+        "Error al cargar órdenes:",
+        error?.response?.data || error?.message || error,
+      );
+
+      const cached = await loadOrdenesTecnicoList(userEmail);
+
+      if (cached?.data?.length) {
+        const patchedData = await applyTbmkyOfflineStatuses(cached.data);
+        setAllOrdenes(patchedData);
+      } else {
+        Alert.alert(
+          "Error",
+          "No se pudieron cargar las órdenes. Revisa conexión o logs.",
+        );
+      }
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  },
+  [
+    userEmail,
+    dateMode,
+    getSapRequestRange,
+    ensureValidToken,
+    applyTbmkyOfflineStatuses,
+  ],
+);
 
   // catálogo una vez
   useEffect(() => {
@@ -1081,69 +1145,27 @@ export default function ListaOrdenesTecnico() {
     }
   };
 
-  // Sync cola a SAP (foto + estatus)
+  // Sync cola anterior de check-in.
+  // Para nuevos check-ins ya usamos outbox + backgroundSync.
   const syncCheckinQueue = useCallback(async () => {
     if (!userEmail) return;
     if (syncingRef.current) return;
 
-    const net = await NetInfo.fetch();
-
-    const online = !!(net?.isConnected && net?.isInternetReachable !== false);
-
-    setIsOnline(online);
-
-    if (!online) return;
-
     syncingRef.current = true;
 
     try {
+      runBackgroundSyncNow({
+        source: "tecnico_checkin_queue_legacy",
+      }).catch((e) => {
+        console.log("[CHECKIN][LEGACY QUEUE][BACKGROUND] error:", e?.message || e);
+      });
+
       const q = await loadCheckinQueue(userEmail);
-      if (!q.length) return;
-
-      const ok = await ensureValidToken();
-      if (!ok) return;
-
-      const ordered = [...q].sort(
-        (a, b) => (a?.createdAt || 0) - (b?.createdAt || 0),
-      );
-
-      for (const item of ordered) {
-        const orderId = String(item?.orderId || "").trim();
-        const b64 = String(item?.photoBase64 || "").trim();
-
-        if (!orderId || !b64) {
-          await removeFromQueue(userEmail, orderId);
-          continue;
-        }
-
-        try {
-          console.log("[CHECKIN][SYNC] Enviando:", {
-            orderId,
-            b64len: b64.length,
-          });
-          const statusToSend = normalizeCode(item?.statusCode) || "0100";
-
-          await postCheckinEvidence(orderId, b64);
-          await postChangeStatusToSap(orderId, statusToSend);
-          await removeFromQueue(userEmail, orderId);
-        } catch (e) {
-          console.log(
-            "[CHECKIN][SYNC] Error SAP:",
-            orderId,
-            e?.response?.data || e?.message || e,
-          );
-          break;
-        }
-      }
-
-      const q2 = await loadCheckinQueue(userEmail);
-      setCheckinQueue(q2);
-
-      fetchOrdenes({ isRefresh: true });
+      setCheckinQueue(q);
     } finally {
       syncingRef.current = false;
     }
-  }, [ensureValidToken, fetchOrdenes, userEmail]);
+  }, [userEmail]);
 
   // Auto-sync cuando regresa internet y hay cola
   useEffect(() => {
@@ -1151,6 +1173,34 @@ export default function ListaOrdenesTecnico() {
       syncCheckinQueue().catch(() => {});
     }
   }, [isOnline, checkinQueue.length, syncCheckinQueue]);
+
+  const enqueueCheckinOutbox = async (orderId, photoBase64, statusCode = "0100") => {
+    const cleanOrderId = String(orderId || "").trim();
+    const finalStatus = normalizeCode(statusCode) || "0100";
+
+    const evidenceRequest = buildCheckinEvidenceRequest(cleanOrderId, photoBase64);
+    const statusRequest = buildCheckinStatusRequest(cleanOrderId, finalStatus);
+
+    await outboxAdd({
+      id: makeOutboxId("tecnico_checkin_evidence", cleanOrderId),
+      type: "tecnico_checkin_evidence",
+      dedupeKey: `tecnico:checkin:evidence:${cleanOrderId}`,
+      request: evidenceRequest,
+    });
+
+    await outboxAdd({
+      id: makeOutboxId("tecnico_checkin_status", cleanOrderId),
+      type: "tecnico_checkin_status",
+      dedupeKey: `tecnico:checkin:status:${cleanOrderId}`,
+      request: statusRequest,
+    });
+
+    return {
+      ok: true,
+      orderId: cleanOrderId,
+      statusCode: finalStatus,
+    };
+  };
 
   const enviarCheckinCompletoASap = async () => {
     if (!checkinOrderId) {
@@ -1164,102 +1214,48 @@ export default function ListaOrdenesTecnico() {
     }
 
     const orderId = String(checkinOrderId).trim();
+    const offlineStatus = "0100";
 
     try {
       setIsSending(true);
 
-      const net = await NetInfo.fetch();
-      const online = !!(net?.isConnected && net?.isInternetReachable !== false);
+      /**
+       * Nuevo flujo:
+       * - No esperamos SAP desde la pantalla.
+       * - Guardamos estatus local.
+       * - Guardamos foto + cambio de estatus en outbox.
+       * - Cerramos el modal rápido.
+       * - backgroundSync manda la información cuando haya red estable.
+       */
+      await applyLocalOfflineStatus(orderId, offlineStatus);
 
-      setIsOnline(online);
-
-      if (!online) {
-        const offlineStatus = "0100";
-
-        await applyLocalOfflineStatus(orderId, offlineStatus);
-
-        const nextQueue = await enqueueCheckin(userEmail, {
-          orderId,
-          photoBase64: String(checkinPhotoBase64).trim(),
-          statusCode: offlineStatus,
-          lastValidStatus: offlineStatus,
-          createdAt: Date.now(),
-        });
-
-        setCheckinQueue(nextQueue);
-
-        Alert.alert(
-          "Check-in offline",
-          "Sin internet. Se guardó el check-in en cola y se enviará automáticamente cuando regrese la conexión ✅",
-        );
-
-        setShowCheckinModal(false);
-        setCheckinPhotoBase64(null);
-        setCheckinPhotoUri(null);
-
-        return;
-      }
-
-      const ok = await ensureValidToken();
-      if (!ok) return;
-      const onlineStatus = "0100";
-
-      await postCheckinEvidence(orderId, checkinPhotoBase64);
-      await postChangeStatusToSap(orderId, onlineStatus);
-      await applyLocalOfflineStatus(orderId, onlineStatus);
-
-      Alert.alert(
-        "Check-in",
-        "Evidencia enviada y estatus actualizado a PENDIENTE",
-      );
+      await enqueueCheckinOutbox(orderId, checkinPhotoBase64, offlineStatus);
 
       setShowCheckinModal(false);
       setCheckinPhotoBase64(null);
       setCheckinPhotoUri(null);
 
-      fetchOrdenes({ isRefresh: true });
+      Alert.alert(
+        "Check-in guardado",
+        "Se guardó en el dispositivo. La app enviará la foto y el estatus automáticamente en segundo plano ✅",
+      );
+
+      runBackgroundSyncNow({
+        source: "tecnico_checkin_saved",
+      }).catch((e) => {
+        console.log("[CHECKIN][BACKGROUND] error:", e?.message || e);
+      });
+
+      fetchOrdenes({ isRefresh: false });
     } catch (e) {
       console.log(
         "enviarCheckinCompletoASap ERROR:",
         e?.response?.data || e?.message || e,
       );
 
-      const net2 = await NetInfo.fetch();
-
-      const online2 = !!(
-        net2?.isConnected && net2?.isInternetReachable !== false
-      );
-
-      if (!online2) {
-        const offlineStatus = "0100";
-
-        await applyLocalOfflineStatus(orderId, offlineStatus);
-
-        const nextQueue = await enqueueCheckin(userEmail, {
-          orderId,
-          photoBase64: String(checkinPhotoBase64).trim(),
-          statusCode: offlineStatus,
-          lastValidStatus: offlineStatus,
-          createdAt: Date.now(),
-        });
-
-        setCheckinQueue(nextQueue);
-
-        Alert.alert(
-          "Check-in guardado",
-          "Se cayó la conexión. Se guardó en cola y se enviará cuando regrese internet ✅",
-        );
-
-        setShowCheckinModal(false);
-        setCheckinPhotoBase64(null);
-        setCheckinPhotoUri(null);
-
-        return;
-      }
-
       Alert.alert(
-        "Error SAP",
-        "No se pudo completar el check-in (foto/estatus). Revisa logs.",
+        "Error",
+        "No se pudo guardar el check-in en el dispositivo. Intenta nuevamente.",
       );
     } finally {
       setIsSending(false);
