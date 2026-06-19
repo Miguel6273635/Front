@@ -16,7 +16,10 @@
     "ios": {
       "supportsTablet": true,
       "infoPlist": {
-        "NSLocationWhenInUseUsageDescription": "Necesitamos tu ubicación para monitoreo en tiempo real."
+        "NSLocationWhenInUseUsageDescription": "Necesitamos tu ubicación para monitoreo en tiempo real.",
+        "UIBackgroundModes": [
+          "fetch"
+        ]
       }
     },
     "android": {
@@ -35,10 +38,13 @@
         "android.permission.RECORD_AUDIO",
         "android.permission.MODIFY_AUDIO_SETTINGS",
         "android.permission.ACCESS_FINE_LOCATION",
-        "android.permission.ACCESS_COARSE_LOCATION"
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.RECEIVE_BOOT_COMPLETED",
+        "android.permission.WAKE_LOCK",
+        "android.permission.RECEIVE_BOOT_COMPLETED",
+        "android.permission.WAKE_LOCK"
       ],
-      "package": "com.guadalub130.mitsu_frontend" 
-
+      "package": "com.melmex.qas"
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -50,7 +56,13 @@
       "expo-sqlite",
       "expo-asset",
       "expo-location",
-      "expo-splash-screen"
+      "expo-splash-screen",
+      [
+        "expo-background-fetch",
+        {
+          "enableBackgroundLocation": false
+        }
+      ]
     ],
     "extra": {
       "AZURE_TENANT_ID": "12326ef5-6c3e-48e8-a6ff-2661c6efcfb1",

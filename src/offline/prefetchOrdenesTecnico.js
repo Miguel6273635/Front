@@ -3,6 +3,8 @@ import {
   saveOrdenTecnicoDetail,
   shouldCacheDetailByOrder,
   buildOfflineWindow,
+  saveOrdenesTecnicoList,
+  pruneDetallesByWindow,
 } from "./ordenesTecnicoCache";
 
 function pickSecondAddress(results = []) {
@@ -46,8 +48,6 @@ function normalizeOpsFromBackend(ops = []) {
 
   return ops.map((op) => {
     const Activity = op.Activity || op.activity || op.Vornr || "";
-    //Cambios agregados por lo del campo de subactivity Miguel Angel 04/06/2026
-    //const SubActivity = op.SubActivity || op.subactivity || op.Uvorn || "";
     const Description = op.Description || op.description || op.Ltxa1 || "";
     const StandardTextKey = op.StandardTextKey || op.standardTextKey || "";
 
@@ -55,29 +55,14 @@ function normalizeOpsFromBackend(ops = []) {
       ...op,
       id: op.id,
       activity: String(Activity || ""),
-      //Cambios agregados por lo del campo de subactivity Miguel Angel 04/06/2026
-      // subactivity: String(SubActivity || ""),
       description: String(Description || ""),
       standardTextKey: String(StandardTextKey || ""),
       Activity: String(Activity || ""),
-      //Cambios agregados por lo del campo de subactivity Miguel Angel 04/06/2026
-      //SubActivity: String(SubActivity || ""),
       Description: String(Description || ""),
       StandardTextKey: String(StandardTextKey || ""),
     };
   });
 }
-
-// id estable para operaciones
-//Cambios agregados por lo del campo de subactivity Miguel Angel 04/06/2026
-/*
-const opKey = (orderId, op) =>
-  `${orderId}-${op.activity || op.Activity || ""}${
-    op.subactivity || op.SubActivity
-      ? `-${op.subactivity || op.SubActivity}`
-      : ""
-  }`;
-*/
 
 const opKey = (orderId, op, idx) => {
   const activity = String(op.activity || op.Activity || "").trim();
@@ -87,12 +72,11 @@ const opKey = (orderId, op, idx) => {
 
   return `${orderId}-${activity}-${usr02}-${desc}-${stk}-${idx}`;
 };
-// helper para leer results OData
+
 function odataResults(res) {
   return res?.data?.d?.results || res?.data?.results || [];
 }
 
-// helper para leer entidad OData WorkOrderHeaderSet('id')
 function odataEntity(res) {
   return res?.data?.d || res?.data || {};
 }
@@ -203,7 +187,6 @@ async function fetchOperaciones(orderIdReal) {
   let ops = [];
 
   try {
-    // ✅ Primero usamos el mismo endpoint que usa la pantalla de detalle.
     const resOps = await api.get(`/api/operaciones/sap/${String(orderIdReal)}`);
 
     const rawOps =
@@ -233,7 +216,6 @@ async function fetchOperaciones(orderIdReal) {
   }
 
   try {
-    // ✅ Fallback al OData original
     const resOps = await api.get(
       `/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet('${orderIdReal}')/ToOperations?$format=json`,
     );
@@ -284,7 +266,6 @@ export async function prefetchOrdenesTecnicoDetalles({
       const orderId = ids[idx];
 
       try {
-        // 1) Header detalle
         const baseOrden = await fetchHeaderDetalle(orderId);
 
         const orderIdReal = String(
@@ -309,7 +290,6 @@ export async function prefetchOrdenesTecnicoDetalles({
           continue;
         }
 
-        // 2) ShortText / cobertura
         const shortTextValue =
           baseOrden?.ShortText ??
           baseOrden?.shorttext ??
@@ -319,14 +299,9 @@ export async function prefetchOrdenesTecnicoDetalles({
 
         const coberturaDetectada = detectCoberturaFromShortText(shortTextValue);
 
-        // 3) Addresses
         const { cliente, direccion } = await fetchAddresses(orderIdReal);
-
-        // 4) Partners
         const { partners, emailFromPartners } =
           await fetchPartners(orderIdReal);
-
-        // 5) Operaciones
         const ops = await fetchOperaciones(orderIdReal);
 
         const userstatusRaw = String(
@@ -361,18 +336,13 @@ export async function prefetchOrdenesTecnicoDetalles({
             null,
 
           equipment: baseOrden?.equipment || baseOrden?.Equipment || null,
-
           plant: baseOrden?.plant || baseOrden?.Plant || null,
 
-          // ✅ Importante para que el cache offline lo acepte
           start_date: startDate,
           finish_date: finishDate,
 
-          // ✅ ShortText consistente
           ShortText: shortTextValue || null,
           short_text: shortTextValue || null,
-
-          // ✅ Cobertura offline
           cobertura_tipo: coberturaDetectada || null,
 
           userstatus: userstatusRaw || null,
@@ -424,4 +394,80 @@ export async function prefetchOrdenesTecnicoDetalles({
   await Promise.all(workers);
 
   return { ok, skip, fail, window: win };
+}
+
+// ==========================================
+// Función maestra para sincronizar órdenes del técnico
+// Se usa desde backgroundSync.js
+// ==========================================
+export async function prefetchOrdenesTecnico(userEmail = null) {
+  try {
+    console.log("[PREFETCH TECNICO] Iniciando sincronización...");
+
+    const win = buildOfflineWindow(new Date());
+
+    const startStr = win.startStr;
+    const endStr = win.endStr;
+
+    const params = new URLSearchParams({
+      start: startStr,
+      end: endStr,
+      mode: "range",
+    });
+
+    if (userEmail) {
+      params.set("user", userEmail);
+    }
+
+    const res = await api.get(`/api/ordenes/sap/list?${params.toString()}`);
+
+    const data = Array.isArray(res?.data)
+      ? res.data
+      : Array.isArray(res?.data?.data)
+        ? res.data.data
+        : Array.isArray(res?.data?.results)
+          ? res.data.results
+          : [];
+
+    await saveOrdenesTecnicoList(userEmail, data, win);
+
+    const orderIds = data
+      .map((x) => x?.Orderid || x?.OrderId || x?.orderid)
+      .filter(Boolean)
+      .map((x) => String(x).trim());
+
+    console.log("[PREFETCH TECNICO] Órdenes encontradas:", orderIds.length);
+
+    const detalleResult = await prefetchOrdenesTecnicoDetalles({
+      orderIds,
+      concurrency: 3,
+    });
+
+    await pruneDetallesByWindow(userEmail, win);
+
+    const result = {
+      ok: true,
+      count: orderIds.length,
+      window: {
+        startStr,
+        endStr,
+      },
+      detalleResult,
+    };
+
+    console.log("[PREFETCH TECNICO] Finalizado:", result);
+
+    return result;
+  } catch (e) {
+    console.log(
+      "[PREFETCH TECNICO] Error:",
+      e?.response?.data || e?.message || e,
+    );
+
+    return {
+      ok: false,
+      reason: "prefetch_tecnico_error",
+      error: e?.message || String(e),
+    };
+  }
 }

@@ -2,9 +2,14 @@
 import React, { useEffect, useRef } from "react";
 import { ActivityIndicator, View } from "react-native";
 import { Redirect } from "expo-router";
+
 import { useAuth } from "../src/context/AuthContext";
-import { useOffline } from "../src/offline/OfflineProvider"; // tu provider
-import { bootstrapPrefetchOrdenesSupervisor } from "../src/offline/bootstrapSync";
+import { useOffline } from "../src/offline/OfflineProvider";
+
+import {
+  registerBackgroundSync,
+  runBackgroundSyncNow,
+} from "../src/offline/backgroundSync";
 
 function pickHomeByRole(rol_id) {
   if (rol_id === 1) return "/admin";
@@ -15,27 +20,55 @@ function pickHomeByRole(rol_id) {
 export default function Index() {
   const { user, loading } = useAuth();
   const { dbReady, online } = useOffline();
-  const ran = useRef(false);
+
+  // Evita registrar varias veces mientras la app renderiza
+  const registeredRef = useRef(false);
 
   useEffect(() => {
-    if (ran.current) return;
     if (!user) return;
     if (!dbReady) return;
 
-    ran.current = true;
+    /**
+     * Registramos la tarea de segundo plano solo una vez.
+     * No depende de que online sea true, porque la tarea puede quedar lista
+     * y después ejecutarse cuando el sistema operativo lo permita.
+     */
+    if (!registeredRef.current) {
+      registeredRef.current = true;
 
-    (async () => {
-      try {
-        if (online) {
-          const r = await bootstrapPrefetchOrdenesSupervisor();
-          console.log("[BOOTSTRAP ORDENES]", r);
-        } else {
-          console.log("[BOOTSTRAP ORDENES] sin internet");
-        }
-      } catch (e) {
-        console.log("[BOOTSTRAP ORDENES ERROR]", e?.message || e);
-      }
-    })();
+      registerBackgroundSync(user, {
+        runImmediately: false,
+      })
+        .then((r) => {
+          console.log("[INDEX] Background sync registrado:", r);
+        })
+        .catch((e) => {
+          console.log("[INDEX] Error registrando background sync:", e?.message || e);
+        });
+    }
+  }, [user, dbReady]);
+
+  useEffect(() => {
+    if (!user) return;
+    if (!dbReady) return;
+
+    /**
+     * Cuando la app abre y hay internet, hacemos una sincronización en segundo plano.
+     * No usamos await directo en pantalla para no trabar la navegación.
+     */
+    if (online) {
+      runBackgroundSyncNow({
+        source: "app_index",
+      })
+        .then((r) => {
+          console.log("[INDEX] Sync inicial finalizada:", r);
+        })
+        .catch((e) => {
+          console.log("[INDEX] Sync inicial error:", e?.message || e);
+        });
+    } else {
+      console.log("[INDEX] Sin internet. Se cargará desde offline.");
+    }
   }, [user, dbReady, online]);
 
   if (loading) {
