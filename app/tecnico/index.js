@@ -1,6 +1,6 @@
 // app/tecnico/index.js
 
-import React, { useCallback, useEffect } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   View,
   Text,
@@ -11,14 +11,21 @@ import {
   StatusBar,
   BackHandler,
   Image,
+  ActivityIndicator,
 } from "react-native";
 
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { router, useFocusEffect } from "expo-router";
 import Header from "../../src/components/Header";
 
 import { useAuth } from "../../src/context/AuthContext";
 import { useOffline } from "../../src/offline/OfflineProvider";
 import { runBackgroundSyncNow } from "../../src/offline/backgroundSync";
+
+const PRELOAD_DONE_KEY = (userEmail) =>
+  `tecnico:preloadDone:${String(userEmail || "unknown")
+    .toLowerCase()
+    .trim()}`;
 
 // ====== Datos del menú (tiles) ======
 const TILES = [
@@ -106,6 +113,74 @@ export default function TecnicoHome() {
   const { user } = useAuth();
   const { online, dbReady } = useOffline();
 
+  const [checkingPreload, setCheckingPreload] = useState(true);
+
+  const userEmail = useMemo(() => {
+    return String(
+      user?.correo ||
+        user?.email ||
+        user?.username ||
+        user?.preferred_username ||
+        "unknown",
+    )
+      .toLowerCase()
+      .trim();
+  }, [user]);
+
+  /*
+    Validación de precarga.
+
+    IMPORTANTE:
+    Esta pantalla se abre directo cuando el usuario ya tiene sesión guardada.
+    Por eso no basta con mandar al técnico desde login.
+
+    Flujo:
+    - Si NO tiene bandera de precarga, manda a /tecnico/preparando
+    - Si ya tiene bandera, muestra Inicio Técnico
+  */
+  useEffect(() => {
+    let mounted = true;
+
+    const revisarPrecarga = async () => {
+      try {
+        if (!user) {
+          if (mounted) setCheckingPreload(false);
+          return;
+        }
+
+        const preloadDone = await AsyncStorage.getItem(
+          PRELOAD_DONE_KEY(userEmail),
+        );
+
+        if (preloadDone !== "true") {
+          console.log("[TECNICO HOME] Precarga no realizada. Redirigiendo...");
+          router.replace("/tecnico/preparando");
+          return;
+        }
+
+        console.log("[TECNICO HOME] Precarga ya realizada.");
+      } catch (e) {
+        console.log(
+          "[TECNICO HOME] Error revisando precarga:",
+          e?.message || e,
+        );
+
+        router.replace("/tecnico/preparando");
+        return;
+      } finally {
+        if (mounted) {
+          setCheckingPreload(false);
+        }
+      }
+    };
+
+    revisarPrecarga();
+
+    return () => {
+      mounted = false;
+    };
+  }, [user, userEmail]);
+
   /*
     Bloquea el botón físico de regresar en Android
     solo cuando estás en el home principal del técnico.
@@ -132,22 +207,15 @@ export default function TecnicoHome() {
   /*
     Sincronización silenciosa del técnico.
 
-    Antes aquí se ejecutaba directamente:
-      - bootstrapPrefetchOrdenesTecnico()
-      - bootstrapPrefetchConsumiblesCatalogo()
+    Esta sync se mantiene, pero ya NO es la primera carga obligatoria.
+    La primera carga visible la hace /tecnico/preparando.
 
-    Eso podía hacer que el home o las pantallas del técnico se sintieran pesadas.
-
-    Ahora solo disparamos runBackgroundSyncNow sin bloquear la pantalla.
-    backgroundSync.js se encarga de:
-      - enviar pendientes
-      - actualizar órdenes offline 8 días antes y 8 días después
-      - actualizar consumibles/catálogos
-      - hacerlo por rol
+    Aquí solo dejamos una actualización silenciosa para mantener datos frescos.
   */
   useEffect(() => {
     if (!user) return;
     if (!dbReady) return;
+    if (checkingPreload) return;
 
     if (!online) {
       console.log("[TECNICO HOME] Sin internet. Se usará información offline.");
@@ -163,7 +231,27 @@ export default function TecnicoHome() {
       .catch((e) => {
         console.log("[TECNICO HOME] Sync error:", e?.message || e);
       });
-  }, [online, dbReady, user]);
+  }, [online, dbReady, user, checkingPreload]);
+
+  if (checkingPreload) {
+    return (
+      <View style={styles.container}>
+        <StatusBar barStyle="dark-content" />
+
+        <Header title="Preparando información" />
+
+        <View style={styles.loadingCenter}>
+          <ActivityIndicator size="large" color={COLORS.brand} />
+
+          <Text style={styles.loadingTitle}>Validando información</Text>
+
+          <Text style={styles.loadingText}>
+            Estamos revisando si la información del técnico ya fue precargada.
+          </Text>
+        </View>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.container}>
@@ -196,13 +284,39 @@ const COLORS = {
   tileBg: "#EFF4F9",
   tileBorder: "#DDE6F2",
   textPrimary: "#0B1F3B",
+  textMuted: "#63718B",
   badgeBg: "#EB5757",
+  brand: "#0A6ED1",
 };
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: COLORS.pageBg,
+  },
+
+  loadingCenter: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 24,
+  },
+
+  loadingTitle: {
+    marginTop: 14,
+    fontSize: 18,
+    fontWeight: "900",
+    color: COLORS.textPrimary,
+    textAlign: "center",
+  },
+
+  loadingText: {
+    marginTop: 8,
+    fontSize: 13,
+    lineHeight: 19,
+    color: COLORS.textMuted,
+    fontWeight: "700",
+    textAlign: "center",
   },
 
   grid: {

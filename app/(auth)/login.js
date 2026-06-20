@@ -26,9 +26,28 @@ const COLORS = {
 };
 
 function pickHomeByRole(rol_id) {
-  if (rol_id === 1) return "/admin";
-  if (rol_id === 2) return "/supervisor";
-  return "/tecnico";
+  const rol = Number(rol_id);
+
+  if (rol === 1) return "/admin";
+  if (rol === 2) return "/supervisor";
+
+  /*
+    Técnico:
+    Antes mandaba directo a /tecnico.
+    Ahora primero manda a /tecnico/preparando para precargar:
+    - órdenes
+    - detalles
+    - operaciones
+    - consumibles
+    - pendientes SAP
+
+    Ojo:
+    Si el usuario ya tenía sesión guardada y entra directo a /tecnico,
+    también se valida desde app/tecnico/index.js.
+  */
+  if (rol === 3) return "/tecnico/preparando";
+
+  return "/tecnico/preparando";
 }
 
 const BRAND = {
@@ -41,7 +60,16 @@ export default function LoginScreen() {
   const [sending, setSending] = useState(false);
 
   useEffect(() => {
-    if (user) router.replace(pickHomeByRole(user.rol_id));
+    if (!user) return;
+
+    const route = pickHomeByRole(user.rol_id);
+
+    console.log("[LOGIN] Usuario detectado, redirigiendo a:", {
+      rol_id: user?.rol_id,
+      route,
+    });
+
+    router.replace(route);
   }, [user]);
 
   const handleLoginSSO = async () => {
@@ -55,12 +83,18 @@ export default function LoginScreen() {
         setError("");
         return;
       }
+
+      /*
+        No hacemos router.replace aquí directamente.
+        El useEffect de arriba detecta user y manda a la ruta correcta.
+      */
     } catch (e) {
       console.log("SSO error:", e?.message || e);
+
       setError(
         e?.message
           ? String(e.message)
-          : "No se pudo iniciar sesión con Microsoft"
+          : "No se pudo iniciar sesión con Microsoft",
       );
     } finally {
       setSending(false);
@@ -80,10 +114,7 @@ export default function LoginScreen() {
 
       <View style={styles.content}>
         <View style={styles.brandWrap}>
-          <Image
-            source={require("../../assets/logo.png")}
-            style={styles.logo}
-          />
+          <Image source={require("../../assets/logo.png")} style={styles.logo} />
         </View>
 
         <View style={styles.card}>
@@ -104,14 +135,18 @@ export default function LoginScreen() {
             disabled={disabled}
             activeOpacity={0.86}
           >
-            {sending ? (
+            {sending || loading ? (
               <ActivityIndicator size="small" color={COLORS.text} />
             ) : (
               <MicrosoftIcon />
             )}
 
             <Text style={styles.msButtonText}>
-              {sending ? "Abriendo Microsoft..." : "Continuar con Microsoft"}
+              {sending
+                ? "Abriendo Microsoft..."
+                : loading
+                  ? "Validando sesión..."
+                  : "Continuar con Microsoft"}
             </Text>
           </TouchableOpacity>
         </View>

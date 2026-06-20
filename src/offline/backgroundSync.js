@@ -2,11 +2,12 @@
 // Sincronización en segundo plano para Mike-dev
 // Objetivo:
 // 1. Enviar cola pendiente cuando haya red estable.
-// 2. Enviar pendientes específicos del técnico.
-// 3. Actualizar órdenes offline sin trabar la app.
-// 4. Actualizar consumibles/catálogos.
-// 5. Ejecutar por rol: técnico o supervisor.
-// 6. Guardar última sincronización.
+// 2. Enviar cola SAP pendiente.
+// 3. Enviar pendientes específicos del técnico.
+// 4. Actualizar órdenes offline sin trabar la app.
+// 5. Actualizar consumibles/catálogos.
+// 6. Ejecutar por rol: técnico o supervisor.
+// 7. Guardar última sincronización.
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import NetInfo from "@react-native-community/netinfo";
@@ -18,6 +19,7 @@ import { runOutboxSync } from "./syncEngine";
 import { bootstrapPrefetchOrdenesSupervisor } from "./bootstrapSync";
 import { syncTecnicoPendingActions } from "./tecnicoPendingSync";
 import { bootstrapPrefetchConsumiblesCatalogo } from "./bootstrapConsumiblesCatalogo";
+import { processSapQueue } from "./sapQueue";
 
 const BACKGROUND_SYNC_TASK = "MITSU_BACKGROUND_SYNC_TASK";
 
@@ -49,6 +51,7 @@ export async function getBackgroundNetworkState() {
   const online = !!st.isConnected && st.isInternetReachable !== false;
 
   const type = st.type;
+
   const cellularGeneration = String(
     st.details?.cellularGeneration || "",
   ).toLowerCase();
@@ -305,6 +308,22 @@ export async function runBackgroundSyncNow(options = {}) {
       };
     }
 
+    let sapQueueResult = null;
+
+    try {
+      sapQueueResult = await processSapQueue({
+        apiInstance: api,
+      });
+    } catch (e) {
+      console.log("[BACKGROUND SYNC] Error cola SAP:", e?.message || e);
+
+      sapQueueResult = {
+        ok: false,
+        reason: "sap_queue_error",
+        error: e?.message || String(e),
+      };
+    }
+
     let prefetchResult = null;
 
     const rolId = Number(user?.rol_id);
@@ -330,6 +349,7 @@ export async function runBackgroundSyncNow(options = {}) {
         email: getUserEmail(user),
       },
       outboxResult,
+      sapQueueResult,
       prefetchResult,
       finishedAt: new Date().toISOString(),
     };

@@ -5,7 +5,7 @@
     "scheme": "mitsuapp",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/icon_mitsu_prod.png",
+    "icon": "./assets/icon_mitsu_qas.png",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
     "splash": {
@@ -24,7 +24,7 @@
     },
     "android": {
       "adaptiveIcon": {
-        "foregroundImage": "./assets/icon_mitsu_prod.png",
+        "foregroundImage": "./assets/icon_mitsu_qas.png",
         "backgroundColor": "#FFFFFF"
       },
       "edgeToEdgeEnabled": true,

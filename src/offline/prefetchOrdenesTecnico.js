@@ -1,3 +1,4 @@
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import api from "../services/api";
 import {
   saveOrdenTecnicoDetail,
@@ -6,6 +7,21 @@ import {
   saveOrdenesTecnicoList,
   pruneDetallesByWindow,
 } from "./ordenesTecnicoCache";
+
+/*
+  Archivo: src/offline/prefetchOrdenesTecnico.js
+
+  Objetivo:
+  - Traer la lista de órdenes del técnico en ventana offline.
+  - Guardar la lista en cache.
+  - Descargar en segundo plano el detalle de cada orden:
+    cabecera, dirección, partners/correo, operaciones y componentes.
+  - Evitar que app/tecnico/ordenes/[id]/index.js tenga que esperar SAP
+    cuando el técnico abre el detalle.
+*/
+
+const COMPONENTS_KEY = (orderId, activity) =>
+  `orderComponents:${String(orderId || "").trim()}:${String(activity || "").trim()}`;
 
 function pickSecondAddress(results = []) {
   if (!Array.isArray(results) || results.length === 0) return null;
@@ -82,15 +98,14 @@ function odataEntity(res) {
 }
 
 function detectCoberturaFromShortText(shortText) {
-  const s = String(shortText || "").toUpperCase();
-  const idx = s.indexOf("COBERTURA");
-  if (idx < 0) return null;
+  const raw = String(shortText || "").toUpperCase();
+  const normalized = raw.replace(/\s+/g, "");
 
-  const tail = s.slice(idx);
+  if (!raw.includes("COBERTURA")) return null;
 
-  if (tail.includes("COBERTURABASICA")) return "BASICA";
-  if (tail.includes("COBERTURAMEDIA")) return "MEDIA";
-  if (tail.includes("COBERTURASEMI")) return "SEMI";
+  if (normalized.includes("COBERTURABASICA")) return "BASICA";
+  if (normalized.includes("COBERTURAMEDIA")) return "MEDIA";
+  if (normalized.includes("COBERTURASEMI")) return "SEMI";
 
   return null;
 }
@@ -115,12 +130,55 @@ function pickFinishDate(baseOrden) {
   );
 }
 
-async function fetchHeaderDetalle(orderId) {
-  const resOrden = await api.get(
-    `/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet('${orderId}')?$format=json`,
-  );
+async function fetchBackendDetalle(orderId) {
+  try {
+    const resOrden = await api.get(`/api/ordenes/sap/${orderId}`);
 
-  return odataEntity(resOrden);
+    return resOrden?.data || {};
+  } catch (e) {
+    console.log(
+      "[prefetch][backend detalle] no se pudo cargar:",
+      orderId,
+      e?.response?.data || e?.message || e,
+    );
+
+    return {};
+  }
+}
+
+async function fetchHeaderDetalle(orderId) {
+  try {
+    const resHeader = await api.get(
+      `/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet('${orderId}')?$format=json`,
+    );
+
+    return odataEntity(resHeader);
+  } catch (e) {
+    console.log(
+      "[prefetch][header] no se pudo cargar:",
+      orderId,
+      e?.response?.data || e?.message || e,
+    );
+
+    return {};
+  }
+}
+
+async function fetchBaseOrden(orderId) {
+  /*
+    Se combinan los dos orígenes porque:
+    - /api/ordenes/sap/:id suele venir normalizado por backend.
+    - WorkOrderHeaderSet trae campos SAP directos como ShortText.
+  */
+  const [backendDetalle, headerDetalle] = await Promise.all([
+    fetchBackendDetalle(orderId),
+    fetchHeaderDetalle(orderId),
+  ]);
+
+  return {
+    ...(backendDetalle || {}),
+    ...(headerDetalle || {}),
+  };
 }
 
 async function fetchAddresses(orderIdReal) {
@@ -139,9 +197,27 @@ async function fetchAddresses(orderIdReal) {
     };
   } catch (e) {
     console.log(
-      "[prefetch][addresses] no se pudieron cargar:",
+      "[prefetch][addresses] falló ToAddresses, intentando endpoint backend:",
       orderIdReal,
       e?.response?.data || e?.message || e,
+    );
+  }
+
+  try {
+    const resAddr = await api.get(`/api/ordenes/sap/${orderIdReal}/addresses`);
+    const results = resAddr?.data?.results || resAddr?.data?.d?.results || [];
+    const chosen = pickSecondAddress(results);
+    const mapped = mapDireccionLikeBackend(chosen);
+
+    return {
+      cliente: mapped.cliente || "",
+      direccion: mapped.direccion || "",
+    };
+  } catch (e2) {
+    console.log(
+      "[prefetch][addresses] no se pudieron cargar:",
+      orderIdReal,
+      e2?.response?.data || e2?.message || e2,
     );
 
     return {
@@ -221,6 +297,7 @@ async function fetchOperaciones(orderIdReal) {
     );
 
     const rawOps = odataResults(resOps);
+
     ops = normalizeOpsFromBackend(rawOps).map((o, idx) => ({
       ...o,
       id: o.id || opKey(orderIdReal, o, idx),
@@ -243,21 +320,123 @@ async function fetchOperaciones(orderIdReal) {
   }
 }
 
+async function saveOfflineComponents(orderId, activity, data) {
+  try {
+    await AsyncStorage.setItem(
+      COMPONENTS_KEY(orderId, activity),
+      JSON.stringify(Array.isArray(data) ? data : []),
+    );
+
+    return true;
+  } catch (e) {
+    console.log(
+      "[prefetch][componentes] no se pudieron guardar offline:",
+      orderId,
+      activity,
+      e?.message || e,
+    );
+
+    return false;
+  }
+}
+
+async function fetchComponentesOperacion(orderId, activity) {
+  const cleanOrderId = String(orderId || "").trim();
+  const cleanActivity = String(activity || "").trim();
+
+  if (!cleanOrderId || !cleanActivity) return [];
+
+  try {
+    const res = await api.get(
+      `/api/operaciones/ordenes/${cleanOrderId}/operaciones/${cleanActivity}/componentes`,
+    );
+
+    const data = Array.isArray(res.data) ? res.data : [];
+
+    await saveOfflineComponents(cleanOrderId, cleanActivity, data);
+
+    return data;
+  } catch (e) {
+    console.log(
+      "[prefetch][componentes] no se pudieron cargar:",
+      cleanOrderId,
+      cleanActivity,
+      e?.response?.data || e?.message || e,
+    );
+
+    return [];
+  }
+}
+
+async function prefetchComponentesOrden(orderId, ops = [], concurrency = 2) {
+  const actividades = [
+    ...new Set(
+      (Array.isArray(ops) ? ops : [])
+        .map((op) => String(op?.activity || op?.Activity || "").trim())
+        .filter(Boolean),
+    ),
+  ];
+
+  if (!actividades.length) {
+    return { ok: 0, fail: 0, total: 0 };
+  }
+
+  let i = 0;
+  let ok = 0;
+  let fail = 0;
+
+  async function worker() {
+    while (i < actividades.length) {
+      const idx = i++;
+      const activity = actividades[idx];
+
+      const data = await fetchComponentesOperacion(orderId, activity);
+
+      if (Array.isArray(data)) ok++;
+      else fail++;
+    }
+  }
+
+  const workers = Array.from(
+    { length: Math.max(1, Number(concurrency) || 1) },
+    () => worker(),
+  );
+
+  await Promise.all(workers);
+
+  return {
+    ok,
+    fail,
+    total: actividades.length,
+  };
+}
+
 export async function prefetchOrdenesTecnicoDetalles({
   orderIds = [],
   concurrency = 3,
+  prefetchComponents = true,
 }) {
   const ids = [
     ...new Set(orderIds.map((x) => String(x).trim()).filter(Boolean)),
   ];
 
-  if (!ids.length) return { ok: 0, skip: 0, fail: 0 };
+  if (!ids.length) {
+    return {
+      ok: 0,
+      skip: 0,
+      fail: 0,
+      components: { ok: 0, fail: 0, total: 0 },
+    };
+  }
 
   const win = buildOfflineWindow(new Date());
 
   let ok = 0;
   let skip = 0;
   let fail = 0;
+  let componentsOk = 0;
+  let componentsFail = 0;
+  let componentsTotal = 0;
   let i = 0;
 
   async function worker() {
@@ -266,7 +445,7 @@ export async function prefetchOrdenesTecnicoDetalles({
       const orderId = ids[idx];
 
       try {
-        const baseOrden = await fetchHeaderDetalle(orderId);
+        const baseOrden = await fetchBaseOrden(orderId);
 
         const orderIdReal = String(
           baseOrden?.Orderid || baseOrden?.OrderId || orderId,
@@ -278,12 +457,16 @@ export async function prefetchOrdenesTecnicoDetalles({
         const orderLikeForWindow = {
           Orderid: orderIdReal,
           start_date: startDate,
+          StartDate: startDate,
+          finish_date: finishDate,
+          FinishDate: finishDate,
         };
 
         if (!shouldCacheDetailByOrder(orderLikeForWindow, new Date())) {
           console.log("[prefetch][skip fuera ventana]", {
             orderId: orderIdReal,
             start_date: startDate,
+            finish_date: finishDate,
           });
 
           skip++;
@@ -299,10 +482,21 @@ export async function prefetchOrdenesTecnicoDetalles({
 
         const coberturaDetectada = detectCoberturaFromShortText(shortTextValue);
 
-        const { cliente, direccion } = await fetchAddresses(orderIdReal);
-        const { partners, emailFromPartners } =
-          await fetchPartners(orderIdReal);
-        const ops = await fetchOperaciones(orderIdReal);
+        const [{ cliente, direccion }, { partners, emailFromPartners }, ops] =
+          await Promise.all([
+            fetchAddresses(orderIdReal),
+            fetchPartners(orderIdReal),
+            fetchOperaciones(orderIdReal),
+          ]);
+
+        let componentResult = { ok: 0, fail: 0, total: 0 };
+
+        if (prefetchComponents) {
+          componentResult = await prefetchComponentesOrden(orderIdReal, ops, 2);
+          componentsOk += componentResult.ok;
+          componentsFail += componentResult.fail;
+          componentsTotal += componentResult.total;
+        }
 
         const userstatusRaw = String(
           baseOrden?.Userstatus ??
@@ -327,7 +521,10 @@ export async function prefetchOrdenesTecnicoDetalles({
         ).trim();
 
         const detail = {
+          ...baseOrden,
+
           Orderid: orderIdReal,
+          OrderId: orderIdReal,
 
           order_type:
             baseOrden?.order_type ||
@@ -336,28 +533,48 @@ export async function prefetchOrdenesTecnicoDetalles({
             null,
 
           equipment: baseOrden?.equipment || baseOrden?.Equipment || null,
+          Equipment: baseOrden?.Equipment || baseOrden?.equipment || null,
+
           plant: baseOrden?.plant || baseOrden?.Plant || null,
+          Plant: baseOrden?.Plant || baseOrden?.plant || null,
 
           start_date: startDate,
+          StartDate: startDate,
           finish_date: finishDate,
+          FinishDate: finishDate,
 
           ShortText: shortTextValue || null,
           short_text: shortTextValue || null,
-          cobertura_tipo: coberturaDetectada || null,
+          cobertura_tipo: coberturaDetectada || baseOrden?.cobertura_tipo || null,
 
-          userstatus: userstatusRaw || null,
+          userstatus: userstatusRaw || baseOrden?.userstatus || null,
           estatus_code: estatusCodeRaw || userstatusRaw || null,
-          estatus_label: estatusLabelRaw || null,
+          estatus_label: estatusLabelRaw || baseOrden?.estatus_label || null,
           estatus_tipo: baseOrden?.estatus_tipo ?? null,
           checkin_done: !!baseOrden?.checkin_done,
 
-          cliente: cliente || "",
-          direccion: direccion || "",
-          cliente_email: emailFromPartners || "",
+          cliente:
+            cliente ||
+            baseOrden?.cliente ||
+            `${baseOrden?.Name1 ?? ""} ${baseOrden?.Name2 ?? ""}`.trim() ||
+            "",
+          direccion:
+            direccion ||
+            baseOrden?.direccion ||
+            baseOrden?.address ||
+            baseOrden?.partner_address ||
+            "",
+          cliente_email:
+            emailFromPartners ||
+            baseOrden?.cliente_email ||
+            baseOrden?.email ||
+            "",
 
           partners: Array.isArray(partners) ? partners : [],
           operaciones: Array.isArray(ops) ? ops : [],
 
+          _prefetchedAt: Date.now(),
+          _componentsPrefetch: componentResult,
           _raw: baseOrden,
         };
 
@@ -369,6 +586,7 @@ export async function prefetchOrdenesTecnicoDetalles({
           operaciones: Array.isArray(detail?.operaciones)
             ? detail.operaciones.length
             : "NO_ARRAY",
+          componentes: componentResult,
           start_date: detail?.start_date,
           finish_date: detail?.finish_date,
         });
@@ -393,7 +611,17 @@ export async function prefetchOrdenesTecnicoDetalles({
 
   await Promise.all(workers);
 
-  return { ok, skip, fail, window: win };
+  return {
+    ok,
+    skip,
+    fail,
+    window: win,
+    components: {
+      ok: componentsOk,
+      fail: componentsFail,
+      total: componentsTotal,
+    },
+  };
 }
 
 // ==========================================
@@ -441,6 +669,7 @@ export async function prefetchOrdenesTecnico(userEmail = null) {
     const detalleResult = await prefetchOrdenesTecnicoDetalles({
       orderIds,
       concurrency: 3,
+      prefetchComponents: true,
     });
 
     await pruneDetallesByWindow(userEmail, win);

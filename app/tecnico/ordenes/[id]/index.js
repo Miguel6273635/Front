@@ -1213,63 +1213,398 @@ export default function DetalleOrden() {
   const obtenerOrden = async () => {
     const orderIdParam = String(id || "").trim();
 
+    if (!orderIdParam) {
+      setLoading(false);
+      return;
+    }
+
+    const aplicarDatosLocales = async (detailData) => {
+      if (!detailData) return;
+
+      setOrden(detailData);
+
+      const cachedOrderId = String(detailData?.Orderid || orderIdParam).trim();
+
+      const savedStartCached = await loadOrderStart(cachedOrderId);
+      if (savedStartCached) {
+        setOrderStartedAtMs(savedStartCached);
+        setNowTick(Date.now());
+      }
+
+      const savedFinishCached = await loadOrderFinish(cachedOrderId);
+      if (savedFinishCached) {
+        setOrderFinishedAtMs(savedFinishCached);
+      }
+
+      const savedElapsedCached = await loadOrderElapsed(cachedOrderId);
+      if (savedElapsedCached != null) {
+        setOrderElapsedMs(savedElapsedCached);
+      }
+
+      const pendingCached = await loadPendingSign(cachedOrderId);
+
+      if (pendingCached?.checkedMap) {
+        setCheckedMap(pendingCached.checkedMap || {});
+      }
+
+      if (Array.isArray(pendingCached?.consumibles)) {
+        setConsumibles(pendingCached.consumibles);
+      }
+
+      if (typeof pendingCached?.notaTecnico === "string") {
+        setNotaTecnico(pendingCached.notaTecnico || "");
+      }
+
+      if (typeof pendingCached?.clienteNombre === "string") {
+        setClienteNombre(pendingCached.clienteNombre || "");
+      }
+
+      if (typeof pendingCached?.clienteCargo === "string") {
+        setClienteCargo(pendingCached.clienteCargo || "");
+      }
+
+      if (typeof pendingCached?.avisoCliente === "string") {
+        setAvisoCliente(pendingCached.avisoCliente || "");
+      }
+
+      if (Number.isFinite(pendingCached?.orderStartedAtMs)) {
+        setOrderStartedAtMs(pendingCached.orderStartedAtMs);
+      }
+
+      if (Number.isFinite(pendingCached?.orderFinishedAtMs)) {
+        setOrderFinishedAtMs(pendingCached.orderFinishedAtMs);
+      }
+
+      if (Number.isFinite(pendingCached?.orderElapsedMs)) {
+        setOrderElapsedMs(pendingCached.orderElapsedMs);
+      }
+
+      const emailCached = String(detailData?.cliente_email || "").trim();
+      if (emailCached && isValidEmail(emailCached)) {
+        setClienteEmail(emailCached);
+      }
+
+      const cn = String(detailData?.cliente_nombre || "").trim();
+      const cc = String(detailData?.cliente_cargo || "").trim();
+      const av = String(detailData?.aviso_cliente || "").trim();
+
+      if (cn) setClienteNombre(cn);
+      if (cc) setClienteCargo(cc);
+      if (av) setAvisoCliente(av);
+    };
+
+    const actualizarDesdeSapEnSegundoPlano = async () => {
+      try {
+        const net = await NetInfo.fetch();
+        const isOnline = !!(
+          net?.isConnected && net?.isInternetReachable !== false
+        );
+
+        if (!isOnline) {
+          console.log("[DETALLE] Offline. Se queda con cache local.");
+          return;
+        }
+
+        const okToken = await ensureValidToken();
+        if (!okToken) {
+          console.log("[DETALLE] Token no válido. Se queda con cache local.");
+          return;
+        }
+
+        console.log("[DETALLE][BG] Actualizando detalle desde SAP:", orderIdParam);
+
+        const resOrden = await api.get(`/api/ordenes/sap/${orderIdParam}`);
+        const baseOrden = resOrden.data || {};
+
+        let shortTextHeader = "";
+
+        try {
+          const resHeader = await api.get(
+            `/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet('${orderIdParam}')`,
+          );
+
+          shortTextHeader =
+            resHeader?.data?.d?.ShortText ||
+            resHeader?.data?.d?.shorttext ||
+            "";
+        } catch (e) {
+          console.warn(
+            "[DETALLE][BG][COBERTURA] No se pudo cargar WorkOrderHeaderSet:",
+            e?.response?.data || e?.message || e,
+          );
+        }
+
+        const shortTextForCoverage =
+          shortTextHeader ||
+          baseOrden?.ShortText ||
+          baseOrden?.shorttext ||
+          baseOrden?.Shorttext ||
+          baseOrden?.shortText ||
+          "";
+
+        const coberturaDetectada =
+          detectCoberturaFromShortText(shortTextForCoverage);
+
+        let direccionSap = "";
+        let clienteSap = "";
+
+        try {
+          const resAddr = await api.get(
+            `/api/ordenes/sap/${orderIdParam}/addresses`,
+          );
+
+          const results =
+            resAddr?.data?.results || resAddr?.data?.d?.results || [];
+
+          const chosen = pickSecondAddress(results);
+          const mapped = mapDireccionLikeBackend(chosen);
+
+          direccionSap = mapped.direccion || "";
+          clienteSap = mapped.cliente || "";
+        } catch (e) {
+          console.warn(
+            "[DETALLE][BG][ADDR] No se pudo cargar /addresses:",
+            e?.response?.data || e?.message || e,
+          );
+        }
+
+        let ops = [];
+
+        try {
+          const resOps = await api.get(
+            `/api/operaciones/sap/${String(orderIdParam)}`,
+          );
+
+          const rawOps =
+            resOps?.data?.d?.results ||
+            resOps?.data?.results ||
+            resOps?.data?.operaciones ||
+            resOps?.data ||
+            [];
+
+          ops = normalizeOpsFromBackend(rawOps);
+        } catch (e) {
+          console.warn(
+            "[DETALLE][BG][OPS] No se pudieron cargar operaciones:",
+            e?.response?.data || e?.message || e,
+          );
+
+          ops = normalizeOpsFromBackend(baseOrden?.operaciones || []);
+        }
+
+        const orderIdReal = String(
+          baseOrden?.Orderid || baseOrden?.OrderId || orderIdParam,
+        ).trim();
+
+        const opsWithId = ops.map((o) => ({
+          ...o,
+          id: o.id || opKey(orderIdReal, o),
+        }));
+
+        const localState = await loadOpState(orderIdReal);
+
+        const opsMerged = mergeOpsWithLocalState(
+          orderIdReal,
+          opsWithId,
+          localState,
+        );
+
+        let emailFromPartners = "";
+
+        try {
+          const resPartners = await api.get(
+            `/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet('${orderIdParam}')/ToPartners`,
+          );
+
+          const results =
+            resPartners?.data?.d?.results ||
+            resPartners?.data?.results ||
+            resPartners?.data?.d?.ToPartners?.results ||
+            [];
+
+          const re = (results || []).find(
+            (p) => String(p?.PartnRoleOld || "").trim() === "RE",
+          );
+
+          emailFromPartners = String(re?.Mail1 || re?.Mail2 || "").trim();
+        } catch (e) {
+          console.warn(
+            "[DETALLE][BG][MAIL] No se pudo cargar ToPartners:",
+            e?.response?.data || e?.message || e,
+          );
+        }
+
+        const data = {
+          ...baseOrden,
+          ShortText: shortTextForCoverage || baseOrden?.ShortText || "",
+          cobertura_tipo: coberturaDetectada || baseOrden?.cobertura_tipo || null,
+          direccion:
+            direccionSap ||
+            baseOrden?.direccion ||
+            baseOrden?.address ||
+            baseOrden?.partner_address ||
+            "",
+          cliente:
+            clienteSap ||
+            baseOrden?.cliente ||
+            `${baseOrden?.Name1 ?? ""} ${baseOrden?.Name2 ?? ""}`.trim(),
+          cliente_email: emailFromPartners || baseOrden?.cliente_email || "",
+          operaciones: opsMerged,
+          cliente_nombre: String(clienteNombre || "").trim(),
+          cliente_cargo: String(clienteCargo || "").trim(),
+          aviso_cliente: String(avisoCliente || "").trim(),
+        };
+
+        setOrden(data);
+
+        const emailResolved = String(emailFromPartners || "").trim();
+
+        if (
+          emailResolved &&
+          isValidEmail(emailResolved) &&
+          !String(clienteEmail || "").trim()
+        ) {
+          setClienteEmail(emailResolved);
+        }
+
+        await safeSaveDetailIfWindow(orderIdReal, data);
+
+        if (orderIdParam && orderIdParam !== orderIdReal) {
+          const oldStart = await loadOrderStart(orderIdParam);
+          const realStart = await loadOrderStart(orderIdReal);
+
+          if (oldStart && !realStart) {
+            await saveOrderStart(orderIdReal, oldStart);
+            await clearOrderStart(orderIdParam);
+            setOrderStartedAtMs(oldStart);
+            setNowTick(Date.now());
+          }
+
+          const oldFinish = await loadOrderFinish(orderIdParam);
+          const realFinish = await loadOrderFinish(orderIdReal);
+
+          if (oldFinish && !realFinish) {
+            await saveOrderFinish(orderIdReal, oldFinish);
+            await clearOrderFinish(orderIdParam);
+            setOrderFinishedAtMs(oldFinish);
+          }
+
+          const oldElapsed = await loadOrderElapsed(orderIdParam);
+          const realElapsed = await loadOrderElapsed(orderIdReal);
+
+          if (oldElapsed != null && realElapsed == null) {
+            await saveOrderElapsed(orderIdReal, oldElapsed);
+            await clearOrderElapsed(orderIdParam);
+            setOrderElapsedMs(oldElapsed);
+          }
+
+          const oldPending = await loadPendingSign(orderIdParam);
+          const realPending = await loadPendingSign(orderIdReal);
+
+          if (oldPending && !realPending) {
+            await savePendingSign(orderIdReal, oldPending);
+            await clearPendingSign(orderIdParam);
+          }
+        }
+
+        try {
+          const sc = String(data?.estatus_code || data?.userstatus || "").trim();
+          const isPending0400Local2 = sc.includes("0400");
+          const pending = await loadPendingSign(orderIdReal);
+
+          if (pending) {
+            if (pending?.checkedMap) setCheckedMap(pending.checkedMap || {});
+            if (Array.isArray(pending?.consumibles)) {
+              setConsumibles(pending.consumibles);
+            }
+            if (typeof pending?.notaTecnico === "string") {
+              setNotaTecnico(pending.notaTecnico || "");
+            }
+            if (typeof pending?.clienteNombre === "string") {
+              setClienteNombre(pending.clienteNombre || "");
+            }
+            if (typeof pending?.clienteCargo === "string") {
+              setClienteCargo(pending.clienteCargo || "");
+            }
+            if (typeof pending?.avisoCliente === "string") {
+              setAvisoCliente(pending.avisoCliente || "");
+            }
+
+            if (Number.isFinite(pending?.orderStartedAtMs)) {
+              setOrderStartedAtMs(pending.orderStartedAtMs);
+            }
+
+            if (Number.isFinite(pending?.orderFinishedAtMs)) {
+              setOrderFinishedAtMs(pending.orderFinishedAtMs);
+            }
+
+            if (Number.isFinite(pending?.orderElapsedMs)) {
+              setOrderElapsedMs(pending.orderElapsedMs);
+            }
+
+            if (isPending0400Local2) setFinalizeMode(true);
+          }
+        } catch {}
+
+        const estatusTxtLocal = String(
+          data?.estatus_label || data?.estatus || data?.status || "",
+        )
+          .trim()
+          .toUpperCase();
+
+        const statusCodeLocal = String(
+          data?.estatus_code || data?.userstatus || "",
+        ).trim();
+
+        const isEnProcesoLocal =
+          estatusTxtLocal === "EN_PROCESO" ||
+          estatusTxtLocal === "EN PROCESO" ||
+          statusCodeLocal === "0200";
+
+        const isPending0400Local =
+          statusCodeLocal === "0400" || String(statusCodeLocal).includes("0400");
+
+        const isFinalLocal =
+          ["0300", "0500", "0600"].includes(statusCodeLocal) || !!data?.isFinal;
+
+        if (isEnProcesoLocal) {
+          const savedStart = await loadOrderStart(orderIdReal);
+
+          if (savedStart) {
+            setOrderStartedAtMs(savedStart);
+            setNowTick(Date.now());
+          }
+        } else if (isPending0400Local) {
+          const savedStart = await loadOrderStart(orderIdReal);
+          if (savedStart) setOrderStartedAtMs(savedStart);
+
+          const savedElapsed = await loadOrderElapsed(orderIdReal);
+          if (savedElapsed != null) setOrderElapsedMs(savedElapsed);
+        } else if (isFinalLocal) {
+          const savedFinish = await loadOrderFinish(orderIdReal);
+          if (savedFinish) setOrderFinishedAtMs(savedFinish);
+        }
+
+        console.log("[DETALLE][BG] Detalle actualizado y guardado:", orderIdReal);
+      } catch (error) {
+        console.log(
+          "[DETALLE][BG] Error actualizando detalle:",
+          error?.response?.data || error?.message || error,
+        );
+      }
+    };
+
     try {
       setLoading(true);
 
       const cached = await loadOrdenTecnicoDetail(orderIdParam);
+
       if (cached?.data) {
-        setOrden(cached.data);
+        await aplicarDatosLocales(cached.data);
+        setLoading(false);
 
-        const cachedOrderId = String(
-          cached?.data?.Orderid || orderIdParam,
-        ).trim();
-
-        const savedStartCached = await loadOrderStart(cachedOrderId);
-        if (savedStartCached) {
-          setOrderStartedAtMs(savedStartCached);
-          setNowTick(Date.now());
-        }
-
-        const savedFinishCached = await loadOrderFinish(cachedOrderId);
-        if (savedFinishCached) setOrderFinishedAtMs(savedFinishCached);
-
-        const savedElapsedCached = await loadOrderElapsed(cachedOrderId);
-        if (savedElapsedCached != null) setOrderElapsedMs(savedElapsedCached);
-
-        const pendingCached = await loadPendingSign(cachedOrderId);
-        if (pendingCached?.checkedMap)
-          setCheckedMap(pendingCached.checkedMap || {});
-        if (Array.isArray(pendingCached?.consumibles))
-          setConsumibles(pendingCached.consumibles);
-        if (typeof pendingCached?.notaTecnico === "string")
-          setNotaTecnico(pendingCached.notaTecnico || "");
-        if (typeof pendingCached?.clienteNombre === "string")
-          setClienteNombre(pendingCached.clienteNombre || "");
-        if (typeof pendingCached?.clienteCargo === "string")
-          setClienteCargo(pendingCached.clienteCargo || "");
-        if (typeof pendingCached?.avisoCliente === "string")
-          setAvisoCliente(pendingCached.avisoCliente || "");
-
-        if (Number.isFinite(pendingCached?.orderStartedAtMs)) {
-          setOrderStartedAtMs(pendingCached.orderStartedAtMs);
-        }
-        if (Number.isFinite(pendingCached?.orderFinishedAtMs)) {
-          setOrderFinishedAtMs(pendingCached.orderFinishedAtMs);
-        }
-        if (Number.isFinite(pendingCached?.orderElapsedMs)) {
-          setOrderElapsedMs(pendingCached.orderElapsedMs);
-        }
-
-        const emailCached = String(cached?.data?.cliente_email || "").trim();
-        if (emailCached && isValidEmail(emailCached))
-          setClienteEmail(emailCached);
-
-        const cn = String(cached?.data?.cliente_nombre || "").trim();
-        const cc = String(cached?.data?.cliente_cargo || "").trim();
-        const av = String(cached?.data?.aviso_cliente || "").trim();
-        if (cn) setClienteNombre(cn);
-        if (cc) setClienteCargo(cc);
-        if (av) setAvisoCliente(av);
+        actualizarDesdeSapEnSegundoPlano();
+        return;
       }
 
       const net = await NetInfo.fetch();
@@ -1278,327 +1613,35 @@ export default function DetalleOrden() {
       );
 
       if (!isOnline) {
-        if (!cached?.data) {
-          Alert.alert(
-            "Sin conexión",
-            "No hay internet y no hay detalle guardado aún para esta orden.",
-          );
-        }
+        Alert.alert(
+          "Sin conexión",
+          "No hay internet y no hay detalle guardado aún para esta orden.",
+        );
+        setLoading(false);
         return;
       }
 
-      const resOrden = await api.get(`/api/ordenes/sap/${orderIdParam}`);
-      const baseOrden = resOrden.data || {};
+      await actualizarDesdeSapEnSegundoPlano();
 
-      let shortTextHeader = "";
-      try {
-        const resHeader = await api.get(
-          `/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet('${orderIdParam}')`,
-        );
+      const updated = await loadOrdenTecnicoDetail(orderIdParam);
 
-        shortTextHeader =
-          resHeader?.data?.d?.ShortText ||
-          resHeader?.data?.d?.shorttext ||
-          resHeader?.data?.d?.ShortText ||
-          resHeader?.data?.d?.shorttext ||
-          "";
-      } catch (e) {
-        console.warn(
-          "[COBERTURA] No se pudo cargar WorkOrderHeaderSet:",
-          e?.response?.data || e?.message || e,
-        );
+      if (updated?.data) {
+        await aplicarDatosLocales(updated.data);
       }
 
-      const shortTextForCoverage =
-        shortTextHeader ||
-        baseOrden?.ShortText ||
-        baseOrden?.shorttext ||
-        baseOrden?.Shorttext ||
-        baseOrden?.shortText ||
-        "";
-
-      const coberturaDetectada =
-        detectCoberturaFromShortText(shortTextForCoverage);
-
-      let direccionSap = "";
-      let clienteSap = "";
-      try {
-        const resAddr = await api.get(
-          `/api/ordenes/sap/${orderIdParam}/addresses`,
-        );
-        const results =
-          resAddr?.data?.results || resAddr?.data?.d?.results || [];
-        const chosen = pickSecondAddress(results);
-        const mapped = mapDireccionLikeBackend(chosen);
-        direccionSap = mapped.direccion || "";
-        clienteSap = mapped.cliente || "";
-      } catch (e) {
-        console.warn(
-          "[ADDR] no se pudo cargar /addresses:",
-          e?.response?.data || e?.message || e,
-        );
-      }
-
-      let ops = [];
-      try {
-        const resOps = await api.get(
-          `/api/operaciones/sap/${String(orderIdParam)}`,
-        );
-        const rawOps =
-          resOps?.data?.d?.results ||
-          resOps?.data?.results ||
-          resOps?.data?.operaciones ||
-          resOps?.data ||
-          [];
-
-        ops = normalizeOpsFromBackend(rawOps);
-      } catch (e) {
-        console.warn(
-          "No se pudieron cargar operaciones:",
-          e?.response?.data || e,
-        );
-        ops = normalizeOpsFromBackend(baseOrden?.operaciones || []);
-      }
-
-      const orderIdReal = String(
-        baseOrden?.Orderid || baseOrden?.OrderId || orderIdParam,
-      ).trim();
-      const opsWithId = ops.map((o) => ({
-        ...o,
-        id: o.id || opKey(orderIdReal, o),
-      }));
-
-      const localState = await loadOpState(orderIdReal);
-      const opsMerged = mergeOpsWithLocalState(
-        orderIdReal,
-        opsWithId,
-        localState,
-      );
-
-      let emailFromPartners = "";
-      try {
-        const resPartners = await api.get(
-          `/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet('${orderIdParam}')/ToPartners`,
-        );
-
-        const results =
-          resPartners?.data?.d?.results ||
-          resPartners?.data?.results ||
-          resPartners?.data?.d?.ToPartners?.results ||
-          [];
-
-        const re = (results || []).find(
-          (p) => String(p?.PartnRoleOld || "").trim() === "RE",
-        );
-        emailFromPartners = String(re?.Mail1 || re?.Mail2 || "").trim();
-      } catch (e) {
-        console.warn(
-          "[MAIL] no se pudo cargar ToPartners:",
-          e?.response?.data || e?.message || e,
-        );
-      }
-
-      const data = {
-        ...baseOrden,
-        ShortText: shortTextForCoverage || baseOrden?.ShortText || "",
-        cobertura_tipo: coberturaDetectada || baseOrden?.cobertura_tipo || null,
-        direccion:
-          direccionSap ||
-          baseOrden?.direccion ||
-          baseOrden?.address ||
-          baseOrden?.partner_address ||
-          "",
-        cliente:
-          clienteSap ||
-          baseOrden?.cliente ||
-          `${baseOrden?.Name1 ?? ""} ${baseOrden?.Name2 ?? ""}`.trim(),
-        cliente_email: emailFromPartners || baseOrden?.cliente_email || "",
-        operaciones: opsMerged,
-        cliente_nombre: String(clienteNombre || "").trim(),
-        cliente_cargo: String(clienteCargo || "").trim(),
-        aviso_cliente: String(avisoCliente || "").trim(),
-      };
-
-      setOrden(data);
-
-      const emailResolved = String(emailFromPartners || "").trim();
-      if (
-        emailResolved &&
-        isValidEmail(emailResolved) &&
-        !String(clienteEmail || "").trim()
-      ) {
-        setClienteEmail(emailResolved);
-      }
-
-      await safeSaveDetailIfWindow(orderIdReal, data);
-
-      if (orderIdParam && orderIdParam !== orderIdReal) {
-        const oldStart = await loadOrderStart(orderIdParam);
-        const realStart = await loadOrderStart(orderIdReal);
-        if (oldStart && !realStart) {
-          await saveOrderStart(orderIdReal, oldStart);
-          await clearOrderStart(orderIdParam);
-          setOrderStartedAtMs(oldStart);
-          setNowTick(Date.now());
-        }
-
-        const oldFinish = await loadOrderFinish(orderIdParam);
-        const realFinish = await loadOrderFinish(orderIdReal);
-        if (oldFinish && !realFinish) {
-          await saveOrderFinish(orderIdReal, oldFinish);
-          await clearOrderFinish(orderIdParam);
-          setOrderFinishedAtMs(oldFinish);
-        }
-
-        const oldElapsed = await loadOrderElapsed(orderIdParam);
-        const realElapsed = await loadOrderElapsed(orderIdReal);
-        if (oldElapsed != null && realElapsed == null) {
-          await saveOrderElapsed(orderIdReal, oldElapsed);
-          await clearOrderElapsed(orderIdParam);
-          setOrderElapsedMs(oldElapsed);
-        }
-
-        const oldPending = await loadPendingSign(orderIdParam);
-        const realPending = await loadPendingSign(orderIdReal);
-        if (oldPending && !realPending) {
-          await savePendingSign(orderIdReal, oldPending);
-          await clearPendingSign(orderIdParam);
-        }
-      }
-
-      try {
-        const sc = String(data?.estatus_code || data?.userstatus || "").trim();
-        const isPending0400Local2 = sc.includes("0400");
-        const pending = await loadPendingSign(orderIdReal);
-
-        if (pending) {
-          if (pending?.checkedMap) setCheckedMap(pending.checkedMap || {});
-          if (Array.isArray(pending?.consumibles))
-            setConsumibles(pending.consumibles);
-          if (typeof pending?.notaTecnico === "string")
-            setNotaTecnico(pending.notaTecnico || "");
-          if (typeof pending?.clienteNombre === "string")
-            setClienteNombre(pending.clienteNombre || "");
-          if (typeof pending?.clienteCargo === "string")
-            setClienteCargo(pending.clienteCargo || "");
-          if (typeof pending?.avisoCliente === "string")
-            setAvisoCliente(pending.avisoCliente || "");
-
-          if (Number.isFinite(pending?.orderStartedAtMs)) {
-            setOrderStartedAtMs(pending.orderStartedAtMs);
-          }
-          if (Number.isFinite(pending?.orderFinishedAtMs)) {
-            setOrderFinishedAtMs(pending.orderFinishedAtMs);
-          }
-          if (Number.isFinite(pending?.orderElapsedMs)) {
-            setOrderElapsedMs(pending.orderElapsedMs);
-          }
-
-          if (isPending0400Local2) setFinalizeMode(true);
-        }
-      } catch {}
-
-      const estatusTxtLocal = String(
-        data?.estatus_label || data?.estatus || data?.status || "",
-      )
-        .trim()
-        .toUpperCase();
-      const statusCodeLocal = String(
-        data?.estatus_code || data?.userstatus || "",
-      ).trim();
-
-      const isEnProcesoLocal =
-        estatusTxtLocal === "EN_PROCESO" ||
-        estatusTxtLocal === "EN PROCESO" ||
-        statusCodeLocal === "0200";
-
-      const isPending0400Local =
-        statusCodeLocal === "0400" || String(statusCodeLocal).includes("0400");
-      const isFinalLocal =
-        ["0300", "0500"].includes(statusCodeLocal) || !!data?.isFinal;
-
-      if (isEnProcesoLocal) {
-        const savedStart = await loadOrderStart(orderIdReal);
-        if (savedStart) {
-          setOrderStartedAtMs(savedStart);
-          setNowTick(Date.now());
-        }
-      } else if (isPending0400Local) {
-        const savedStart = await loadOrderStart(orderIdReal);
-        if (savedStart) setOrderStartedAtMs(savedStart);
-
-        const savedElapsed = await loadOrderElapsed(orderIdReal);
-        if (savedElapsed != null) setOrderElapsedMs(savedElapsed);
-      } else {
-        setOrderStartedAtMs(null);
-        await clearOrderStart(orderIdReal);
-      }
-
-      if (isFinalLocal) {
-        const savedFinish = await loadOrderFinish(orderIdReal);
-        if (savedFinish) setOrderFinishedAtMs(savedFinish);
-
-        const savedElapsed = await loadOrderElapsed(orderIdReal);
-        if (savedElapsed != null) setOrderElapsedMs(savedElapsed);
-      }
-    } catch (error) {
-      console.error(
-        "Error al obtener orden (SAP):",
-        error?.response?.data || error,
-      );
-
-      const orderIdParam2 = String(id || "").trim();
-      const cached2 = await loadOrdenTecnicoDetail(orderIdParam2);
-
-      if (cached2?.data) {
-        setOrden(cached2.data);
-
-        const cachedOrderId = String(
-          cached2?.data?.Orderid || orderIdParam2,
-        ).trim();
-        const savedStart = await loadOrderStart(cachedOrderId);
-        if (savedStart) {
-          setOrderStartedAtMs(savedStart);
-          setNowTick(Date.now());
-        }
-
-        const savedFinish = await loadOrderFinish(cachedOrderId);
-        if (savedFinish) setOrderFinishedAtMs(savedFinish);
-
-        const savedElapsed = await loadOrderElapsed(cachedOrderId);
-        if (savedElapsed != null) setOrderElapsedMs(savedElapsed);
-
-        const pending = await loadPendingSign(cachedOrderId);
-        if (pending?.checkedMap) setCheckedMap(pending.checkedMap || {});
-        if (Array.isArray(pending?.consumibles))
-          setConsumibles(pending.consumibles);
-        if (typeof pending?.notaTecnico === "string")
-          setNotaTecnico(pending.notaTecnico || "");
-        if (typeof pending?.clienteNombre === "string")
-          setClienteNombre(pending.clienteNombre || "");
-        if (typeof pending?.clienteCargo === "string")
-          setClienteCargo(pending.clienteCargo || "");
-        if (typeof pending?.avisoCliente === "string")
-          setAvisoCliente(pending.avisoCliente || "");
-
-        if (Number.isFinite(pending?.orderStartedAtMs)) {
-          setOrderStartedAtMs(pending.orderStartedAtMs);
-        }
-        if (Number.isFinite(pending?.orderFinishedAtMs)) {
-          setOrderFinishedAtMs(pending.orderFinishedAtMs);
-        }
-        if (Number.isFinite(pending?.orderElapsedMs)) {
-          setOrderElapsedMs(pending.orderElapsedMs);
-        }
-
-        const emailCached = String(cached2?.data?.cliente_email || "").trim();
-        if (emailCached && isValidEmail(emailCached))
-          setClienteEmail(emailCached);
-      } else {
-        Alert.alert("Error", "No se pudo cargar la orden desde SAP");
-      }
-    } finally {
       setLoading(false);
+    } catch (error) {
+      console.log(
+        "[DETALLE] Error cargando orden:",
+        error?.response?.data || error?.message || error,
+      );
+
+      setLoading(false);
+
+      Alert.alert(
+        "Error",
+        "No se pudo cargar el detalle de la orden. Revisa conexión o logs.",
+      );
     }
   };
   const COMPONENTS_KEY = (orderId, activity) =>
