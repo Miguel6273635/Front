@@ -2,7 +2,7 @@
 // Sincronización en segundo plano para Mike-dev
 // Objetivo:
 // 1. Enviar cola pendiente cuando haya red estable.
-// 2. Enviar cola SAP pendiente.
+// 2. Enviar cola SAP pendiente validando token.
 // 3. Enviar pendientes específicos del técnico.
 // 4. Actualizar órdenes offline sin trabar la app.
 // 5. Actualizar consumibles/catálogos.
@@ -232,6 +232,10 @@ async function runTecnicoFullSync(user) {
   };
 }
 
+function getEnsureValidToken() {
+  return globalThis.__AUTH__?.ensureValidToken;
+}
+
 export async function runBackgroundSyncNow(options = {}) {
   const { force = false, source = "manual" } = options;
 
@@ -313,6 +317,11 @@ export async function runBackgroundSyncNow(options = {}) {
     try {
       sapQueueResult = await processSapQueue({
         apiInstance: api,
+
+        // Mejora importante:
+        // Antes la cola SAP se mandaba sin validar token.
+        // Ahora primero intenta renovar/validar el token antes de enviar pendientes SAP.
+        ensureValidToken: getEnsureValidToken(),
       });
     } catch (e) {
       console.log("[BACKGROUND SYNC] Error cola SAP:", e?.message || e);
