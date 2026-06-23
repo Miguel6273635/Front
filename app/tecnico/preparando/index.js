@@ -1,3 +1,4 @@
+// app/tecnico/preparando/index.js
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   View,
@@ -8,6 +9,7 @@ import {
   Animated,
   Platform,
   StatusBar,
+  ScrollView,
 } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import NetInfo from "@react-native-community/netinfo";
@@ -16,12 +18,14 @@ import { router } from "expo-router";
 
 import Header from "../../../src/components/Header";
 import { useAuth } from "../../../src/context/AuthContext";
+
 import { runBackgroundSyncNow } from "../../../src/offline/backgroundSync";
 import {
   loadOrdenesTecnicoList,
   getOrdenesTecnicoLastSync,
 } from "../../../src/offline/ordenesTecnicoCache";
 import { getSapQueue } from "../../../src/offline/sapQueue";
+import { loadConsumiblesByCobertura } from "../../../src/offline/consumiblesCache";
 
 const FIORI = {
   pageBg: "#F7F7F7",
@@ -54,26 +58,33 @@ const STEPS = [
   {
     key: "pending",
     label: "Revisando pendientes",
-    description: "Buscando información pendiente por enviar a SAP.",
+    description: "Procesando información pendiente por enviar a SAP.",
     percent: 18,
   },
   {
     key: "orders",
     label: "Precargando órdenes",
-    description: "Guardando órdenes cercanas para uso offline.",
-    percent: 42,
+    description: "Guardando órdenes asignadas para uso offline.",
+    percent: 38,
   },
   {
     key: "details",
     label: "Precargando detalles",
-    description: "Guardando detalle, operaciones, dirección y cliente.",
-    percent: 72,
+    description:
+      "Guardando detalle, actividades, operaciones, dirección, cliente y correo.",
+    percent: 68,
+  },
+  {
+    key: "components",
+    label: "Precargando componentes",
+    description: "Guardando materiales de actividades y datos auxiliares.",
+    percent: 82,
   },
   {
     key: "catalogs",
-    label: "Precargando catálogos",
-    description: "Preparando consumibles y datos auxiliares.",
-    percent: 92,
+    label: "Precargando consumibles",
+    description: "Guardando consumibles por agrupadores.",
+    percent: 94,
   },
   {
     key: "done",
@@ -99,11 +110,14 @@ function resolveUserEmail(user) {
     .trim();
 }
 
-function formatDateTime(ms) {
-  if (!ms) return "Sin sincronización previa";
+function formatDateTime(value) {
+  if (!value) return "Sin sincronización previa";
 
   try {
-    const d = new Date(ms);
+    const d = typeof value === "string" ? new Date(value) : new Date(value);
+
+    if (Number.isNaN(d.getTime())) return "Sin sincronización previa";
+
     const dd = String(d.getDate()).padStart(2, "0");
     const mm = String(d.getMonth() + 1).padStart(2, "0");
     const yyyy = d.getFullYear();
@@ -114,6 +128,24 @@ function formatDateTime(ms) {
   } catch {
     return "Sin sincronización previa";
   }
+}
+
+function getTecnicoPrefetchFromResult(result) {
+  return (
+    result?.prefetchResult?.tecnicoPrefetchResult ||
+    result?.prefetchResult?.result?.tecnicoPrefetchResult ||
+    result?.tecnicoPrefetchResult ||
+    null
+  );
+}
+
+function getConsumiblesFromResult(result) {
+  return (
+    result?.prefetchResult?.consumiblesResult ||
+    result?.prefetchResult?.result?.consumiblesResult ||
+    result?.consumiblesResult ||
+    null
+  );
 }
 
 export default function PreparandoTecnicoScreen() {
@@ -133,6 +165,11 @@ export default function PreparandoTecnicoScreen() {
 
   const [summary, setSummary] = useState({
     ordenes: 0,
+    detalles: 0,
+    actividades: 0,
+    componentes: 0,
+    consumibles: 0,
+    gruposConsumibles: 0,
     pendientesSap: 0,
     lastSyncAt: null,
   });
@@ -140,6 +177,12 @@ export default function PreparandoTecnicoScreen() {
   const [message, setMessage] = useState(
     "Estamos preparando su información para trabajar más rápido.",
   );
+
+  const widthInterpolated = progressAnim.interpolate({
+    inputRange: [0, 100],
+    outputRange: ["0%", "100%"],
+    extrapolate: "clamp",
+  });
 
   const setProgress = (step) => {
     if (!mountedRef.current) return;
@@ -159,24 +202,31 @@ export default function PreparandoTecnicoScreen() {
       const cached = await loadOrdenesTecnicoList(userEmail);
       const queue = await getSapQueue();
       const lastSyncAt = await getOrdenesTecnicoLastSync(userEmail);
+      const consumibles = await loadConsumiblesByCobertura("BASICA");
 
       if (!mountedRef.current) return;
 
-      setSummary({
+      setSummary((prev) => ({
+        ...prev,
         ordenes: Array.isArray(cached?.data) ? cached.data.length : 0,
         pendientesSap: Array.isArray(queue) ? queue.length : 0,
         lastSyncAt,
-      });
+        consumibles: Number(consumibles?.count || 0),
+        gruposConsumibles: Array.isArray(consumibles?.groups)
+          ? consumibles.groups.filter((g) => Number(g?.count || 0) > 0).length
+          : 0,
+      }));
     } catch (e) {
       console.log("[PRELOAD TECNICO] Error leyendo resumen:", e?.message || e);
 
       if (!mountedRef.current) return;
 
-      setSummary({
+      setSummary((prev) => ({
+        ...prev,
         ordenes: 0,
         pendientesSap: 0,
         lastSyncAt: null,
-      });
+      }));
     }
   };
 
@@ -188,8 +238,35 @@ export default function PreparandoTecnicoScreen() {
     }
   };
 
-  const startPreload = async () => {
-    if (startedRef.current) return;
+  const applyResultSummary = (result) => {
+    const tecnicoPrefetch = getTecnicoPrefetchFromResult(result);
+    const consumiblesResult = getConsumiblesFromResult(result);
+
+    const detalleResult = tecnicoPrefetch?.detalleResult || {};
+    const components = detalleResult?.components || {};
+
+    setSummary((prev) => ({
+      ...prev,
+      ordenes: Number(tecnicoPrefetch?.count ?? prev.ordenes ?? 0),
+      detalles: Number(detalleResult?.ok ?? prev.detalles ?? 0),
+      actividades: Number(detalleResult?.ok ?? prev.actividades ?? 0),
+      componentes: Number(components?.ok ?? prev.componentes ?? 0),
+      consumibles: Number(
+        consumiblesResult?.count ??
+          consumiblesResult?.cachedCount ??
+          prev.consumibles ??
+          0,
+      ),
+      gruposConsumibles: Array.isArray(consumiblesResult?.groups)
+        ? consumiblesResult.groups.filter((g) => Number(g?.count || 0) > 0)
+            .length
+        : prev.gruposConsumibles,
+      lastSyncAt: Date.now(),
+    }));
+  };
+
+  const startPreload = async ({ retry = false } = {}) => {
+    if (startedRef.current && !retry) return;
 
     startedRef.current = true;
 
@@ -235,60 +312,70 @@ export default function PreparandoTecnicoScreen() {
 
       setProgress(STEPS[1]);
       setMessage("Revisando pendientes por enviar a SAP...");
-      await wait(350);
+      await wait(250);
 
       setProgress(STEPS[2]);
       setMessage("Precargando órdenes asignadas al técnico...");
-      await wait(350);
+      await wait(250);
 
       setProgress(STEPS[3]);
-      setMessage("Precargando detalles, operaciones, dirección y cliente...");
+      setMessage(
+        "Precargando detalle de órdenes, actividades, operaciones, dirección y cliente...",
+      );
 
+      /*
+        runBackgroundSyncNow ejecuta:
+        1. outbox pendiente
+        2. cola SAP
+        3. acciones pendientes del técnico
+        4. prefetchOrdenesTecnico()
+           - lista de órdenes
+           - detalle
+           - operaciones / actividades
+           - dirección
+           - partners / correo
+           - componentes por actividad
+        5. bootstrapPrefetchConsumiblesCatalogo()
+           - consumibles por agrupadores
+      */
       const result = await runBackgroundSyncNow({
         source: "tecnico_preload_screen",
+        force: true,
       });
 
       console.log("[PRELOAD TECNICO] Resultado:", result);
 
       if (!mountedRef.current) return;
 
-      if (result?.ok === false && result?.reason === "sync_already_running") {
-        setMessage(
-          "La sincronización ya estaba corriendo. Esperando información guardada...",
-        );
-      }
+      applyResultSummary(result);
+
+      const tecnicoPrefetch = getTecnicoPrefetchFromResult(result);
+      const detalleResult = tecnicoPrefetch?.detalleResult || {};
+      const components = detalleResult?.components || {};
 
       setProgress(STEPS[4]);
-      setMessage("Preparando catálogos, consumibles y datos auxiliares...");
-      await wait(500);
+      setMessage(
+        `Actividades y componentes guardados: ${Number(
+          components?.ok || 0,
+        )}/${Number(components?.total || 0)}.`,
+      );
+      await wait(250);
 
-      await loadLocalSummary();
+      const consumiblesResult = getConsumiblesFromResult(result);
 
       setProgress(STEPS[5]);
-      setMessage("Puede iniciar con sus órdenes. Que tenga un excelente día.");
-
-      await markPreloadDone();
-
-      if (!mountedRef.current) return;
-
-      setDone(true);
-    } catch (e) {
-      console.log("[PRELOAD TECNICO] Error:", e?.message || e);
-
-      if (!mountedRef.current) return;
+      setMessage(
+        consumiblesResult?.ok
+          ? "Consumibles por agrupadores guardados para uso offline..."
+          : "Validando consumibles guardados en el dispositivo...",
+      );
+      await wait(250);
 
       await loadLocalSummary();
 
-      setProgress({
-        key: "warning",
-        label: "Preparación parcial",
-        description:
-          "No se pudo completar toda la precarga, pero puede continuar.",
-        percent: 100,
-      });
-
+      setProgress(STEPS[6]);
       setMessage(
-        "No se pudo completar toda la precarga. Puede iniciar con la información disponible.",
+        "Puede iniciar con sus órdenes. Que tenga un excelente día.",
       );
 
       await markPreloadDone();
@@ -296,189 +383,259 @@ export default function PreparandoTecnicoScreen() {
       if (!mountedRef.current) return;
 
       setDone(true);
+    } catch (e) {
+      console.log("[PRELOAD TECNICO] Error general:", e?.message || e);
+
+      if (!mountedRef.current) return;
+
+      setProgress({
+        key: "partial",
+        label: "Información local disponible",
+        description:
+          "No se pudo terminar la actualización. Se usará lo guardado.",
+        percent: 100,
+      });
+
+      setMessage(
+        "No se pudo terminar la actualización, pero puede iniciar con la información guardada en el dispositivo.",
+      );
+
+      await markPreloadDone();
+      await loadLocalSummary();
+      setDone(true);
     } finally {
-      if (mountedRef.current) {
-        setSyncing(false);
-      }
+      if (mountedRef.current) setSyncing(false);
     }
+  };
+
+  const goHome = async () => {
+    await markPreloadDone();
+    router.replace("/tecnico");
   };
 
   const retryPreload = async () => {
     startedRef.current = false;
+    setDone(false);
     setPercent(0);
     progressAnim.setValue(0);
-    setDone(false);
-    setMessage("Estamos preparando su información para trabajar más rápido.");
-    await startPreload();
-  };
-
-  const continuar = () => {
-    router.replace("/tecnico");
+    await startPreload({ retry: true });
   };
 
   useEffect(() => {
     mountedRef.current = true;
+
     startPreload();
 
     return () => {
       mountedRef.current = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const barWidth = progressAnim.interpolate({
-    inputRange: [0, 100],
-    outputRange: ["0%", "100%"],
-  });
+  }, [userEmail]);
 
   return (
     <View style={styles.container}>
       <StatusBar barStyle="dark-content" backgroundColor={FIORI.pageBg} />
       <Header title="Preparando información" />
 
-      <View style={styles.content}>
-        <View style={styles.card}>
+      <ScrollView
+        style={{ flex: 1 }}
+        contentContainerStyle={styles.content}
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={styles.heroCard}>
           <View style={styles.iconCircle}>
             {done ? (
-              <Ionicons name="checkmark-circle" size={56} color={FIORI.ok} />
+              <Ionicons name="checkmark-circle" size={42} color={FIORI.ok} />
             ) : (
               <ActivityIndicator size="large" color={FIORI.brand} />
             )}
           </View>
 
           <Text style={styles.title}>{currentStep.label}</Text>
-
           <Text style={styles.description}>{currentStep.description}</Text>
 
-          <View style={styles.progressHeader}>
-            <Text style={styles.progressLabel}>Progreso de precarga</Text>
-            <Text style={styles.progressPercent}>{percent}%</Text>
+          <View style={styles.progressWrap}>
+            <Animated.View
+              style={[styles.progressFill, { width: widthInterpolated }]}
+            />
           </View>
 
-          <View style={styles.progressTrack}>
-            <Animated.View style={[styles.progressFill, { width: barWidth }]} />
-          </View>
+          <Text style={styles.percent}>{Math.round(percent)}%</Text>
 
           <Text style={styles.message}>{message}</Text>
 
-          <View style={styles.stepsBox}>
-            {STEPS.map((step) => {
-              const active = percent >= step.percent;
-              const current = currentStep.key === step.key;
+          <View
+            style={[
+              styles.netPill,
+              {
+                backgroundColor:
+                  online === false ? "#FFF3E0" : FIORI.brandSoft,
+                borderColor: online === false ? "#FFD8A8" : "#B9DBFF",
+              },
+            ]}
+          >
+            <Ionicons
+              name={online === false ? "cloud-offline-outline" : "cloud-done-outline"}
+              size={16}
+              color={online === false ? FIORI.warn : FIORI.brand}
+            />
+            <Text
+              style={[
+                styles.netText,
+                { color: online === false ? "#9A5B00" : FIORI.brandDark },
+              ]}
+            >
+              {online === false
+                ? "Sin conexión: usando cache local"
+                : online === true
+                  ? "Con conexión: actualizando datos"
+                  : "Validando conexión"}
+            </Text>
+          </View>
+        </View>
 
-              return (
-                <View key={step.key} style={styles.stepRow}>
-                  <View
-                    style={[
-                      styles.stepDot,
-                      active && styles.stepDotActive,
-                      current && styles.stepDotCurrent,
-                    ]}
-                  >
-                    {active ? (
-                      <Ionicons name="checkmark" size={12} color="#fff" />
-                    ) : null}
-                  </View>
+        <View style={styles.summaryCard}>
+          <Text style={styles.summaryTitle}>Datos preparados</Text>
 
+          <SummaryRow
+            icon="clipboard-outline"
+            label="Órdenes cargadas"
+            value={summary.ordenes}
+          />
+          <SummaryRow
+            icon="document-text-outline"
+            label="Detalles de órdenes"
+            value={summary.detalles || summary.ordenes}
+          />
+          <SummaryRow
+            icon="list-outline"
+            label="Actividades / operaciones"
+            value={summary.actividades || "Incluidas"}
+          />
+          <SummaryRow
+            icon="cube-outline"
+            label="Componentes por actividad"
+            value={summary.componentes || "En cache"}
+          />
+          <SummaryRow
+            icon="build-outline"
+            label="Consumibles"
+            value={summary.consumibles}
+          />
+          <SummaryRow
+            icon="albums-outline"
+            label="Grupos de consumibles"
+            value={summary.gruposConsumibles}
+          />
+          <SummaryRow
+            icon="swap-horizontal-outline"
+            label="Pendientes SAP"
+            value={summary.pendientesSap}
+          />
+
+          <View style={styles.lastSyncBox}>
+            <Ionicons name="time-outline" size={16} color={FIORI.textMuted} />
+            <Text style={styles.lastSyncText}>
+              Última sincronización: {formatDateTime(summary.lastSyncAt)}
+            </Text>
+          </View>
+        </View>
+
+        <View style={styles.stepsCard}>
+          {STEPS.map((step) => {
+            const active = step.key === currentStep.key;
+            const completed = percent >= step.percent;
+
+            return (
+              <View key={step.key} style={styles.stepRow}>
+                <View
+                  style={[
+                    styles.stepDot,
+                    {
+                      backgroundColor: completed ? FIORI.ok : FIORI.border,
+                      borderColor: active ? FIORI.brand : FIORI.border,
+                    },
+                  ]}
+                >
+                  {completed ? (
+                    <Ionicons name="checkmark" size={13} color="#fff" />
+                  ) : null}
+                </View>
+
+                <View style={{ flex: 1 }}>
                   <Text
                     style={[
-                      styles.stepText,
-                      active && styles.stepTextActive,
-                      current && styles.stepTextCurrent,
+                      styles.stepLabel,
+                      { color: active ? FIORI.brandDark : FIORI.text },
                     ]}
                   >
                     {step.label}
                   </Text>
+                  <Text style={styles.stepDescription}>{step.description}</Text>
                 </View>
-              );
-            })}
-          </View>
-
-          <View style={styles.summaryBox}>
-            <SummaryItem
-              icon="document-text-outline"
-              label="Órdenes guardadas"
-              value={String(summary.ordenes)}
-            />
-
-            <SummaryItem
-              icon="cloud-upload-outline"
-              label="Pendientes SAP"
-              value={String(summary.pendientesSap)}
-            />
-
-            <SummaryItem
-              icon={online ? "wifi-outline" : "cloud-offline-outline"}
-              label="Conexión"
-              value={
-                online === null ? "Validando" : online ? "Online" : "Offline"
-              }
-            />
-
-            <SummaryItem
-              icon="time-outline"
-              label="Última sincronización"
-              value={formatDateTime(summary.lastSyncAt)}
-            />
-          </View>
-
-          {done ? (
-            <>
-              <TouchableOpacity
-                style={styles.primaryBtn}
-                activeOpacity={0.88}
-                onPress={continuar}
-              >
-                <Ionicons name="arrow-forward-circle" size={20} color="#fff" />
-                <Text style={styles.primaryBtnText}>
-                  Iniciar con mis órdenes
-                </Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[styles.secondaryBtn, syncing && { opacity: 0.7 }]}
-                activeOpacity={0.88}
-                onPress={retryPreload}
-                disabled={syncing}
-              >
-                <Text style={styles.secondaryBtnText}>
-                  Volver a precargar información
-                </Text>
-              </TouchableOpacity>
-            </>
-          ) : (
-            <View style={styles.waitBox}>
-              <Ionicons
-                name="information-circle-outline"
-                size={18}
-                color={FIORI.textMuted}
-              />
-              <Text style={styles.waitText}>
-                No cierres la app mientras se prepara la información.
-              </Text>
-            </View>
-          )}
+              </View>
+            );
+          })}
         </View>
-      </View>
+
+        <View style={styles.actions}>
+          <TouchableOpacity
+            style={[
+              styles.primaryBtn,
+              (!done || syncing) && { opacity: 0.65 },
+            ]}
+            onPress={goHome}
+            disabled={!done || syncing}
+            activeOpacity={0.88}
+          >
+            <Ionicons name="arrow-forward-circle-outline" size={20} color="#fff" />
+            <Text style={styles.primaryBtnText}>
+              Iniciar con mis órdenes
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.secondaryBtn, syncing && { opacity: 0.65 }]}
+            onPress={retryPreload}
+            disabled={syncing}
+            activeOpacity={0.88}
+          >
+            <Ionicons name="refresh-outline" size={18} color={FIORI.brand} />
+            <Text style={styles.secondaryBtnText}>
+              Volver a precargar
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </ScrollView>
     </View>
   );
 }
 
-function SummaryItem({ icon, label, value }) {
+function SummaryRow({ icon, label, value }) {
   return (
-    <View style={styles.summaryItem}>
+    <View style={styles.summaryRow}>
       <View style={styles.summaryIcon}>
-        <Ionicons name={icon} size={18} color={FIORI.brand} />
+        <Ionicons name={icon} size={17} color={FIORI.brand} />
       </View>
 
-      <View style={{ flex: 1 }}>
-        <Text style={styles.summaryLabel}>{label}</Text>
-        <Text style={styles.summaryValue} numberOfLines={1}>
-          {value}
-        </Text>
-      </View>
+      <Text style={styles.summaryLabel}>{label}</Text>
+
+      <Text style={styles.summaryValue}>{String(value ?? 0)}</Text>
     </View>
   );
+}
+
+function elev(multiplier = 1) {
+  return Platform.select({
+    ios: {
+      shadowColor: "#000",
+      shadowOpacity: 0.08 * multiplier,
+      shadowRadius: 8 * multiplier,
+      shadowOffset: { width: 0, height: 3 * multiplier },
+    },
+    android: { elevation: 2 * multiplier },
+    default: {},
+  });
 }
 
 const styles = StyleSheet.create({
@@ -486,36 +643,20 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: FIORI.pageBg,
   },
-
   content: {
-    flex: 1,
-    padding: 18,
-    justifyContent: "center",
+    padding: 16,
+    paddingBottom: 28,
   },
-
-  card: {
+  heroCard: {
     backgroundColor: FIORI.surface,
-    borderRadius: 20,
+    borderRadius: 18,
     borderWidth: 1,
     borderColor: FIORI.border,
     padding: 18,
-
-    ...Platform.select({
-      ios: {
-        shadowColor: "#000",
-        shadowOpacity: 0.09,
-        shadowRadius: 14,
-        shadowOffset: { width: 0, height: 8 },
-      },
-      android: {
-        elevation: 4,
-      },
-      default: {},
-    }),
+    alignItems: "center",
+    ...elev(0.6),
   },
-
   iconCircle: {
-    alignSelf: "center",
     width: 78,
     height: 78,
     borderRadius: 39,
@@ -524,207 +665,181 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     marginBottom: 12,
   },
-
   title: {
-    fontSize: 22,
+    fontSize: 19,
     fontWeight: "900",
     color: FIORI.text,
     textAlign: "center",
   },
-
   description: {
     marginTop: 6,
     fontSize: 13,
-    lineHeight: 19,
-    color: FIORI.textMuted,
     fontWeight: "700",
+    color: FIORI.textMuted,
     textAlign: "center",
   },
-
-  progressHeader: {
-    marginTop: 20,
-    marginBottom: 8,
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-  },
-
-  progressLabel: {
-    fontSize: 13,
-    fontWeight: "900",
-    color: FIORI.text,
-  },
-
-  progressPercent: {
-    fontSize: 13,
-    fontWeight: "900",
-    color: FIORI.brand,
-  },
-
-  progressTrack: {
-    height: 13,
-    backgroundColor: FIORI.borderSoft,
+  progressWrap: {
+    marginTop: 18,
+    width: "100%",
+    height: 12,
     borderRadius: 999,
-    overflow: "hidden",
-  },
-
-  progressFill: {
-    height: "100%",
-    backgroundColor: FIORI.brand,
-    borderRadius: 999,
-  },
-
-  message: {
-    marginTop: 12,
-    fontSize: 13,
-    lineHeight: 19,
-    color: FIORI.text,
-    fontWeight: "800",
-    textAlign: "center",
-  },
-
-  stepsBox: {
-    marginTop: 16,
     backgroundColor: FIORI.surfaceAlt,
-    borderRadius: 14,
+    overflow: "hidden",
     borderWidth: 1,
     borderColor: FIORI.borderSoft,
-    padding: 12,
-    gap: 8,
   },
-
-  stepRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
+  progressFill: {
+    height: "100%",
+    borderRadius: 999,
+    backgroundColor: FIORI.brand,
   },
-
-  stepDot: {
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: FIORI.border,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "#fff",
-  },
-
-  stepDotActive: {
-    backgroundColor: FIORI.ok,
-    borderColor: FIORI.ok,
-  },
-
-  stepDotCurrent: {
-    borderColor: FIORI.brand,
-  },
-
-  stepText: {
-    flex: 1,
-    fontSize: 12,
-    color: FIORI.textMuted,
-    fontWeight: "700",
-  },
-
-  stepTextActive: {
-    color: FIORI.text,
-  },
-
-  stepTextCurrent: {
+  percent: {
+    marginTop: 8,
+    fontSize: 13,
     color: FIORI.brandDark,
     fontWeight: "900",
   },
-
-  summaryBox: {
-    marginTop: 16,
-    gap: 10,
+  message: {
+    marginTop: 12,
+    color: FIORI.text,
+    fontWeight: "800",
+    fontSize: 13,
+    textAlign: "center",
+    lineHeight: 19,
   },
-
-  summaryItem: {
+  netPill: {
+    marginTop: 14,
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#fff",
+    gap: 7,
+  },
+  netText: {
+    fontSize: 12,
+    fontWeight: "900",
+  },
+  summaryCard: {
+    marginTop: 14,
+    backgroundColor: FIORI.surface,
+    borderRadius: 16,
     borderWidth: 1,
-    borderColor: FIORI.borderSoft,
-    borderRadius: 14,
-    padding: 10,
+    borderColor: FIORI.border,
+    padding: 14,
+    ...elev(0.4),
+  },
+  summaryTitle: {
+    fontSize: 15,
+    fontWeight: "900",
+    color: FIORI.text,
+    marginBottom: 10,
+  },
+  summaryRow: {
+    minHeight: 38,
+    flexDirection: "row",
+    alignItems: "center",
+    borderBottomWidth: 1,
+    borderBottomColor: FIORI.borderSoft,
     gap: 10,
   },
-
   summaryIcon: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
     backgroundColor: FIORI.brandSoft,
     alignItems: "center",
     justifyContent: "center",
   },
-
   summaryLabel: {
-    fontSize: 11,
+    flex: 1,
     color: FIORI.textMuted,
+    fontSize: 12,
     fontWeight: "800",
   },
-
   summaryValue: {
-    marginTop: 2,
-    fontSize: 13,
     color: FIORI.text,
+    fontSize: 13,
     fontWeight: "900",
   },
-
-  primaryBtn: {
-    marginTop: 18,
-    backgroundColor: FIORI.brand,
-    borderRadius: 999,
-    paddingHorizontal: 16,
-    paddingVertical: 13,
-    alignItems: "center",
-    justifyContent: "center",
-    flexDirection: "row",
-    gap: 8,
-  },
-
-  primaryBtnText: {
-    color: "#fff",
-    fontSize: 14,
-    fontWeight: "900",
-  },
-
-  secondaryBtn: {
+  lastSyncBox: {
     marginTop: 10,
-    borderRadius: 999,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
+    flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: FIORI.surfaceAlt,
+    gap: 7,
+  },
+  lastSyncText: {
+    color: FIORI.textMuted,
+    fontSize: 11,
+    fontWeight: "700",
+  },
+  stepsCard: {
+    marginTop: 14,
+    backgroundColor: FIORI.surface,
+    borderRadius: 16,
     borderWidth: 1,
     borderColor: FIORI.border,
+    padding: 14,
+    ...elev(0.35),
   },
-
-  secondaryBtnText: {
-    color: FIORI.text,
+  stepRow: {
+    flexDirection: "row",
+    gap: 10,
+    paddingVertical: 8,
+  },
+  stepDot: {
+    marginTop: 2,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    borderWidth: 2,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  stepLabel: {
     fontSize: 13,
     fontWeight: "900",
   },
-
-  waitBox: {
-    marginTop: 18,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    backgroundColor: FIORI.surfaceAlt,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: FIORI.borderSoft,
-    padding: 10,
-  },
-
-  waitText: {
-    flex: 1,
-    fontSize: 12,
+  stepDescription: {
+    marginTop: 2,
+    fontSize: 11,
     color: FIORI.textMuted,
     fontWeight: "700",
+    lineHeight: 15,
+  },
+  actions: {
+    marginTop: 16,
+    gap: 10,
+  },
+  primaryBtn: {
+    minHeight: 48,
+    borderRadius: 14,
+    backgroundColor: FIORI.brand,
+    alignItems: "center",
+    justifyContent: "center",
+    flexDirection: "row",
+    gap: 8,
+  },
+  primaryBtnText: {
+    color: "#fff",
+    fontWeight: "900",
+    fontSize: 14,
+  },
+  secondaryBtn: {
+    minHeight: 44,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: FIORI.border,
+    backgroundColor: FIORI.surface,
+    alignItems: "center",
+    justifyContent: "center",
+    flexDirection: "row",
+    gap: 8,
+  },
+  secondaryBtnText: {
+    color: FIORI.brand,
+    fontWeight: "900",
+    fontSize: 13,
   },
 });

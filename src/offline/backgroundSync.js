@@ -1,13 +1,14 @@
 // src/offline/backgroundSync.js
 // Sincronización en segundo plano para Mike-dev
 // Objetivo:
-// 1. Enviar cola pendiente cuando haya red estable.
-// 2. Enviar cola SAP pendiente validando token.
+// 1. Enviar cola general pendiente cuando haya red estable.
+// 2. Enviar cola SAP pendiente cuando haya red estable.
 // 3. Enviar pendientes específicos del técnico.
 // 4. Actualizar órdenes offline sin trabar la app.
 // 5. Actualizar consumibles/catálogos.
 // 6. Ejecutar por rol: técnico o supervisor.
 // 7. Guardar última sincronización.
+// 8. Evitar que la pantalla de detalle procese cola pesada en primer plano.
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import NetInfo from "@react-native-community/netinfo";
@@ -30,6 +31,10 @@ const BG_RUNNING_KEY = "background_sync_running";
 
 const DEFAULT_MINIMUM_INTERVAL_SECONDS = 15 * 60; // 15 minutos
 
+// Si por algún cierre raro de la app se queda la bandera prendida,
+// después de este tiempo dejamos volver a sincronizar.
+const RUNNING_LOCK_MAX_AGE_MS = 10 * 60 * 1000; // 10 minutos
+
 async function getStoredUser() {
   try {
     const bgRaw = await AsyncStorage.getItem(BG_USER_KEY);
@@ -51,7 +56,6 @@ export async function getBackgroundNetworkState() {
   const online = !!st.isConnected && st.isInternetReachable !== false;
 
   const type = st.type;
-
   const cellularGeneration = String(
     st.details?.cellularGeneration || "",
   ).toLowerCase();
@@ -74,16 +78,53 @@ export async function getBackgroundNetworkState() {
 }
 
 async function isSyncRunning() {
-  const value = await AsyncStorage.getItem(BG_RUNNING_KEY);
-  return value === "1";
+  try {
+    const raw = await AsyncStorage.getItem(BG_RUNNING_KEY);
+
+    if (!raw) return false;
+
+    // Compatibilidad con versión vieja que guardaba solo "1".
+    if (raw === "1") return true;
+
+    const obj = JSON.parse(raw);
+    const startedAt = Number(obj?.startedAt || 0);
+
+    if (!Number.isFinite(startedAt) || startedAt <= 0) {
+      return true;
+    }
+
+    const age = Date.now() - startedAt;
+
+    if (age > RUNNING_LOCK_MAX_AGE_MS) {
+      console.log("[BACKGROUND SYNC] Limpiando lock viejo:", {
+        ageMs: age,
+      });
+
+      await AsyncStorage.removeItem(BG_RUNNING_KEY);
+      return false;
+    }
+
+    return true;
+  } catch {
+    return true;
+  }
 }
 
-async function setSyncRunning(value) {
+async function setSyncRunning(value, source = "unknown") {
   if (value) {
-    await AsyncStorage.setItem(BG_RUNNING_KEY, "1");
-  } else {
-    await AsyncStorage.removeItem(BG_RUNNING_KEY);
+    await AsyncStorage.setItem(
+      BG_RUNNING_KEY,
+      JSON.stringify({
+        running: true,
+        source,
+        startedAt: Date.now(),
+      }),
+    );
+
+    return;
   }
+
+  await AsyncStorage.removeItem(BG_RUNNING_KEY);
 }
 
 async function saveSyncResult(result) {
@@ -119,6 +160,37 @@ function getUserEmail(user) {
     user?.upn ||
     null
   );
+}
+
+async function runSapQueueSync() {
+  try {
+    if (typeof processSapQueue !== "function") {
+      return {
+        ok: false,
+        reason: "processSapQueue_not_available",
+      };
+    }
+
+    const result = await processSapQueue({
+      apiInstance: api,
+    });
+
+    return {
+      ok: true,
+      result,
+    };
+  } catch (e) {
+    console.log(
+      "[BACKGROUND SYNC] Error cola SAP:",
+      e?.response?.data || e?.message || e,
+    );
+
+    return {
+      ok: false,
+      reason: "sap_queue_error",
+      error: e?.message || String(e),
+    };
+  }
 }
 
 async function runTecnicoPrefetch(user) {
@@ -210,7 +282,9 @@ async function runTecnicoFullSync(user) {
   }
 
   try {
-    consumiblesResult = await bootstrapPrefetchConsumiblesCatalogo();
+    consumiblesResult = await bootstrapPrefetchConsumiblesCatalogo({
+      coberturaTipo: "BASICA",
+    });
   } catch (e) {
     console.log(
       "[BACKGROUND SYNC] Error consumibles técnico:",
@@ -232,10 +306,6 @@ async function runTecnicoFullSync(user) {
   };
 }
 
-function getEnsureValidToken() {
-  return globalThis.__AUTH__?.ensureValidToken;
-}
-
 export async function runBackgroundSyncNow(options = {}) {
   const { force = false, source = "manual" } = options;
 
@@ -249,7 +319,7 @@ export async function runBackgroundSyncNow(options = {}) {
     };
   }
 
-  await setSyncRunning(true);
+  await setSyncRunning(true, source);
 
   try {
     const user = await getStoredUser();
@@ -312,26 +382,10 @@ export async function runBackgroundSyncNow(options = {}) {
       };
     }
 
-    let sapQueueResult = null;
-
-    try {
-      sapQueueResult = await processSapQueue({
-        apiInstance: api,
-
-        // Mejora importante:
-        // Antes la cola SAP se mandaba sin validar token.
-        // Ahora primero intenta renovar/validar el token antes de enviar pendientes SAP.
-        ensureValidToken: getEnsureValidToken(),
-      });
-    } catch (e) {
-      console.log("[BACKGROUND SYNC] Error cola SAP:", e?.message || e);
-
-      sapQueueResult = {
-        ok: false,
-        reason: "sap_queue_error",
-        error: e?.message || String(e),
-      };
-    }
+    // Cola SAP centralizada:
+    // Esto evita que pantallas como detalle de orden tengan que procesar SAP
+    // mientras el usuario está esperando que cargue la vista.
+    const sapQueueResult = await runSapQueueSync();
 
     let prefetchResult = null;
 
@@ -382,7 +436,7 @@ export async function runBackgroundSyncNow(options = {}) {
 
     return result;
   } finally {
-    await setSyncRunning(false);
+    await setSyncRunning(false, source);
   }
 }
 

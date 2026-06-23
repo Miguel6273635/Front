@@ -1,166 +1,194 @@
-import { isOnline } from "./net";
+// src/offline/bootstrapConsumiblesCatalogo.js
+import NetInfo from "@react-native-community/netinfo";
+
 import api from "../services/api";
-import { mergeConsumiblesPair } from "./consumiblesCatalogoCache";
+import {
+  loadConsumiblesByCobertura,
+  saveConsumiblesGroup,
+} from "./consumiblesCache";
+import {
+  getAgrupadoresByCobertura,
+  normalizeCoberturaTipo,
+} from "./consumiblesAgrupadores";
 
-export const COVERAGE_PAIRS = {
-  BASICA: [
-    { Agr1: "BASICO", Agr2: "GRASAS" },
-    { Agr1: "BASICO", Agr2: "DIELECTRIC" },
-    { Agr1: "BASICO", Agr2: "ACEITE" },
-    { Agr1: "BASICO", Agr2: "TRAPO" },
-    { Agr1: "BASICO", Agr2: "PAPEL_LIJA" },
-    { Agr1: "BASICO", Agr2: "TORNILLOS" },
-    { Agr1: "BASICO", Agr2: "PERNOS" },
-    { Agr1: "BASICO", Agr2: "ARAN_CUER" },
-  ],
-  MEDIA: [
-    { Agr1: "BASICO", Agr2: "GRASAS" },
-    { Agr1: "BASICO", Agr2: "DIELECTRIC" },
-    { Agr1: "BASICO", Agr2: "ACEITE" },
-    { Agr1: "BASICO", Agr2: "TRAPO" },
-    { Agr1: "BASICO", Agr2: "PAPEL_LIJA" },
-    { Agr1: "BASICO", Agr2: "TORNILLOS" },
-    { Agr1: "BASICO", Agr2: "PERNOS" },
-    { Agr1: "BASICO", Agr2: "ARAN_CUER" },
+const DEFAULT_TIMEOUT_MS = 90_000;
 
-    { Agr1: "MEDIO", Agr2: "FUSIBLE_TC" },
-    { Agr1: "MEDIO", Agr2: "MECHAS" },
-    { Agr1: "MEDIO", Agr2: "DESLIZADOR" },
-    { Agr1: "MEDIO", Agr2: "FOCOS" },
-    { Agr1: "MEDIO", Agr2: "LAMPARA" },
-    { Agr1: "MEDIO", Agr2: "LAMP_EMERG" },
-    { Agr1: "MEDIO", Agr2: "PLAST_CABI" },
-    { Agr1: "MEDIO", Agr2: "PLAST_CONT" },
-    { Agr1: "MEDIO", Agr2: "BATERIA_RE" },
-    { Agr1: "MEDIO", Agr2: "CAM_ACEITE" },
-    { Agr1: "MEDIO", Agr2: "MICROSWICH" },
-    { Agr1: "MEDIO", Agr2: "CABLE_ELEC" },
-  ],
-  SEMI: [
-    { Agr1: "BASICO", Agr2: "GRASAS" },
-    { Agr1: "BASICO", Agr2: "DIELECTRIC" },
-    { Agr1: "BASICO", Agr2: "ACEITE" },
-    { Agr1: "BASICO", Agr2: "TRAPO" },
-    { Agr1: "BASICO", Agr2: "PAPEL_LIJA" },
-    { Agr1: "BASICO", Agr2: "TORNILLOS" },
-    { Agr1: "BASICO", Agr2: "PERNOS" },
-    { Agr1: "BASICO", Agr2: "ARAN_CUER" },
-
-    { Agr1: "MEDIO", Agr2: "FUSIBLE_TC" },
-    { Agr1: "MEDIO", Agr2: "MECHAS" },
-    { Agr1: "MEDIO", Agr2: "DESLIZADOR" },
-    { Agr1: "MEDIO", Agr2: "FOCOS" },
-    { Agr1: "MEDIO", Agr2: "LAMPARA" },
-    { Agr1: "MEDIO", Agr2: "LAMP_EMERG" },
-    { Agr1: "MEDIO", Agr2: "PLAST_CABI" },
-    { Agr1: "MEDIO", Agr2: "PLAST_CONT" },
-    { Agr1: "MEDIO", Agr2: "BATERIA_RE" },
-    { Agr1: "MEDIO", Agr2: "CAM_ACEITE" },
-    { Agr1: "MEDIO", Agr2: "MICROSWICH" },
-    { Agr1: "MEDIO", Agr2: "CABLE_ELEC" },
-
-    { Agr1: "SEMIFULL", Agr2: "EXEN_COLGA" },
-    { Agr1: "SEMIFULL", Agr2: "VENTI_CABIN" },
-    { Agr1: "SEMIFULL", Agr2: "ACEITERAS" },
-    { Agr1: "SEMIFULL", Agr2: "BALASTRAS" },
-    { Agr1: "SEMIFULL", Agr2: "MICRO_SEGU" },
-    { Agr1: "SEMIFULL", Agr2: "INTERLOCK" },
-    { Agr1: "SEMIFULL", Agr2: "BAND_MOTOR" },
-    { Agr1: "SEMIFULL", Agr2: "GOMA_CABI" },
-    { Agr1: "SEMIFULL", Agr2: "GOMA_TOPE" },
-    { Agr1: "SEMIFULL", Agr2: "CABLE_ACER" },
-    { Agr1: "SEMIFULL", Agr2: "RETEN_ACEI" },
-    { Agr1: "SEMIFULL", Agr2: "TRANF_ENER" },
-  ],
-};
-
-function uniqPairsForCoverage(coverageKey) {
-  const arr = COVERAGE_PAIRS[String(coverageKey || "").toUpperCase()] || [];
-  const seen = new Set();
-
-  return arr.filter((p) => {
-    const k = `${String(p?.Agr1 || "").trim().toUpperCase()}__${String(
-      p?.Agr2 || ""
-    )
-      .trim()
-      .toUpperCase()}`;
-
-    if (!k || seen.has(k)) return false;
-    seen.add(k);
-    return true;
-  });
+function encodeFilterValue(v) {
+  return String(v ?? "").replace(/'/g, "''");
 }
 
-function extractResults(res) {
-  return res?.data?.d?.results || res?.data?.results || [];
+function getResults(data) {
+  if (Array.isArray(data)) return data;
+  if (Array.isArray(data?.results)) return data.results;
+  if (Array.isArray(data?.d?.results)) return data.d.results;
+  if (Array.isArray(data?.value)) return data.value;
+  if (Array.isArray(data?.data)) return data.data;
+  return [];
 }
 
-async function fetchMaterialesByPair(agr1, agr2) {
-  const a1 = String(agr1 || "").trim().toUpperCase();
-  const a2 = String(agr2 || "").trim().toUpperCase();
+function makeCandidateUrls({ Agr1, Agr2 }) {
+  const a1 = encodeFilterValue(Agr1);
+  const a2 = encodeFilterValue(Agr2);
 
-  const url =
-    `/api/odata/ZSD_CATALOGOS_SRV/MaterialesCoberturaSet` +
-    `?$filter=Agrupador1 eq '${a1}' and Agrupador2 eq '${a2}'`;
+  const filterAgrupador =
+    `$filter=Agrupador1 eq '${a1}' and Agrupador2 eq '${a2}'&$format=json`;
 
-  const res = await api.get(url);
-  return extractResults(res);
+  const filterAgr =
+    `$filter=Agr1 eq '${a1}' and Agr2 eq '${a2}'&$format=json`;
+
+  const filterLower =
+    `$filter=agrupador1 eq '${a1}' and agrupador2 eq '${a2}'&$format=json`;
+
+  return [
+    `/api/odata/ZSD_CATALOGOS_SRV/MaterialesCoberturaSet?${filterAgrupador}`,
+    `/api/odata/ZSD_CATALOGOS_SRV/MaterialesCoberturaSet?${filterAgr}`,
+    `/api/odata/ZSD_CATALOGOS_SRV/MaterialesCoberturaSet?${filterLower}`,
+
+    /*
+      Fallbacks por si tu backend ya tiene endpoints propios.
+      No rompen si no existen; solo se prueban.
+    */
+    `/api/catalogos/materiales-cobertura?agr1=${encodeURIComponent(
+      Agr1,
+    )}&agr2=${encodeURIComponent(Agr2)}`,
+    `/api/materiales/cobertura?agr1=${encodeURIComponent(
+      Agr1,
+    )}&agr2=${encodeURIComponent(Agr2)}`,
+    `/api/consumibles/catalogo?agr1=${encodeURIComponent(
+      Agr1,
+    )}&agr2=${encodeURIComponent(Agr2)}`,
+  ];
 }
 
-export async function bootstrapPrefetchConsumiblesCatalogo({
-  coverages = ["BASICA", "MEDIA", "SEMI"],
-} = {}) {
-  const online = await isOnline();
-  if (!online) return { ok: false, reason: "offline" };
+async function fetchMaterialesPorAgrupador({ Agr1, Agr2 }) {
+  const urls = makeCandidateUrls({ Agr1, Agr2 });
+  let lastError = null;
 
-  let ok = 0;
-  let fail = 0;
-  const detail = [];
+  for (const url of urls) {
+    try {
+      console.log("[CONSUMIBLES PREFETCH] Consultando agrupador:", {
+        Agr1,
+        Agr2,
+        url,
+      });
 
-  for (const coverage of coverages) {
-    const cov = String(coverage || "").trim().toUpperCase();
-    const pairs = uniqPairsForCoverage(cov);
+      const res = await api.get(url, {
+        timeout: DEFAULT_TIMEOUT_MS,
+      });
 
-    for (const pair of pairs) {
-      const a1 = String(pair?.Agr1 || "").trim().toUpperCase();
-      const a2 = String(pair?.Agr2 || "").trim().toUpperCase();
+      const rows = getResults(res?.data);
 
-      try {
-        const rows = await fetchMaterialesByPair(a1, a2);
-
-        await mergeConsumiblesPair({
-          coverageKey: cov,
-          agr1: a1,
-          agr2: a2,
-          materials: rows,
+      if (Array.isArray(rows) && rows.length > 0) {
+        console.log("[CONSUMIBLES PREFETCH] OK agrupador:", {
+          Agr1,
+          Agr2,
+          rows: rows.length,
+          url,
         });
 
-        ok += 1;
-        detail.push({
-          coverage: cov,
-          Agr1: a1,
-          Agr2: a2,
-          count: Array.isArray(rows) ? rows.length : 0,
+        return {
           ok: true,
-        });
-      } catch (e) {
-        fail += 1;
-        detail.push({
-          coverage: cov,
-          Agr1: a1,
-          Agr2: a2,
-          count: 0,
-          ok: false,
-          error: e?.message || String(e),
-        });
+          url,
+          rows,
+        };
       }
+
+      lastError = new Error(`Sin registros para ${Agr1}/${Agr2}`);
+    } catch (e) {
+      lastError = e;
+
+      console.log(
+        "[CONSUMIBLES PREFETCH] Falló agrupador:",
+        { Agr1, Agr2, url },
+        e?.response?.data || e?.message || e,
+      );
     }
   }
 
   return {
-    ok: true,
-    fetched: ok,
-    failed: fail,
-    detail,
+    ok: false,
+    rows: [],
+    error: lastError?.message || String(lastError || "Sin datos"),
   };
 }
+
+export async function bootstrapPrefetchConsumiblesCatalogo(options = {}) {
+  const cobertura = normalizeCoberturaTipo(options?.coberturaTipo || "BASICA");
+
+  try {
+    const net = await NetInfo.fetch();
+    const online = !!(net?.isConnected && net?.isInternetReachable !== false);
+
+    if (!online) {
+      const cached = await loadConsumiblesByCobertura(cobertura);
+
+      return {
+        ok: false,
+        reason: "offline",
+        cobertura,
+        cachedCount: cached?.count || 0,
+      };
+    }
+
+    const agrupadores = getAgrupadoresByCobertura(cobertura);
+
+    let total = 0;
+    const groups = [];
+
+    for (const agr of agrupadores) {
+      const result = await fetchMaterialesPorAgrupador({
+        Agr1: agr.Agr1,
+        Agr2: agr.Agr2,
+      });
+
+      const saved = await saveConsumiblesGroup({
+        coberturaTipo: cobertura,
+        agr1: agr.Agr1,
+        agr2: agr.Agr2,
+        rows: result.rows || [],
+      });
+
+      total += saved.count || 0;
+
+      groups.push({
+        Agr1: agr.Agr1,
+        Agr2: agr.Agr2,
+        label: agr.label,
+        ok: result.ok,
+        count: saved.count || 0,
+        error: result.error || null,
+      });
+    }
+
+    console.log("[CONSUMIBLES PREFETCH] Guardado por agrupadores:", {
+      cobertura,
+      total,
+      groups: groups.length,
+    });
+
+    return {
+      ok: true,
+      cobertura,
+      count: total,
+      groups,
+      updatedAt: Date.now(),
+    };
+  } catch (e) {
+    const cached = await loadConsumiblesByCobertura(cobertura);
+
+    console.log(
+      "[CONSUMIBLES PREFETCH] Error general:",
+      e?.response?.data || e?.message || e,
+    );
+
+    return {
+      ok: false,
+      reason: "prefetch_consumibles_error",
+      cobertura,
+      error: e?.message || String(e),
+      cachedCount: cached?.count || 0,
+    };
+  }
+}
+
+export default bootstrapPrefetchConsumiblesCatalogo;
