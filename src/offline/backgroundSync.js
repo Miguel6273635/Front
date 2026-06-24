@@ -162,6 +162,10 @@ function getUserEmail(user) {
   );
 }
 
+function getEnsureValidToken() {
+  return globalThis.__AUTH__?.ensureValidToken;
+}
+
 async function runSapQueueSync() {
   try {
     if (typeof processSapQueue !== "function") {
@@ -173,6 +177,7 @@ async function runSapQueueSync() {
 
     const result = await processSapQueue({
       apiInstance: api,
+      ensureValidToken: getEnsureValidToken(),
     });
 
     return {
@@ -212,7 +217,10 @@ async function runTecnicoPrefetch(user) {
 
     const userEmail = getUserEmail(user);
 
-    return await fn(userEmail);
+    return await fn(userEmail, {
+      apiInstance: api,
+      ensureValidToken: getEnsureValidToken(),
+    });
   } catch (e) {
     console.log(
       "[BACKGROUND SYNC] Error en prefetch técnico:",

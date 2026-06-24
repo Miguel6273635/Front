@@ -8,6 +8,67 @@ import {
   pruneDetallesByWindow,
 } from "./ordenesTecnicoCache";
 
+let PREFETCH_API_INSTANCE = api;
+let PREFETCH_ENSURE_VALID_TOKEN = null;
+
+function configurePrefetchRuntime(options = {}) {
+  PREFETCH_API_INSTANCE = options?.apiInstance || api;
+  PREFETCH_ENSURE_VALID_TOKEN =
+    typeof options?.ensureValidToken === "function"
+      ? options.ensureValidToken
+      : null;
+}
+
+function getPrefetchApi() {
+  return PREFETCH_API_INSTANCE || api;
+}
+
+async function ensureTokenBeforeRequest(label = "request") {
+  if (typeof PREFETCH_ENSURE_VALID_TOKEN !== "function") return true;
+
+  try {
+    const ok = await PREFETCH_ENSURE_VALID_TOKEN();
+
+    if (!ok) {
+      throw new Error(`Token no válido antes de ${label}`);
+    }
+
+    return true;
+  } catch (e) {
+    console.log(
+      "[PREFETCH TECNICO][TOKEN] No se pudo validar token:",
+      label,
+      e?.message || e,
+    );
+
+    throw e;
+  }
+}
+
+function isTokenAusenteError(e) {
+  const status = Number(e?.response?.status || 0);
+  const msg = JSON.stringify(e?.response?.data || e?.message || e || "")
+    .toLowerCase();
+
+  return status === 401 && msg.includes("token ausente");
+}
+
+async function retryOnceWithFreshToken(fn, label = "request") {
+  try {
+    await ensureTokenBeforeRequest(label);
+    return await fn();
+  } catch (e) {
+    if (!isTokenAusenteError(e)) throw e;
+
+    console.log("[PREFETCH TECNICO][TOKEN] 401 Token ausente. Reintentando:", label);
+
+    await ensureTokenBeforeRequest(`${label}:retry`);
+
+    return await fn();
+  }
+}
+
+
 /*
   Archivo: src/offline/prefetchOrdenesTecnico.js
 
@@ -132,7 +193,7 @@ function pickFinishDate(baseOrden) {
 
 async function fetchBackendDetalle(orderId) {
   try {
-    const resOrden = await api.get(`/api/ordenes/sap/${orderId}`);
+    const resOrden = await getPrefetchApi().get(`/api/ordenes/sap/${orderId}`);
 
     return resOrden?.data || {};
   } catch (e) {
@@ -148,7 +209,7 @@ async function fetchBackendDetalle(orderId) {
 
 async function fetchHeaderDetalle(orderId) {
   try {
-    const resHeader = await api.get(
+    const resHeader = await getPrefetchApi().get(
       `/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet('${orderId}')?$format=json`,
     );
 
@@ -183,7 +244,7 @@ async function fetchBaseOrden(orderId) {
 
 async function fetchAddresses(orderIdReal) {
   try {
-    const resAddr = await api.get(
+    const resAddr = await getPrefetchApi().get(
       `/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet('${orderIdReal}')/ToAddresses?$format=json`,
     );
 
@@ -204,7 +265,7 @@ async function fetchAddresses(orderIdReal) {
   }
 
   try {
-    const resAddr = await api.get(`/api/ordenes/sap/${orderIdReal}/addresses`);
+    const resAddr = await getPrefetchApi().get(`/api/ordenes/sap/${orderIdReal}/addresses`);
     const results = resAddr?.data?.results || resAddr?.data?.d?.results || [];
     const chosen = pickSecondAddress(results);
     const mapped = mapDireccionLikeBackend(chosen);
@@ -229,7 +290,7 @@ async function fetchAddresses(orderIdReal) {
 
 async function fetchPartners(orderIdReal) {
   try {
-    const resPartners = await api.get(
+    const resPartners = await getPrefetchApi().get(
       `/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet('${orderIdReal}')/ToPartners?$format=json`,
     );
 
@@ -263,7 +324,7 @@ async function fetchOperaciones(orderIdReal) {
   let ops = [];
 
   try {
-    const resOps = await api.get(`/api/operaciones/sap/${String(orderIdReal)}`);
+    const resOps = await getPrefetchApi().get(`/api/operaciones/sap/${String(orderIdReal)}`);
 
     const rawOps =
       resOps?.data?.d?.results ||
@@ -292,7 +353,7 @@ async function fetchOperaciones(orderIdReal) {
   }
 
   try {
-    const resOps = await api.get(
+    const resOps = await getPrefetchApi().get(
       `/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet('${orderIdReal}')/ToOperations?$format=json`,
     );
 
@@ -346,9 +407,15 @@ async function fetchComponentesOperacion(orderId, activity) {
 
   if (!cleanOrderId || !cleanActivity) return [];
 
+  const label = `componentes:${cleanOrderId}:${cleanActivity}`;
+
   try {
-    const res = await api.get(
-      `/api/operaciones/ordenes/${cleanOrderId}/operaciones/${cleanActivity}/componentes`,
+    const res = await retryOnceWithFreshToken(
+      () =>
+        getPrefetchApi().get(
+          `/api/operaciones/ordenes/${cleanOrderId}/operaciones/${cleanActivity}/componentes`,
+        ),
+      label,
     );
 
     const data = Array.isArray(res.data) ? res.data : [];
@@ -415,7 +482,10 @@ export async function prefetchOrdenesTecnicoDetalles({
   orderIds = [],
   concurrency = 3,
   prefetchComponents = true,
-}) {
+  apiInstance = null,
+  ensureValidToken = null,
+} = {}) {
+  configurePrefetchRuntime({ apiInstance, ensureValidToken });
   const ids = [
     ...new Set(orderIds.map((x) => String(x).trim()).filter(Boolean)),
   ];
@@ -445,6 +515,8 @@ export async function prefetchOrdenesTecnicoDetalles({
       const orderId = ids[idx];
 
       try {
+        await ensureTokenBeforeRequest(`detalle:${orderId}`);
+
         const baseOrden = await fetchBaseOrden(orderId);
 
         const orderIdReal = String(
@@ -628,7 +700,9 @@ export async function prefetchOrdenesTecnicoDetalles({
 // Función maestra para sincronizar órdenes del técnico
 // Se usa desde backgroundSync.js
 // ==========================================
-export async function prefetchOrdenesTecnico(userEmail = null) {
+export async function prefetchOrdenesTecnico(userEmail = null, options = {}) {
+  configurePrefetchRuntime(options);
+
   try {
     console.log("[PREFETCH TECNICO] Iniciando sincronización...");
 
@@ -647,7 +721,10 @@ export async function prefetchOrdenesTecnico(userEmail = null) {
       params.set("user", userEmail);
     }
 
-    const res = await api.get(`/api/ordenes/sap/list?${params.toString()}`);
+    const res = await retryOnceWithFreshToken(
+      () => getPrefetchApi().get(`/api/ordenes/sap/list?${params.toString()}`),
+      "ordenes:list",
+    );
 
     const data = Array.isArray(res?.data)
       ? res.data
@@ -668,8 +745,10 @@ export async function prefetchOrdenesTecnico(userEmail = null) {
 
     const detalleResult = await prefetchOrdenesTecnicoDetalles({
       orderIds,
-      concurrency: 3,
+      concurrency: 2,
       prefetchComponents: true,
+      apiInstance: options?.apiInstance || getPrefetchApi(),
+      ensureValidToken: options?.ensureValidToken || PREFETCH_ENSURE_VALID_TOKEN,
     });
 
     await pruneDetallesByWindow(userEmail, win);

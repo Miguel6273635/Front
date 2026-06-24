@@ -3,6 +3,10 @@ import axios from "axios";
 import Constants from "expo-constants";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { isOnline } from "../offline/net";
+import {
+  ensureValidAuthToken,
+  getStoredAccessToken,
+} from "./tokenManager";
 
 const extra = Constants.expoConfig?.extra || {};
 
@@ -19,9 +23,28 @@ const api = axios.create({
 // ✅ Request interceptor
 api.interceptors.request.use(
   async (config) => {
-    const token = await AsyncStorage.getItem("token");
+    /*
+      IMPORTANTE:
+      Antes cada petición solo leía AsyncStorage.getItem("token").
+      En background puede estar vencido o no estar cargado en memoria.
+      Ahora validamos/renovamos el token sin depender de AuthContext.
+    */
+    let token = await getStoredAccessToken();
+
+    try {
+      const ensured = await ensureValidAuthToken({
+        source: "api_request",
+      });
+
+      if (ensured?.ok && ensured?.accessToken) {
+        token = ensured.accessToken;
+      }
+    } catch (e) {
+      console.log("[API TOKEN CHECK ERROR]", e?.message || e);
+    }
 
     if (token) {
+      config.headers = config.headers || {};
       config.headers.Authorization = `Bearer ${token}`;
     }
 
@@ -67,16 +90,39 @@ api.interceptors.response.use(
       original._retry = true;
 
       try {
-        const auth = globalThis.__AUTH__;
-        const ok = await auth?.ensureValidToken?.();
+        /*
+          Primero usamos tokenManager porque también funciona en background,
+          aunque AuthContext no esté montado.
+        */
+        let ensured = await ensureValidAuthToken({
+          source: "api_401_retry",
+          forceRefresh: true,
+        });
 
-        if (ok) {
-          const newToken = await AsyncStorage.getItem("token");
+        /*
+          Fallback: si AuthContext está montado, también puede ayudar.
+        */
+        if (!ensured?.ok) {
+          const auth = globalThis.__AUTH__;
+          const ok = await auth?.ensureValidToken?.();
+
+          if (ok) {
+            ensured = {
+              ok: true,
+              accessToken: await getStoredAccessToken(),
+            };
+          }
+        }
+
+        if (ensured?.ok) {
+          const newToken = ensured.accessToken || (await getStoredAccessToken());
 
           if (newToken) {
+            original.headers = original.headers || {};
             original.headers.Authorization = `Bearer ${newToken}`;
           }
 
+          console.log("[API 401] Token renovado. Reintentando petición.");
           return api(original);
         }
 
@@ -85,7 +131,9 @@ api.interceptors.response.use(
           - hay internet
           - hubo 401 real del backend
           - no se pudo renovar token
+          - y AuthContext existe
         */
+        const auth = globalThis.__AUTH__;
         await auth?.logout?.();
       } catch (e) {
         console.log("[API 401 HANDLER ERROR]", e?.message || e);
