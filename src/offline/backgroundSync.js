@@ -9,6 +9,7 @@
 // 6. Ejecutar por rol: técnico o supervisor.
 // 7. Guardar última sincronización.
 // 8. Evitar que la pantalla de detalle procese cola pesada en primer plano.
+// 9. Validar/renovar token sin depender de AuthContext.
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import NetInfo from "@react-native-community/netinfo";
@@ -16,6 +17,7 @@ import * as BackgroundFetch from "expo-background-fetch";
 import * as TaskManager from "expo-task-manager";
 
 import api from "../services/api";
+import { ensureValidAuthToken } from "../services/tokenManager";
 import { runOutboxSync } from "./syncEngine";
 import { bootstrapPrefetchOrdenesSupervisor } from "./bootstrapSync";
 import { syncTecnicoPendingActions } from "./tecnicoPendingSync";
@@ -162,8 +164,18 @@ function getUserEmail(user) {
   );
 }
 
+/*
+  Esta función reemplaza el uso directo de globalThis.__AUTH__.
+  Así backgroundSync puede validar token aunque AuthContext no esté montado.
+*/
 function getEnsureValidToken() {
-  return globalThis.__AUTH__?.ensureValidToken;
+  return async () => {
+    const r = await ensureValidAuthToken({
+      source: "background_sync",
+    });
+
+    return !!r?.ok;
+  };
 }
 
 async function runSapQueueSync() {
@@ -369,6 +381,27 @@ export async function runBackgroundSyncNow(options = {}) {
       return result;
     }
 
+    /*
+      Antes de mandar cola, órdenes, componentes o consumibles,
+      validamos/renovamos token usando tokenManager.
+    */
+    const tokenReady = await ensureValidAuthToken({
+      source,
+    });
+
+    if (!tokenReady?.ok) {
+      const result = {
+        ok: false,
+        reason: "token_not_available",
+        tokenReason: tokenReady?.reason || null,
+        source,
+        network,
+      };
+
+      await saveSyncResult(result);
+      return result;
+    }
+
     console.log("[BACKGROUND SYNC] Iniciando sincronización:", {
       source,
       rol_id: user?.rol_id,
@@ -464,7 +497,8 @@ TaskManager.defineTask(BACKGROUND_SYNC_TASK, async () => {
       result?.reason === "offline" ||
       result?.reason === "network_not_stable" ||
       result?.reason === "no_user" ||
-      result?.reason === "sync_already_running"
+      result?.reason === "sync_already_running" ||
+      result?.reason === "token_not_available"
     ) {
       return BackgroundFetch.BackgroundFetchResult.NoData;
     }
