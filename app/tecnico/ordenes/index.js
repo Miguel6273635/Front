@@ -1223,7 +1223,32 @@ export default function ListaOrdenesTecnico() {
       return;
     }
 
+    if (!userEmail) {
+      Alert.alert(
+        "Sesión no válida",
+        "No se encontró el correo del usuario para guardar el check-in.",
+      );
+      return;
+    }
+
     const orderId = String(checkinOrderId).trim();
+
+    /*
+      Cambio realizado:
+      El check-in ya no espera el POST de SAP.
+
+      Flujo nuevo:
+      1. Guarda localmente el estatus.
+      2. Guarda la foto Base64 en la cola local.
+      3. Cierra el modal para que el técnico continúe.
+      4. Intenta sincronizar en segundo plano.
+
+      IMPORTANTE:
+      Actualmente se conserva el estatus "0100" porque así estaba tu código.
+      Si la regla correcta del check-in es mandar "0200" EN PROCESO,
+      cambia CHECKIN_STATUS a "0200".
+    */
+    const CHECKIN_STATUS = "0100";
 
     try {
       setIsSending(true);
@@ -1233,93 +1258,55 @@ export default function ListaOrdenesTecnico() {
 
       setIsOnline(online);
 
-      if (!online) {
-        const offlineStatus = "0100";
+      await applyLocalOfflineStatus(orderId, CHECKIN_STATUS);
 
-        await applyLocalOfflineStatus(orderId, offlineStatus);
+      const nextQueue = await enqueueCheckin(userEmail, {
+        orderId,
+        photoBase64: String(checkinPhotoBase64).trim(),
+        statusCode: CHECKIN_STATUS,
+        lastValidStatus: CHECKIN_STATUS,
+        createdAt: Date.now(),
+      });
 
-        const nextQueue = await enqueueCheckin(userEmail, {
-          orderId,
-          photoBase64: String(checkinPhotoBase64).trim(),
-          statusCode: offlineStatus,
-          lastValidStatus: offlineStatus,
-          createdAt: Date.now(),
-        });
-
-        setCheckinQueue(nextQueue);
-
-        Alert.alert(
-          "Check-in offline",
-          "Sin internet. Se guardó el check-in en cola y se enviará automáticamente cuando regrese la conexión ✅",
-        );
-
-        setShowCheckinModal(false);
-        setCheckinPhotoBase64(null);
-        setCheckinPhotoUri(null);
-
-        return;
-      }
-
-      const ok = await ensureValidToken();
-      if (!ok) return;
-      const onlineStatus = "0100";
-
-      await postCheckinEvidence(orderId, checkinPhotoBase64);
-      await postChangeStatusToSap(orderId, onlineStatus);
-      await applyLocalOfflineStatus(orderId, onlineStatus);
-
-      Alert.alert(
-        "Check-in",
-        "Evidencia enviada y estatus actualizado a PENDIENTE",
-      );
+      setCheckinQueue(nextQueue);
 
       setShowCheckinModal(false);
       setCheckinPhotoBase64(null);
       setCheckinPhotoUri(null);
 
-      fetchOrdenes({ isRefresh: true });
+      /*
+        Aquí se intenta mandar el POST en segundo plano.
+        No usamos await para que la pantalla no se quede esperando SAP.
+
+        Dentro de syncCheckinQueue se mandan estos POST:
+        1. postCheckinEvidence(orderId, b64)
+        2. postChangeStatusToSap(orderId, statusToSend)
+
+        Si no hay internet o SAP falla, el registro queda en la cola
+        y se vuelve a intentar cuando regrese la conexión.
+      */
+      syncCheckinQueue().catch((e) => {
+        console.log(
+          "[CHECKIN][BACKGROUND] No se pudo sincronizar ahora:",
+          e?.response?.data || e?.message || e,
+        );
+      });
+
+      Alert.alert(
+        online ? "Check-in guardado" : "Check-in offline",
+        online
+          ? "El check-in quedó guardado en el dispositivo. La foto y el estatus se enviarán en segundo plano."
+          : "Sin internet. El check-in quedó guardado en cola y se enviará automáticamente cuando regrese la conexión ✅",
+      );
     } catch (e) {
       console.log(
         "enviarCheckinCompletoASap ERROR:",
         e?.response?.data || e?.message || e,
       );
 
-      const net2 = await NetInfo.fetch();
-
-      const online2 = !!(
-        net2?.isConnected && net2?.isInternetReachable !== false
-      );
-
-      if (!online2) {
-        const offlineStatus = "0100";
-
-        await applyLocalOfflineStatus(orderId, offlineStatus);
-
-        const nextQueue = await enqueueCheckin(userEmail, {
-          orderId,
-          photoBase64: String(checkinPhotoBase64).trim(),
-          statusCode: offlineStatus,
-          lastValidStatus: offlineStatus,
-          createdAt: Date.now(),
-        });
-
-        setCheckinQueue(nextQueue);
-
-        Alert.alert(
-          "Check-in guardado",
-          "Se cayó la conexión. Se guardó en cola y se enviará cuando regrese internet ✅",
-        );
-
-        setShowCheckinModal(false);
-        setCheckinPhotoBase64(null);
-        setCheckinPhotoUri(null);
-
-        return;
-      }
-
       Alert.alert(
-        "Error SAP",
-        "No se pudo completar el check-in (foto/estatus). Revisa logs.",
+        "Error",
+        "No se pudo guardar el check-in en el dispositivo. Intenta nuevamente.",
       );
     } finally {
       setIsSending(false);
@@ -1928,11 +1915,7 @@ export default function ListaOrdenesTecnico() {
                 disabled={isSending}
               >
                 <Text style={[styles.smallBtnText, { color: "#fff" }]}>
-                  {isSending
-                    ? "Procesando..."
-                    : isOnline
-                      ? "Enviar a SAP"
-                      : "Guardar offline"}
+                  {isSending ? "Guardando..." : "Guardar check-in"}
                 </Text>
               </TouchableOpacity>
             </View>

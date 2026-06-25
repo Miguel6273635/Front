@@ -804,6 +804,7 @@ export default function DetalleOrden() {
 
   const signatureRef = useRef(null);
   const wasOnlineRef = useRef(false);
+  const queueProcessingRef = useRef(false);
 
   const [finalizeMode, setFinalizeMode] = useState(false);
   const [checkedMap, setCheckedMap] = useState({});
@@ -1126,6 +1127,38 @@ export default function DetalleOrden() {
       dedupeKey,
       key: dedupeKey,
     });
+  };
+
+  const runSapQueueInBackground = () => {
+    if (queueProcessingRef.current) return;
+
+    queueProcessingRef.current = true;
+
+    Promise.resolve()
+      .then(async () => {
+        const net = await NetInfo.fetch();
+        const online = !!(
+          net?.isConnected && net?.isInternetReachable !== false
+        );
+
+        if (!online) return;
+
+        console.log("[DETALLE][SAP_QUEUE] Procesando en segundo plano...");
+
+        await processSapQueue({
+          ensureValidToken,
+          apiInstance: api,
+        });
+      })
+      .catch((e) => {
+        console.log(
+          "[DETALLE][SAP_QUEUE] Error segundo plano:",
+          e?.message || e,
+        );
+      })
+      .finally(() => {
+        queueProcessingRef.current = false;
+      });
   };
 
   useEffect(() => {
@@ -2016,7 +2049,7 @@ export default function DetalleOrden() {
         finishMs,
         consumiblesRows: consumibles,
         plantFallback,
-        user: user, // 👈 CAMBIO: Pasamos el objeto 'user' completo
+        user,
       });
 
       if (!confirmationPayload0400) {
@@ -2030,7 +2063,7 @@ export default function DetalleOrden() {
       const pendingPayload = {
         checkedMap,
         savedAt: Date.now(),
-        confirmationsSent: false,
+        confirmationsSent: true,
         confirmationsFinishMs: finishMs,
         consumibles: Array.isArray(consumibles) ? consumibles : [],
         notaTecnico: String(notaTecnico || "").trim(),
@@ -2046,277 +2079,36 @@ export default function DetalleOrden() {
 
       await savePendingSign(orderId, pendingPayload);
 
-      const net = await NetInfo.fetch();
-      const isOnline = !!(
-        net?.isConnected && net?.isInternetReachable !== false
+      // ✅ Segundo plano: primero se guarda todo local y se encola.
+      // Ya no esperamos el POST de SAP desde esta pantalla.
+      await enqueueSap({
+        type: "CONFIRMATIONS",
+        orderId,
+        endpoint: "/api/odata/ZCS_CREATE_CONFIRMATION_SRV/ConfirmationHeaderSet",
+        payload: confirmationPayload0400,
+        dedupeKey: `CONFIRMATIONS:${orderId}:0400`,
+      });
+
+      await enqueueSap({
+        type: "STATUS",
+        orderId,
+        endpoint: "/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet",
+        payload: payload0400,
+        dedupeKey: `STATUS:${orderId}:0400`,
+      });
+
+      await applyLocalOrderStatus(orderId, "0400");
+
+      setFinalizeMode(false);
+
+      runSapQueueInBackground();
+
+      Alert.alert(
+        "Guardado en el dispositivo",
+        "La orden quedó como pendiente de firma localmente. Las operaciones, consumibles y el estatus 0400 se enviarán en segundo plano cuando haya conexión.",
       );
 
-      if (!isOnline) {
-        await enqueueSap({
-          type: "CONFIRMATIONS",
-          orderId,
-          endpoint:
-            "/api/odata/ZCS_CREATE_CONFIRMATION_SRV/ConfirmationHeaderSet",
-          payload: confirmationPayload0400,
-          dedupeKey: `CONFIRMATIONS:${orderId}:0400`,
-        });
-
-        await enqueueSap({
-          type: "STATUS",
-          orderId,
-          endpoint: "/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet",
-          payload: payload0400,
-          dedupeKey: `STATUS:${orderId}:0400`,
-        });
-
-        await savePendingSign(orderId, {
-          ...pendingPayload,
-          confirmationsSent: true,
-        });
-
-        await applyLocalOrderStatus(orderId, "0400");
-
-        setFinalizeMode(false);
-        router.replace("/tecnico/ordenes");
-
-        Alert.alert(
-          "Guardado offline",
-          "La orden quedó en pendiente de firma. Las operaciones/consumibles y el estatus 0400 se enviarán cuando vuelva el internet.",
-        );
-
-        setFinalizeMode(false);
-        router.replace("/tecnico/ordenes");
-        return;
-      }
-      //////////////////////////////////////
-
-      ////////////////////////////////////////
-      /*
-      let confirmationsOk = false;
-      let statusOk = false;
-
-      try {
-        await api.post(
-          "/api/odata/ZCS_CREATE_CONFIRMATION_SRV/ConfirmationHeaderSet",
-          confirmationPayload0400,
-          { timeout: 120000  }
-        );
-        confirmationsOk = true;
-      } catch (err) {
-        console.warn("[0400][CONFIRMATIONS ERROR]", err?.response?.data || err);
-
-        const networkLike = isNetworkLikeError(err);
-
-        if (networkLike) {
-          await enqueueSap({
-            type: "CONFIRMATIONS",
-            orderId,
-            endpoint: "/api/odata/ZCS_CREATE_CONFIRMATION_SRV/ConfirmationHeaderSet",
-            payload: confirmationPayload0400,
-            dedupeKey: `CONFIRMATIONS:${orderId}:0400`,
-          });
-
-          await enqueueSap({
-            type: "STATUS",
-            orderId,
-            endpoint: "/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet",
-            payload: payload0400,
-            dedupeKey: `STATUS:${orderId}:0400`,
-          });
-
-          await savePendingSign(orderId, {
-            ...pendingPayload,
-            confirmationsSent: true,
-          });
-
-          await applyLocalOrderStatus(orderId, "0400");
-
-          Alert.alert(
-            "Red inestable",
-            "La señal no fue suficiente. La orden quedó en pendiente de firma y se sincronizará cuando haya mejor conexión."
-          );
-
-          setFinalizeMode(false);
-          router.replace("/tecnico/ordenes");
-          return;
-        }
-
-        Alert.alert(
-          "Error SAP",
-          getSapErrorMessage(err, "SAP rechazó el envío de confirmaciones.")
-        );
-        return;
-      }
-
-      try {
-        await api.post(
-          "/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet",
-          payload0400,
-          { timeout: 300000 }
-        );
-        statusOk = true;
-      } catch (err) {
-        console.warn("[0400][STATUS ERROR]", err?.response?.data || err);
-
-        const networkLike = isNetworkLikeError(err);
-
-        if (networkLike) {
-          await enqueueSap({
-            type: "STATUS",
-            orderId,
-            endpoint: "/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet",
-            payload: payload0400,
-            dedupeKey: `STATUS:${orderId}:0400`,
-          });
-
-          await savePendingSign(orderId, {
-            ...pendingPayload,
-            confirmationsSent: true,
-          });
-
-          await applyLocalOrderStatus(orderId, "0400");
-
-          Alert.alert(
-            "Red inestable",
-            "La señal no fue suficiente. La orden quedó en pendiente de firma y se sincronizará cuando haya mejor conexión."
-          );
-
-          setFinalizeMode(false);
-          router.replace("/tecnico/ordenes");
-          return;
-        }
-
-        await savePendingSign(orderId, {
-          ...pendingPayload,
-          confirmationsSent: true,
-        });
-
-        Alert.alert(
-          "Error SAP",
-          getSapErrorMessage(
-            err,
-            "Las operaciones sí se enviaron, pero SAP rechazó el cambio a estatus 0400."
-          )
-        );
-        return;
-      }*/
-      ///////////////////////////////////////////////////////////////
-
-      let confirmationsOk = false;
-      let statusOk = false;
-      let confirmationsResult = { ok: false, queued: false };
-      let statusResult = { ok: false, queued: false };
-
-      try {
-        confirmationsResult = await postWithBackgroundFallback({
-          apiInstance: api,
-          endpoint:
-            "/api/odata/ZCS_CREATE_CONFIRMATION_SRV/ConfirmationHeaderSet",
-          payload: confirmationPayload0400,
-          timeoutMs: BG_TIMEOUT_MS,
-          enqueueFn: enqueueSap,
-          queueItem: {
-            type: "CONFIRMATIONS",
-            orderId,
-            endpoint:
-              "/api/odata/ZCS_CREATE_CONFIRMATION_SRV/ConfirmationHeaderSet",
-            payload: confirmationPayload0400,
-            dedupeKey: `CONFIRMATIONS:${orderId}:0400`,
-          },
-        });
-
-        confirmationsOk = true;
-      } catch (err) {
-        console.warn("[0400][CONFIRMATIONS ERROR]", err?.response?.data || err);
-
-        Alert.alert(
-          "Error SAP",
-          getSapErrorMessage(err, "SAP rechazó el envío de confirmaciones."),
-        );
-        return;
-      }
-
-      try {
-        statusResult = await postWithBackgroundFallback({
-          apiInstance: api,
-          endpoint: "/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet",
-          payload: payload0400,
-          timeoutMs: BG_TIMEOUT_MS,
-          enqueueFn: enqueueSap,
-          queueItem: {
-            type: "STATUS",
-            orderId,
-            endpoint: "/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet",
-            payload: payload0400,
-            dedupeKey: `STATUS:${orderId}:0400`,
-          },
-        });
-
-        statusOk = true;
-      } catch (err) {
-        console.warn("[0400][STATUS ERROR]", err?.response?.data || err);
-
-        await savePendingSign(orderId, {
-          ...pendingPayload,
-          confirmationsSent: true,
-        });
-
-        Alert.alert(
-          "Error SAP",
-          getSapErrorMessage(
-            err,
-            "Las operaciones sí se enviaron, pero SAP rechazó el cambio a estatus 0400.",
-          ),
-        );
-        return;
-      }
-
-      /////////////////////////////////////////////////////////////////////////
-
-      /*
-
-
-      if (confirmationsOk && statusOk) {
-        await savePendingSign(orderId, {
-          ...pendingPayload,
-          confirmationsSent: true,
-        });
-
-        await applyLocalOrderStatus(orderId, "0400");
-
-        Alert.alert(
-          "Listo",
-          "Se guardó pendiente de firma y se enviaron operaciones, consumibles y estatus."
-        );
-
-        setFinalizeMode(false);
-        router.replace("/tecnico/ordenes");
-      }
-
-*/
-
-      if (confirmationsOk && statusOk) {
-        await savePendingSign(orderId, {
-          ...pendingPayload,
-          confirmationsSent: true,
-        });
-
-        await applyLocalOrderStatus(orderId, "0400");
-
-        const algoEnCola = confirmationsResult?.queued || statusResult?.queued;
-
-        Alert.alert(
-          algoEnCola ? "Guardado y en sincronización" : "Listo",
-          algoEnCola
-            ? "La orden quedó en pendiente de firma. Lo que no alcanzó a enviarse en 2 minutos se mandará en segundo plano."
-            : "Se guardó pendiente de firma y se enviaron operaciones, consumibles y estatus.",
-        );
-
-        setFinalizeMode(false);
-        router.replace("/tecnico/ordenes");
-      }
-
-      /////////////////////////////////////////////////////////////////////////////////////////////////////////////
+      router.replace("/tecnico/ordenes");
     } catch (e) {
       console.error(
         "Error guardando pendiente de firma:",
@@ -2801,11 +2593,6 @@ export default function DetalleOrden() {
     try {
       setFinishingOrder(true);
 
-      const net = await NetInfo.fetch();
-      const isOnline = !!(
-        net?.isConnected && net?.isInternetReachable !== false
-      );
-
       let alreadySentConfirmations = false;
       try {
         const pending = await loadPendingSign(orderId);
@@ -2813,67 +2600,17 @@ export default function DetalleOrden() {
       } catch {}
 
       logSapPayload(
-        "=== SAP PAYLOAD (CHANGE 0300 + PDF) ===",
+        "=== SAP PAYLOAD ENCOLADO (CHANGE 0300 + PDF) ===",
         change0300WithPdfPayload,
         {
           stripBase64: true,
         },
       );
       logSapPayload(
-        "=== SAP PAYLOAD (CONFIRMATIONS + CONSUMIBLES) ===",
+        "=== SAP PAYLOAD ENCOLADO (CONFIRMATIONS + CONSUMIBLES) ===",
         confirmationPayload,
       );
       console.log("CONFIRMATIONS alreadySent:", alreadySentConfirmations);
-
-      if (!isOnline) {
-        await updateLocalOpsAsFinalizadas(orderId, selectedIds);
-        await updateLocalOrderAsFinalizada0300(orderId, finishMs);
-
-        await enqueueSap({
-          type: "STATUS",
-          orderId,
-          endpoint: "/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet",
-          payload: change0300WithPdfPayload,
-          dedupeKey: `STATUS:${orderId}`,
-        });
-
-        if (!alreadySentConfirmations) {
-          await enqueueSap({
-            type: "CONFIRMATIONS",
-            orderId,
-            endpoint:
-              "/api/odata/ZCS_CREATE_CONFIRMATION_SRV/ConfirmationHeaderSet",
-            payload: confirmationPayload,
-            dedupeKey: `CONFIRMATIONS:${orderId}:0300`,
-          });
-        } else {
-          console.log(
-            "Saltando enqueue confirmaciones (ya fueron enviadas en 0400)",
-          );
-        }
-
-        await clearOrderStart(orderId);
-        setOrderStartedAtMs(null);
-
-        await clearPendingSign(orderId);
-        setCheckedMap({});
-        setConsumibles([]);
-        setNotaTecnico("");
-        setFinalizeMode(false);
-
-        setShowMantPreview(false);
-        setPendingFinalize(null);
-
-        Alert.alert(
-          "Finalizado (offline)",
-          alreadySentConfirmations
-            ? "Se encoló (Estatus 0300+PDF). Confirmaciones+consumibles ya se habían enviado en 0400."
-            : "Se encoló: (Estatus 0300+PDF) + confirmaciones+consumibles.",
-        );
-
-        router.replace("/tecnico/ordenes");
-        return;
-      }
 
       if (!change0300WithPdfPayload?.Attachments?.[0]?.Base64) {
         Alert.alert(
@@ -2883,121 +2620,29 @@ export default function DetalleOrden() {
         return;
       }
 
-      /////////////////////////////////////////
+      // ✅ Segundo plano: la orden se finaliza localmente y se encola el envío SAP.
+      // Ya no esperamos el POST del PDF Base64 ni de confirmaciones desde esta pantalla.
+      await enqueueSap({
+        type: "STATUS",
+        orderId,
+        endpoint: "/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet",
+        payload: change0300WithPdfPayload,
+        dedupeKey: `STATUS:${orderId}:0300`,
+      });
 
-      /*
-      try {
-        await api.post(
-          `/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet`,
-          change0300WithPdfPayload,
-          { timeout: 300000 }
-        );
-
-        if (!alreadySentConfirmations) {
-          await api.post(
-            `/api/odata/ZCS_CREATE_CONFIRMATION_SRV/ConfirmationHeaderSet`,
-            confirmationPayload,
-            { timeout: 300000 }
-          );
-        } else {
-          console.log("Saltando POST confirmaciones (ya fueron enviadas en 0400)");
-        }
-      } catch (err) {
-        const networkLike = isNetworkLikeError(err);
-        if (!networkLike) throw err;
-
-        console.warn("[0300][NETWORK FALLBACK]", err?.message || err);
-
-        await updateLocalOpsAsFinalizadas(orderId, selectedIds);
-        await updateLocalOrderAsFinalizada0300(orderId, finishMs);
-
+      if (!alreadySentConfirmations) {
         await enqueueSap({
-          type: "STATUS",
+          type: "CONFIRMATIONS",
           orderId,
-          endpoint: "/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet",
-          payload: change0300WithPdfPayload,
-          dedupeKey: `STATUS:${orderId}`,
+          endpoint: "/api/odata/ZCS_CREATE_CONFIRMATION_SRV/ConfirmationHeaderSet",
+          payload: confirmationPayload,
+          dedupeKey: `CONFIRMATIONS:${orderId}:0300`,
         });
-
-        if (!alreadySentConfirmations) {
-          await enqueueSap({
-            type: "CONFIRMATIONS",
-            orderId,
-            endpoint: "/api/odata/ZCS_CREATE_CONFIRMATION_SRV/ConfirmationHeaderSet",
-            payload: confirmationPayload,
-            dedupeKey: `CONFIRMATIONS:${orderId}:0300`,
-          });
-        }
-
-        await clearOrderStart(orderId);
-        setOrderStartedAtMs(null);
-
-        await clearPendingSign(orderId);
-        setCheckedMap({});
-        setConsumibles([]);
-        setNotaTecnico("");
-        setFinalizeMode(false);
-
-        setShowMantPreview(false);
-        setPendingFinalize(null);
-
-        Alert.alert(
-          "Red inestable",
-          alreadySentConfirmations
-            ? "La señal no fue suficiente. La orden quedó finalizada localmente y se sincronizará el estatus 0300 + PDF cuando haya mejor conexión."
-            : "La señal no fue suficiente. La orden quedó finalizada localmente y se sincronizarán el estatus 0300 + PDF y las confirmaciones cuando haya mejor conexión."
+      } else {
+        console.log(
+          "Saltando enqueue confirmaciones (ya fueron enviadas o encoladas en 0400)",
         );
-
-        router.replace("/tecnico/ordenes");
-        return;
       }
-*/
-      let statusResult = { ok: false, queued: false };
-      let confirmationsResult = { ok: true, queued: false };
-
-      try {
-        statusResult = await postWithBackgroundFallback({
-          apiInstance: api,
-          endpoint: "/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet",
-          payload: change0300WithPdfPayload,
-          timeoutMs: BG_TIMEOUT_MS,
-          enqueueFn: enqueueSap,
-          queueItem: {
-            type: "STATUS",
-            orderId,
-            endpoint: "/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet",
-            payload: change0300WithPdfPayload,
-            dedupeKey: `STATUS:${orderId}:0300`,
-          },
-        });
-
-        if (!alreadySentConfirmations) {
-          confirmationsResult = await postWithBackgroundFallback({
-            apiInstance: api,
-            endpoint:
-              "/api/odata/ZCS_CREATE_CONFIRMATION_SRV/ConfirmationHeaderSet",
-            payload: confirmationPayload,
-            timeoutMs: BG_TIMEOUT_MS,
-            enqueueFn: enqueueSap,
-            queueItem: {
-              type: "CONFIRMATIONS",
-              orderId,
-              endpoint:
-                "/api/odata/ZCS_CREATE_CONFIRMATION_SRV/ConfirmationHeaderSet",
-              payload: confirmationPayload,
-              dedupeKey: `CONFIRMATIONS:${orderId}:0300`,
-            },
-          });
-        } else {
-          console.log(
-            "Saltando POST confirmaciones (ya fueron enviadas en 0400)",
-          );
-        }
-      } catch (err) {
-        throw err;
-      }
-
-      ////////////////////////////////////////////////////////////////////////
 
       await updateLocalOpsAsFinalizadas(orderId, selectedIds);
       await updateLocalOrderAsFinalizada0300(orderId, finishMs);
@@ -3014,36 +2659,19 @@ export default function DetalleOrden() {
       setShowMantPreview(false);
       setPendingFinalize(null);
 
-      /////////////////////////////
+      runSapQueueInBackground();
 
-      /*
       Alert.alert(
-        "Orden finalizada",
+        "Orden finalizada localmente",
         alreadySentConfirmations
-          ? "Se envió: (Orden FINALIZADA + PDF). Confirmaciones+consumibles ya se habían enviado al guardar como Pendiente de firma."
-          : "Se envió: (Orden FINALIZADA + PDF) y confirmaciones+consumibles."
+          ? "La orden quedó finalizada en el dispositivo. El estatus 0300 + PDF se enviará en segundo plano."
+          : "La orden quedó finalizada en el dispositivo. El estatus 0300 + PDF y las confirmaciones se enviarán en segundo plano.",
       );
+
       router.replace("/tecnico/ordenes");
-*/
-
-      const algoEnCola = statusResult?.queued || confirmationsResult?.queued;
-
-      Alert.alert(
-        algoEnCola ? "Finalizado y en sincronización" : "Orden finalizada",
-        algoEnCola
-          ? alreadySentConfirmations
-            ? "La orden quedó finalizada localmente. El estatus 0300 + PDF se enviará en segundo plano cuando termine o haya mejor conexión."
-            : "La orden quedó finalizada localmente. El estatus 0300 + PDF y las confirmaciones se enviarán en segundo plano."
-          : alreadySentConfirmations
-            ? "Se envió: (Orden FINALIZADA + PDF). Confirmaciones+consumibles ya se habían enviado al guardar como Pendiente de firma."
-            : "Se envió: (Orden FINALIZADA + PDF) y confirmaciones+consumibles.",
-      );
-      router.replace("/tecnico/ordenes");
-
-      ////////////////////////////////////////////////////////////////////////
     } catch (error) {
       console.error(
-        "Error al finalizar (SAP):",
+        "Error al finalizar localmente / encolar SAP:",
         error?.response?.data || error,
       );
 

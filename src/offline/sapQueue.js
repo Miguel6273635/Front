@@ -17,6 +17,7 @@ import NetInfo from "@react-native-community/netinfo";
  * - PDF
  * - GENERIC
  * - PENDIENTE_FIRMA_0300
+ * - PENDIENTE_FIRMA_BULK_0300
  *
  * Ejemplo recomendado:
  *
@@ -62,6 +63,7 @@ function normalizeType(type) {
     "PDF",
     "GENERIC",
     "PENDIENTE_FIRMA_0300",
+    "PENDIENTE_FIRMA_BULK_0300",
   ];
 
   return allowed.includes(t) ? t : "GENERIC";
