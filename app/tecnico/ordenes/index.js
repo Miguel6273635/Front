@@ -1,4 +1,5 @@
 // app/tecnico/ordenes/index.js
+
 import React, {
   useEffect,
   useMemo,
@@ -36,16 +37,15 @@ import {
   buildOfflineWindow,
   filterOrdenesByWindow,
 } from "../../../src/offline/ordenesTecnicoCache";
-
 import {
   setLocalStatusPatch,
   patchCacheOrdenesTecnicoList,
   patchCacheOrdenTecnicoDetail,
 } from "../../../src/offline/ordenesTecnicoLocalPatch";
+
 // Prefetch de detalles (para no entrar a cada orden)
 import { prefetchOrdenesTecnicoDetalles } from "../../../src/offline/prefetchOrdenesTecnico";
 import { runBackgroundSyncNow } from "../../../src/offline/backgroundSync";
-
 import { useAuth } from "../../../src/context/AuthContext";
 import Header from "../../../src/components/Header";
 import api from "../../../src/services/api";
@@ -59,8 +59,10 @@ const ACTIVE_EQUIP_KEY = (userEmail) =>
   `activeEquipment:${String(userEmail || "anon")
     .toLowerCase()
     .trim()}`;
+
 const TBMKY_STATUS_KEY = (orderId) =>
   `tbmky_status_${String(orderId || "").trim()}`;
+
 // ===== Fiori Palette =====
 const FIORI = {
   pageBg: "#F7F7F7",
@@ -95,63 +97,51 @@ const endOfMonth = (d) =>
   new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59, 999);
 
 const startOfYear = (y) => new Date(y, 0, 1, 0, 0, 0, 0);
-
 const endOfYear = (y) => new Date(y, 11, 31, 23, 59, 59, 999);
 
 const parseSapDate = (value) => {
   if (!value) return null;
-
   if (typeof value === "string" && value.startsWith("/Date(")) {
     const ms = parseInt(value.replace("/Date(", "").replace(")/", ""), 10);
     if (!Number.isNaN(ms)) return new Date(ms);
     return null;
   }
-
   const d = new Date(value);
   return isNaN(d.getTime()) ? null : d;
 };
 
 const getUtcYmd = (d) => {
   if (!d) return null;
-
   const yyyy = d.getUTCFullYear();
   const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
   const dd = String(d.getUTCDate()).padStart(2, "0");
-
   return `${yyyy}-${mm}-${dd}`;
 };
 
 const formatLocalYmd = (d) => {
   if (!d) return null;
-
   const yyyy = d.getFullYear();
   const mm = String(d.getMonth() + 1).padStart(2, "0");
   const dd = String(d.getDate()).padStart(2, "0");
-
   return `${yyyy}-${mm}-${dd}`;
 };
 
 const formatDateDMY = (value) => {
   const d = parseSapDate(value);
   if (!d) return "—";
-
   const dd = String(d.getUTCDate()).padStart(2, "0");
   const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
   const yyyy = d.getUTCFullYear();
-
   return `${dd}/${mm}/${yyyy}`;
 };
 
 const isWithin = (date, start, end) => {
   if (!date) return false;
-
   const dStr = getUtcYmd(date);
   const sStr = start ? getUtcYmd(start) : null;
   const eStr = end ? getUtcYmd(end) : null;
-
   if (sStr && dStr < sStr) return false;
   if (eStr && dStr > eStr) return false;
-
   return true;
 };
 
@@ -175,28 +165,21 @@ const MONTHS = [
    ========================= */
 function normalizeCode(code) {
   if (code === null || code === undefined) return "";
-
   const s = String(code).trim();
   if (!s) return "";
-
   const n = parseInt(s, 10);
   if (Number.isNaN(n)) return s;
-
   return String(n).padStart(4, "0");
 }
 
 function extractCodes(raw) {
   if (!raw) return [];
-
   const s = String(raw).trim();
   if (!s) return [];
-
   const matches = s.match(/\d{1,4}/g) || [];
-
   const codes = matches
     .map((x) => normalizeCode(x))
     .filter((x) => /^\d{4}$/.test(x));
-
   return Array.from(new Set(codes));
 }
 
@@ -260,7 +243,6 @@ function resolveUserstatus(
 ) {
   const rawCodes = extractCodes(rawUserstatus);
   const apiCode = normalizeCode(itemFromApi?.estatus_code);
-
   const codes = Array.from(
     new Set([...(rawCodes || []), ...(apiCode ? [apiCode] : [])]),
   );
@@ -305,9 +287,7 @@ function resolveUserstatus(
    ========================= */
 const matchesQuery = (item, q) => {
   if (!q) return true;
-
   const needle = q.toLowerCase().trim();
-
   const fields = [
     item?.Orderid?.toString?.() ?? "",
     item?.order_type ?? "",
@@ -321,7 +301,6 @@ const matchesQuery = (item, q) => {
     .filter(Boolean)
     .join(" ")
     .toLowerCase();
-
   return fields.includes(needle);
 };
 
@@ -333,7 +312,6 @@ function makeQueueKey(userEmail) {
     String(userEmail || "anon")
       .toLowerCase()
       .trim() || "anon";
-
   return `checkin_queue_v1_${safe}`;
 }
 
@@ -342,7 +320,6 @@ async function loadCheckinQueue(userEmail) {
     const key = makeQueueKey(userEmail);
     const raw = await AsyncStorage.getItem(key);
     const arr = raw ? JSON.parse(raw) : [];
-
     return Array.isArray(arr) ? arr : [];
   } catch {
     return [];
@@ -351,7 +328,6 @@ async function loadCheckinQueue(userEmail) {
 
 async function saveCheckinQueue(userEmail, arr) {
   const key = makeQueueKey(userEmail);
-
   await AsyncStorage.setItem(
     key,
     JSON.stringify(Array.isArray(arr) ? arr : []),
@@ -360,71 +336,54 @@ async function saveCheckinQueue(userEmail, arr) {
 
 async function enqueueCheckin(userEmail, item) {
   const q = await loadCheckinQueue(userEmail);
-
-  // evita duplicados por OrderId
   const exists = q.some((x) => String(x?.orderId) === String(item?.orderId));
   if (exists) return q;
-
   const next = [{ ...item }, ...q].slice(0, 50);
-
   await saveCheckinQueue(userEmail, next);
-
   return next;
 }
 
 async function removeFromQueue(userEmail, orderId) {
   const q = await loadCheckinQueue(userEmail);
   const next = q.filter((x) => String(x?.orderId) !== String(orderId));
-
   await saveCheckinQueue(userEmail, next);
-
   return next;
 }
 
 export default function ListaOrdenesTecnico() {
   const { user, ensureValidToken } = useAuth();
-
   const userEmail = user?.correo || user?.email || user?.username || null;
-
   const [allOrdenes, setAllOrdenes] = useState([]);
   const [ordenes, setOrdenes] = useState([]);
-
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-
   const [query, setQuery] = useState("");
   const [dateMode, setDateMode] = useState("day");
-
   const [dayRef, setDayRef] = useState(new Date());
   const [showDayPicker, setShowDayPicker] = useState(false);
-
   const [weekStart, setWeekStart] = useState(null);
   const [weekEnd, setWeekEnd] = useState(null);
   const [showWeekStartPicker, setShowWeekStartPicker] = useState(false);
   const [showWeekEndPicker, setShowWeekEndPicker] = useState(false);
-
   const now = new Date();
-
   const [monthYear, setMonthYear] = useState({
     month: now.getMonth(),
     year: now.getFullYear(),
   });
-
   const [showMonthModal, setShowMonthModal] = useState(false);
-
   const [yearOnly, setYearOnly] = useState(now.getFullYear());
   const [showYearModal, setShowYearModal] = useState(false);
-
+  
   // check-in modal + foto
   const [showCheckinModal, setShowCheckinModal] = useState(false);
   const [checkinOrderId, setCheckinOrderId] = useState(null);
   const [isSending, setIsSending] = useState(false);
   const [checkinPhotoBase64, setCheckinPhotoBase64] = useState(null);
   const [checkinPhotoUri, setCheckinPhotoUri] = useState(null);
-
+  
   // catálogo status
   const [statusCatalogMap, setStatusCatalogMap] = useState({});
-
+  
   // estado red + cola
   const [isOnline, setIsOnline] = useState(true);
   const [checkinQueue, setCheckinQueue] = useState([]);
@@ -432,11 +391,9 @@ export default function ListaOrdenesTecnico() {
 
   const pendingSet = useMemo(() => {
     const s = new Set();
-
     (checkinQueue || []).forEach((x) => {
       if (x?.orderId) s.add(String(x.orderId));
     });
-
     return s;
   }, [checkinQueue]);
 
@@ -445,32 +402,25 @@ export default function ListaOrdenesTecnico() {
       const s = atStartOfDay(dayRef);
       return { start: s, end: s };
     }
-
     if (dateMode === "weekRange") {
       return {
         start: weekStart ? atStartOfDay(weekStart) : atStartOfDay(new Date()),
         end: weekEnd ? atEndOfDay(weekEnd) : atEndOfDay(new Date()),
       };
     }
-
     if (dateMode === "month") {
       const ref = new Date(monthYear.year, monthYear.month, 1);
       return { start: startOfMonth(ref), end: endOfMonth(ref) };
     }
-
     if (dateMode === "year") {
       return { start: startOfYear(yearOnly), end: endOfYear(yearOnly) };
     }
-
-    // "all" = últimos 90 días
     const e = new Date();
     const s = new Date();
     s.setDate(s.getDate() - 90);
-
     return { start: atStartOfDay(s), end: atEndOfDay(e) };
   }, [dateMode, dayRef, weekStart, weekEnd, monthYear, yearOnly]);
 
-  // define el rango REAL que le vas a pedir a SAP según el filtro
   const getSapRequestRange = useCallback(() => {
     if (
       dateMode === "all" ||
@@ -480,7 +430,6 @@ export default function ListaOrdenesTecnico() {
     ) {
       const s = atStartOfDay(start);
       const e = atEndOfDay(end);
-
       return {
         startDate: s,
         endDate: e,
@@ -488,11 +437,9 @@ export default function ListaOrdenesTecnico() {
         endStr: formatLocalYmd(e),
       };
     }
-
     if (dateMode === "day") {
       const s = atStartOfDay(dayRef);
       const e = atEndOfDay(dayRef);
-
       return {
         startDate: s,
         endDate: e,
@@ -500,12 +447,10 @@ export default function ListaOrdenesTecnico() {
         endStr: formatLocalYmd(e),
       };
     }
-
     const e = atEndOfDay(new Date());
     const s = new Date();
     s.setDate(s.getDate() - 90);
     const ss = atStartOfDay(s);
-
     return {
       startDate: ss,
       endDate: e,
@@ -513,48 +458,36 @@ export default function ListaOrdenesTecnico() {
       endStr: formatLocalYmd(e),
     };
   }, [dateMode, start, end, dayRef]);
+
   const applyTbmkyOfflineStatuses = useCallback(async (data = []) => {
     try {
       const arr = Array.isArray(data) ? data : [];
-
       const keys = arr
         .map((x) => x?.Orderid)
         .filter(Boolean)
         .map((id) => TBMKY_STATUS_KEY(id));
-
       if (!keys.length) return arr;
-
       const pairs = await AsyncStorage.multiGet(keys);
-
       const statusByOrder = {};
-
       pairs.forEach(([key, value]) => {
         if (!value) return;
-
         const orderId = key.replace("tbmky_status_", "");
         statusByOrder[String(orderId)] = String(value).trim();
       });
-
       return arr.map((x) => {
         const orderId = String(x?.Orderid || "");
         const status = statusByOrder[orderId];
-
         if (!status) return x;
-
         const currentStatus = normalizeCode(
           x?.estatus_code ||
-            x?.userstatus ||
-            x?.UserStatus ||
-            x?.UserStText ||
-            "",
+          x?.userstatus ||
+          x?.UserStatus ||
+          x?.UserStText ||
+          "",
         );
-
-        // Si la orden ya avanzó a 0400, 0300 o 0600,
-        // NO permitas que tbmky_status_ la regrese a 0200.
         if (["0400", "0300", "0600"].includes(currentStatus)) {
           return x;
         }
-
         return {
           ...x,
           estatus_code: status,
@@ -569,22 +502,19 @@ export default function ListaOrdenesTecnico() {
       return data;
     }
   }, []);
+
   const fetchStatusCatalog = async () => {
     try {
       const res = await api.get(
         "/api/odata/ZSD_CATALOGOS_SRV/StatusWorkOrderSet?$filter=Stsma%20eq%20%27CS000001%27&$format=json",
       );
-
       const results = res?.data?.d?.results || [];
       const map = {};
-
       results.forEach((r) => {
         const k = normalizeCode(r?.Status1);
         const v = String(r?.Status2 || "").trim();
-
         if (k) map[k] = v;
       });
-
       setStatusCatalogMap(map);
     } catch (e) {
       console.log(
@@ -604,44 +534,30 @@ export default function ListaOrdenesTecnico() {
     refreshQueue();
   }, [refreshQueue]);
 
-  // escuchar red
   useEffect(() => {
     const unsub = NetInfo.addEventListener((state) => {
       const onlineNow = !!(
         state?.isConnected && state?.isInternetReachable !== false
       );
-
       setIsOnline(onlineNow);
     });
-
     return () => unsub();
   }, []);
 
-  /**
-   * REGLA CLAVE:
-   * - Día normal: usa cache/offline para que la pantalla cargue rápido.
-   * - Día + Recargar: consulta SAP y guarda el resultado en cache.
-   * - Todas / Semana / Mes / Año: consulta SAP por rango real.
-   * - Offline: siempre usa la cache guardada en el dispositivo.
-   */
   const mergeOrdenesForCache = useCallback((prev = [], incoming = []) => {
     const map = new Map();
-
     (Array.isArray(prev) ? prev : []).forEach((item) => {
       const id = String(item?.Orderid || item?.OrderId || "").trim();
       if (id) map.set(id, item);
     });
-
     (Array.isArray(incoming) ? incoming : []).forEach((item) => {
       const id = String(item?.Orderid || item?.OrderId || "").trim();
       if (!id) return;
-
       map.set(id, {
         ...(map.get(id) || {}),
         ...item,
       });
     });
-
     return Array.from(map.values());
   }, []);
 
@@ -652,7 +568,6 @@ export default function ListaOrdenesTecnico() {
         else setLoading(true);
 
         const cached = await loadOrdenesTecnicoList(userEmail);
-
         if (cached?.data?.length) {
           const patchedData = await applyTbmkyOfflineStatuses(cached.data);
           setAllOrdenes(patchedData);
@@ -664,7 +579,6 @@ export default function ListaOrdenesTecnico() {
         const onlineNow = !!(
           net?.isConnected && net?.isInternetReachable !== false
         );
-
         setIsOnline(onlineNow);
 
         if (!onlineNow) {
@@ -674,17 +588,9 @@ export default function ListaOrdenesTecnico() {
               "No hay internet y todavía no hay órdenes guardadas en el dispositivo.",
             );
           }
-
           return;
         }
 
-        /*
-          IMPORTANTE:
-          - Día normal: usa cache y background para no hacer pesada la pantalla.
-          - Día + botón Recargar: consulta SAP directo con forceSap.
-          - Todas/Mes/Año/Semana: consulta SAP directo por rango.
-          - Offline: usa cache guardada.
-        */
         const debeConsultarSapPorFiltro =
           forceSap ||
           dateMode === "all" ||
@@ -698,21 +604,17 @@ export default function ListaOrdenesTecnico() {
           })
             .then(async (r) => {
               console.log("[ORDENES] Sync segundo plano finalizada:", r);
-
               const updated = await loadOrdenesTecnicoList(userEmail);
-
               if (updated?.data?.length) {
                 const patchedUpdated = await applyTbmkyOfflineStatuses(
                   updated.data,
                 );
-
                 setAllOrdenes(patchedUpdated);
               }
             })
             .catch((e) => {
               console.log("[ORDENES] Sync segundo plano error:", e?.message || e);
             });
-
           return;
         }
 
@@ -720,7 +622,6 @@ export default function ListaOrdenesTecnico() {
         if (!okToken) return;
 
         const req = getSapRequestRange();
-
         console.log("[ORDENES][FILTRO] Consultando SAP por rango:", {
           dateMode,
           forceSap,
@@ -741,31 +642,21 @@ export default function ListaOrdenesTecnico() {
 
         const res = await api.get(`/api/ordenes/sap/list?${params.toString()}`);
         const data = Array.isArray(res.data) ? res.data : [];
-
         const patchedSapData = await applyTbmkyOfflineStatuses(data);
 
-        /*
-          Lo que llega de SAP también se guarda en cache.
-          Así, si sales y vuelves a entrar al filtro Día, ya no necesitas
-          presionar Recargar otra vez para ver el último estatus actualizado.
-        */
         try {
           const offlineWindow = buildOfflineWindow(new Date());
           const cachedPrev = await loadOrdenesTecnicoList(userEmail);
-
           const merged = mergeOrdenesForCache(
             cachedPrev?.data || [],
             patchedSapData,
           );
-
           const windowData = filterOrdenesByWindow(
             merged,
             offlineWindow.start,
             offlineWindow.end,
           );
-
           await saveOrdenesTecnicoList(userEmail, windowData, offlineWindow);
-
           console.log("[ORDENES][CACHE] SAP guardado en cache:", {
             recibidasSap: patchedSapData.length,
             guardadasCache: windowData.length,
@@ -781,10 +672,6 @@ export default function ListaOrdenesTecnico() {
 
         setAllOrdenes(patchedSapData);
 
-        /*
-          Después de traer SAP directo, también dejamos background corriendo
-          para actualizar pendientes, detalles y catálogos sin bloquear.
-        */
         runBackgroundSyncNow({
           source: forceSap
             ? `tecnico_ordenes_recargar_${dateMode}`
@@ -797,9 +684,7 @@ export default function ListaOrdenesTecnico() {
           "Error al cargar órdenes:",
           error?.response?.data || error?.message || error,
         );
-
         const cached = await loadOrdenesTecnicoList(userEmail);
-
         if (cached?.data?.length) {
           const patchedData = await applyTbmkyOfflineStatuses(cached.data);
           setAllOrdenes(patchedData);
@@ -824,16 +709,12 @@ export default function ListaOrdenesTecnico() {
     ],
   );
 
-  // catálogo una vez
   useEffect(() => {
     fetchStatusCatalog();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // órdenes cada vez que cambie filtro
   useEffect(() => {
     fetchOrdenes();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fetchOrdenes]);
 
   useFocusEffect(
@@ -842,35 +723,25 @@ export default function ListaOrdenesTecnico() {
     }, [fetchOrdenes]),
   );
 
-  // filtrar en memoria
   useEffect(() => {
     const filtered = (allOrdenes || []).filter((item) => {
       const okQuery = matchesQuery(item, query);
       if (!okQuery) return false;
-
       const sd = parseSapDate(item?.start_date);
       if (!sd) return false;
-
       return isWithin(sd, start, end);
     });
-
     setOrdenes(filtered);
   }, [allOrdenes, query, start, end]);
 
-  // ===========================
-  // GUARDAR EQUIPO ACTIVO
-  // ===========================
   const saveActiveEquipmentFromItem = useCallback(
     async (item) => {
       try {
         const correo = userEmail || "";
         if (!correo) return;
-
         const equipment = String(item?.equipment || "").trim();
         if (!equipment) return;
-
         await AsyncStorage.setItem(ACTIVE_EQUIP_KEY(correo), equipment);
-
         console.log("[ORDENES] active equipment saved:", equipment);
       } catch (e) {
         console.log("[ORDENES] saveActiveEquipment error:", e?.message || e);
@@ -881,12 +752,10 @@ export default function ListaOrdenesTecnico() {
 
   const irADetalles = async (itemOrOrderId) => {
     let orderId = itemOrOrderId;
-
     if (typeof itemOrOrderId === "object" && itemOrOrderId) {
       await saveActiveEquipmentFromItem(itemOrOrderId);
       orderId = itemOrOrderId?.Orderid;
     }
-
     const id = String(orderId);
     router.push(`/tecnico/ordenes/${id}`);
   };
@@ -898,7 +767,6 @@ export default function ListaOrdenesTecnico() {
 
   const irACartaNoMantenimiento = (orderId) => {
     const id = String(orderId);
-
     router.push({
       pathname: "/tecnico/ordenes/[orderid]/carta-no-mantenimiento",
       params: { orderid: id },
@@ -907,54 +775,44 @@ export default function ListaOrdenesTecnico() {
 
   const abrirModalCheckin = (item, orderId) => {
     if (item) saveActiveEquipmentFromItem(item);
-
     setCheckinOrderId(orderId);
     setCheckinPhotoBase64(null);
     setCheckinPhotoUri(null);
     setShowCheckinModal(true);
   };
 
-  // cámara -> base64
   const takeCheckinPhoto = async () => {
     try {
       const perm = await ImagePicker.requestCameraPermissionsAsync();
-
       if (!perm.granted) {
         Alert.alert(
           "Permiso requerido",
-          "Necesitamos permiso de cámara para tomar la evidencia.",
+          "Necesitamos permiso de cámara para tomar la evidencia."
         );
         return;
       }
-
       const result = await ImagePicker.launchCameraAsync({
-        quality: 0.7,
+        quality: 0.6,
         base64: false,
         allowsEditing: false,
       });
-
       if (result.canceled) return;
-
       const asset = result.assets?.[0];
-
       if (!asset?.uri) {
         Alert.alert("Error", "No se pudo obtener la foto.");
         return;
       }
 
-      const MAX_BASE64_LENGTH = 4_000_000;
-
+      const MAX_BASE64_LENGTH = 2_500_000;
       const opcionesCompresion = [
-        { width: 1280, compress: 0.7 },
-        { width: 1180, compress: 0.65 },
-        { width: 1080, compress: 0.6 },
-        { width: 960, compress: 0.55 },
-        { width: 850, compress: 0.5 },
-        { width: 720, compress: 0.45 },
+        { width: 1280, compress: 0.65 },
+        { width: 1080, compress: 0.55 },
+        { width: 900, compress: 0.48 },
+        { width: 720, compress: 0.4 },
+        { width: 640, compress: 0.35 },
+        { width: 540, compress: 0.32 },
       ];
-
       let manipulated = null;
-
       for (const opcion of opcionesCompresion) {
         manipulated = await ImageManipulator.manipulateAsync(
           asset.uri,
@@ -963,40 +821,41 @@ export default function ListaOrdenesTecnico() {
             compress: opcion.compress,
             format: ImageManipulator.SaveFormat.JPEG,
             base64: true,
-          },
+          }
         );
-
+        const base64Length = manipulated?.base64?.length || 0;
+        const aproximadoMB = (base64Length / 1024 / 1024).toFixed(2);
         console.log("[CHECKIN][COMPRESION]", {
           width: opcion.width,
           compress: opcion.compress,
-          base64Length: manipulated.base64?.length,
+          base64Length,
+          aproximadoMB,
         });
-
-        if (manipulated.base64?.length <= MAX_BASE64_LENGTH) {
+        if (manipulated?.base64 && base64Length <= MAX_BASE64_LENGTH) {
           break;
         }
       }
-
       if (!manipulated?.base64) {
         Alert.alert("Error", "No se pudo convertir la imagen.");
         return;
       }
-
       if (manipulated.base64.length > MAX_BASE64_LENGTH) {
         Alert.alert(
           "Foto muy pesada",
-          "No se pudo reducir a menos de 3 MB. Intenta tomar otra foto.",
+          "No se pudo reducir la imagen. Intenta tomar otra foto con mejor iluminación o un poco más lejos."
         );
         return;
       }
-
       setCheckinPhotoUri(manipulated.uri);
       setCheckinPhotoBase64(manipulated.base64);
-
-      console.log("[CHECKIN] FINAL base64 length:", manipulated.base64.length);
+      console.log("[CHECKIN] FOTO FINAL:", {
+        base64Length: manipulated.base64.length,
+        aproximadoMB: (manipulated.base64.length / 1024 / 1024).toFixed(2),
+        uri: manipulated.uri,
+      });
     } catch (e) {
       console.log("takeCheckinPhoto ERROR:", e);
-      Alert.alert("Error", "No se pudo abrir la cámara.");
+      Alert.alert("Error", "No se pudo abrir la cámara o comprimir la imagen.");
     }
   };
 
@@ -1013,7 +872,6 @@ export default function ListaOrdenesTecnico() {
       ],
       Return: [],
     };
-
     await api.post(
       `/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet?sap-client=400&sap-language=ES`,
       payload,
@@ -1021,84 +879,35 @@ export default function ListaOrdenesTecnico() {
         headers: { "Content-Type": "application/json" },
       },
     );
-  }; /**
-   * Cambio realizado por: Miguel Ángel Hernández Álvarez
-   * Fecha de modificación: 08/06/2026
-   *
-   * Motivo del cambio:
-   * Se modificó la estructura del JSON para enviar el cambio de estatus
-   * de las órdenes a SAP usando el nuevo servicio WorkOrderBulkSet.
-   *
-   * Antes se enviaba la información de una orden de forma individual.
-   * Ahora se manda dentro de una estructura tipo bulk:
-   *
-   * {
-   *   BulkId: "PAQUETE_001",
-   *   WorkOrderSet: [
-   *     {
-   *       OrderId: "...",
-   *       WorkOrderHeader: { ... },
-   *       WorkOrderUserStatusSet: [ ... ]
-   *     }
-   *   ]
-   * }
-   *
-   * Esto permite que el backend/SAP reciba la información con la nueva
-   * estructura requerida para procesar una o varias órdenes en un solo paquete.
-   */
+  };
+
   const postChangeStatusToSap = async (orderId, statusCode = "0100") => {
-    // Limpia el número de orden para evitar espacios vacíos o valores nulos.
     const cleanOrderId = String(orderId || "").trim();
-
-    // Normaliza el estatus a formato SAP de 4 dígitos.
-    // Ejemplo: "100" -> "0100"
     const finalStatus = normalizeCode(statusCode) || "0100";
-
-    // Nueva estructura del JSON requerida por SAP para WorkOrderBulkSet.
     const payload = {
-      // Identificador del paquete que agrupa las órdenes enviadas.
       BulkId: "PAQUETE_001",
-
-      // Lista de órdenes que se enviarán a SAP.
       WorkOrderSet: [
         {
-          // Número de orden principal.
           OrderId: cleanOrderId,
-
-          // Cabecera de la orden.
           WorkOrderHeader: {
             Orderid: cleanOrderId,
           },
-
-          // Lista de estatus que se aplicarán a la orden.
           WorkOrderUserStatusSet: [
             {
-              // Estatus final que se mandará a SAP.
               UserStText: finalStatus,
-
-              // Idioma requerido por SAP.
               Langu: "ES",
-
-              // Campo para indicar si el estatus queda inactivo.
-              // Vacío significa que el estatus queda activo.
               Inactive: "",
             },
           ],
-
-          // Estructura de retorno para SAP.
           Return: [],
         },
       ],
     };
-
-    // Log para validar en consola qué orden, estatus y JSON se está enviando.
     console.log("[CHECKIN][STATUS][BULK][SAP]", {
       orderId: cleanOrderId,
       finalStatus,
       payload,
     });
-
-    // Envío del JSON al nuevo endpoint BulkSet.
     await api.post(
       `/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderBulkSet?sap-client=400&sap-language=ES`,
       payload,
@@ -1109,14 +918,13 @@ export default function ListaOrdenesTecnico() {
       },
     );
   };
+
   const applyLocalOfflineStatus = async (orderId, statusCode = "0100") => {
     const finalStatus = normalizeCode(statusCode) || "0100";
-
     try {
       await setLocalStatusPatch(userEmail, orderId, finalStatus);
       await patchCacheOrdenesTecnicoList(userEmail, orderId, finalStatus);
       await patchCacheOrdenTecnicoDetail(orderId, finalStatus);
-
       setAllOrdenes((prev) =>
         (prev || []).map((x) =>
           String(x?.Orderid) === String(orderId)
@@ -1131,7 +939,6 @@ export default function ListaOrdenesTecnico() {
             : x,
         ),
       );
-
       console.log("[CHECKIN][STATUS][LOCAL]", {
         orderId,
         finalStatus,
@@ -1141,48 +948,35 @@ export default function ListaOrdenesTecnico() {
     }
   };
 
-  // Sync cola a SAP (foto + estatus)
   const syncCheckinQueue = useCallback(async () => {
     if (!userEmail) return;
     if (syncingRef.current) return;
-
     const net = await NetInfo.fetch();
-
     const online = !!(net?.isConnected && net?.isInternetReachable !== false);
-
     setIsOnline(online);
-
     if (!online) return;
-
     syncingRef.current = true;
-
     try {
       const q = await loadCheckinQueue(userEmail);
       if (!q.length) return;
-
       const ok = await ensureValidToken();
       if (!ok) return;
-
       const ordered = [...q].sort(
         (a, b) => (a?.createdAt || 0) - (b?.createdAt || 0),
       );
-
       for (const item of ordered) {
         const orderId = String(item?.orderId || "").trim();
         const b64 = String(item?.photoBase64 || "").trim();
-
         if (!orderId || !b64) {
           await removeFromQueue(userEmail, orderId);
           continue;
         }
-
         try {
           console.log("[CHECKIN][SYNC] Enviando:", {
             orderId,
             b64len: b64.length,
           });
           const statusToSend = normalizeCode(item?.statusCode) || "0100";
-
           await postCheckinEvidence(orderId, b64);
           await postChangeStatusToSap(orderId, statusToSend);
           await removeFromQueue(userEmail, orderId);
@@ -1195,17 +989,14 @@ export default function ListaOrdenesTecnico() {
           break;
         }
       }
-
       const q2 = await loadCheckinQueue(userEmail);
       setCheckinQueue(q2);
-
       fetchOrdenes({ isRefresh: true });
     } finally {
       syncingRef.current = false;
     }
   }, [ensureValidToken, fetchOrdenes, userEmail]);
 
-  // Auto-sync cuando regresa internet y hay cola
   useEffect(() => {
     if (isOnline && checkinQueue.length > 0) {
       syncCheckinQueue().catch(() => {});
@@ -1217,12 +1008,10 @@ export default function ListaOrdenesTecnico() {
       Alert.alert("Error", "No hay orden seleccionada.");
       return;
     }
-
     if (!checkinPhotoBase64) {
       Alert.alert("Falta evidencia", "Primero toma una foto.");
       return;
     }
-
     if (!userEmail) {
       Alert.alert(
         "Sesión no válida",
@@ -1230,36 +1019,14 @@ export default function ListaOrdenesTecnico() {
       );
       return;
     }
-
     const orderId = String(checkinOrderId).trim();
-
-    /*
-      Cambio realizado:
-      El check-in ya no espera el POST de SAP.
-
-      Flujo nuevo:
-      1. Guarda localmente el estatus.
-      2. Guarda la foto Base64 en la cola local.
-      3. Cierra el modal para que el técnico continúe.
-      4. Intenta sincronizar en segundo plano.
-
-      IMPORTANTE:
-      Actualmente se conserva el estatus "0100" porque así estaba tu código.
-      Si la regla correcta del check-in es mandar "0200" EN PROCESO,
-      cambia CHECKIN_STATUS a "0200".
-    */
     const CHECKIN_STATUS = "0100";
-
     try {
       setIsSending(true);
-
       const net = await NetInfo.fetch();
       const online = !!(net?.isConnected && net?.isInternetReachable !== false);
-
       setIsOnline(online);
-
       await applyLocalOfflineStatus(orderId, CHECKIN_STATUS);
-
       const nextQueue = await enqueueCheckin(userEmail, {
         orderId,
         photoBase64: String(checkinPhotoBase64).trim(),
@@ -1267,31 +1034,17 @@ export default function ListaOrdenesTecnico() {
         lastValidStatus: CHECKIN_STATUS,
         createdAt: Date.now(),
       });
-
       setCheckinQueue(nextQueue);
-
       setShowCheckinModal(false);
       setCheckinPhotoBase64(null);
       setCheckinPhotoUri(null);
 
-      /*
-        Aquí se intenta mandar el POST en segundo plano.
-        No usamos await para que la pantalla no se quede esperando SAP.
-
-        Dentro de syncCheckinQueue se mandan estos POST:
-        1. postCheckinEvidence(orderId, b64)
-        2. postChangeStatusToSap(orderId, statusToSend)
-
-        Si no hay internet o SAP falla, el registro queda en la cola
-        y se vuelve a intentar cuando regrese la conexión.
-      */
       syncCheckinQueue().catch((e) => {
         console.log(
           "[CHECKIN][BACKGROUND] No se pudo sincronizar ahora:",
           e?.response?.data || e?.message || e,
         );
       });
-
       Alert.alert(
         online ? "Check-in guardado" : "Check-in offline",
         online
@@ -1303,7 +1056,6 @@ export default function ListaOrdenesTecnico() {
         "enviarCheckinCompletoASap ERROR:",
         e?.response?.data || e?.message || e,
       );
-
       Alert.alert(
         "Error",
         "No se pudo guardar el check-in en el dispositivo. Intenta nuevamente.",
@@ -1334,11 +1086,9 @@ export default function ListaOrdenesTecnico() {
     );
 
     const isPendingOffline = pendingSet.has(String(item?.Orderid));
-
     const tbmYaProceso = stBase.code === "0200";
     const ordenYaAvanzo = ["0400", "0300", "0600"].includes(stBase.code);
 
-    // ✅ No permitas que un pendiente offline viejo regrese visualmente la orden a 0100
     const st =
       isPendingOffline && !tbmYaProceso && !ordenYaAvanzo
         ? {
@@ -1361,49 +1111,41 @@ export default function ListaOrdenesTecnico() {
       <Pressable
         style={[
           styles.card,
-          { borderLeftWidth: 4, borderLeftColor: st.color },
+          { borderLeftColor: st.color },
           st.type === "no_mantto" && styles.cardNoMant,
           st.type === "final" && styles.cardFinished,
         ]}
         onPress={() => irADetalles(item)}
       >
-        <View style={styles.cardContent}>
-          <View style={[styles.statusDot, { backgroundColor: st.color }]} />
-
-          <View style={{ flex: 1 }}>
-            <Text style={styles.title}>
-              #{item.Orderid} - {item.order_type}
-            </Text>
-
-            <Text style={styles.label}>Equipo: {item.equipment}</Text>
-            <Text style={styles.label}>Inicio: {startLabel}</Text>
-            <Text style={styles.label}>Fin: {finishLabel}</Text>
-
-            <Text style={styles.label}>Estatus: {st.label}</Text>
+        {/* ROW 1: Título y Badge inline para ahorrar espacio */}
+        <View style={styles.cardTopRow}>
+          <Text style={styles.cardTitle} numberOfLines={1}>
+            #{item.Orderid} <Text style={styles.cardSubtitle}>• {item.order_type}</Text>
+          </Text>
+          <View style={[styles.badge, { backgroundColor: st.color + "1A" }]}>
+            <View style={[styles.statusDot, { backgroundColor: st.color }]} />
+            <Text style={[styles.badgeText, { color: st.color }]}>{st.label}</Text>
           </View>
         </View>
 
-        <View
-          pointerEvents="box-none"
-          style={{
-            flexDirection: "row",
-            gap: 10,
-            justifyContent: "flex-end",
-            marginTop: 12,
-            flexWrap: "wrap",
-          }}
-        >
+        {/* ROW 2: Equipo y Fechas inline en la misma fila */}
+        <View style={styles.cardMiddleRow}>
+          <Text style={styles.infoText} numberOfLines={1}>
+            <Text style={{fontWeight: '700', color: FIORI.ink}}>Eq: </Text> 
+            {item.equipment}
+          </Text>
+          <Text style={styles.infoText}>
+            {startLabel} - {finishLabel}
+          </Text>
+        </View>
+
+        {/* ROW 3: Acciones pequeñas alineadas a la derecha */}
+        <View style={styles.cardBottomRow} pointerEvents="box-none">
           {lockAll ? (
-            <Text
-              style={{
-                color: FIORI.textMuted,
-                fontSize: 12,
-                fontStyle: "italic",
-              }}
-            >
+            <Text style={styles.lockText}>
               {st.type === "no_mantto"
-                ? "Orden Carta No Mantto. Acciones bloqueadas."
-                : "Orden bloqueada por estatus."}
+                ? "Carta No Mantto. Bloqueada."
+                : "Bloqueada por estatus."}
             </Text>
           ) : showCheckinBtn ? (
             <TouchableOpacity
@@ -1429,7 +1171,6 @@ export default function ListaOrdenesTecnico() {
                   TBM/KY
                 </Text>
               </TouchableOpacity>
-
               {showNoMantBtn && (
                 <TouchableOpacity
                   style={[styles.boton, styles.botonSecundario]}
@@ -1440,20 +1181,14 @@ export default function ListaOrdenesTecnico() {
                   }}
                 >
                   <Text style={[styles.botonTexto, { color: FIORI.accent }]}>
-                    Carta No Mantto
+                    No Mantto
                   </Text>
                 </TouchableOpacity>
               )}
             </>
           ) : (
-            <Text
-              style={{
-                color: FIORI.textMuted,
-                fontSize: 12,
-                fontStyle: "italic",
-              }}
-            >
-              Se requiere la firma del cliente para finalizar.
+            <Text style={styles.lockText}>
+              Firma del cliente requerida.
             </Text>
           )}
         </View>
@@ -1463,23 +1198,18 @@ export default function ListaOrdenesTecnico() {
 
   const activeRangeText = useMemo(() => {
     if (dateMode === "all") return "Últimos 90 días";
-
     if (dateMode === "day") {
       return `Día: ${atStartOfDay(dayRef).toLocaleDateString()}`;
     }
-
     if (dateMode === "weekRange") {
       const a = weekStart ? atStartOfDay(weekStart).toLocaleDateString() : "—";
       const b = weekEnd ? atEndOfDay(weekEnd).toLocaleDateString() : "—";
       return `Semana (rango): ${a} → ${b}`;
     }
-
     if (dateMode === "month") {
       return `Mes: ${MONTHS[monthYear.month]} ${monthYear.year}`;
     }
-
     if (dateMode === "year") return `Año: ${yearOnly}`;
-
     return "";
   }, [dateMode, dayRef, weekStart, weekEnd, monthYear, yearOnly]);
 
@@ -1490,9 +1220,7 @@ export default function ListaOrdenesTecnico() {
     to = now.getFullYear() + 2,
   }) => {
     const years = [];
-
     for (let y = to; y >= from; y--) years.push(y);
-
     return (
       <ScrollView style={{ maxHeight: 320 }}>
         {years.map((y) => (
@@ -1521,7 +1249,6 @@ export default function ListaOrdenesTecnico() {
   return (
     <View style={styles.container}>
       <Header title="Órdenes asignadas" />
-
       <View style={styles.filtersWrap}>
         <View style={styles.searchRow}>
           <TextInput
@@ -1533,7 +1260,6 @@ export default function ListaOrdenesTecnico() {
             returnKeyType="search"
           />
         </View>
-
         <View style={styles.chipsRow}>
           <TouchableOpacity
             style={[styles.chip, dateMode === "all" && styles.chipActive]}
@@ -1548,7 +1274,6 @@ export default function ListaOrdenesTecnico() {
               Todas
             </Text>
           </TouchableOpacity>
-
           <TouchableOpacity
             style={[styles.chip, dateMode === "day" && styles.chipActive]}
             onPress={() => {
@@ -1565,7 +1290,6 @@ export default function ListaOrdenesTecnico() {
               Día
             </Text>
           </TouchableOpacity>
-
           <TouchableOpacity
             style={[styles.chip, dateMode === "weekRange" && styles.chipActive]}
             onPress={() => {
@@ -1582,7 +1306,6 @@ export default function ListaOrdenesTecnico() {
               Semana
             </Text>
           </TouchableOpacity>
-
           <TouchableOpacity
             style={[styles.chip, dateMode === "month" && styles.chipActive]}
             onPress={() => {
@@ -1599,7 +1322,6 @@ export default function ListaOrdenesTecnico() {
               Mes
             </Text>
           </TouchableOpacity>
-
           <TouchableOpacity
             style={[styles.chip, dateMode === "year" && styles.chipActive]}
             onPress={() => {
@@ -1616,7 +1338,6 @@ export default function ListaOrdenesTecnico() {
               Año
             </Text>
           </TouchableOpacity>
-
           <TouchableOpacity
             style={styles.clearBtn}
             onPress={clearFilters}
@@ -1624,7 +1345,6 @@ export default function ListaOrdenesTecnico() {
           >
             <Text style={styles.clearBtnText}>Limpiar</Text>
           </TouchableOpacity>
-
           <TouchableOpacity
             style={styles.refreshBtn}
             onPress={() => fetchOrdenes({ isRefresh: true, forceSap: true })}
@@ -1632,7 +1352,6 @@ export default function ListaOrdenesTecnico() {
           >
             <Text style={styles.refreshBtnText}>Recargar</Text>
           </TouchableOpacity>
-
           <TouchableOpacity
             style={[
               styles.syncBtn,
@@ -1651,11 +1370,9 @@ export default function ListaOrdenesTecnico() {
             </Text>
           </TouchableOpacity>
         </View>
-
         <Text style={styles.activeRangeText}>
           {activeRangeText} · {isOnline ? "Online" : "Offline"}
         </Text>
-
         {showDayPicker && (
           <DateTimePicker
             value={dayRef ?? new Date()}
@@ -1666,13 +1383,11 @@ export default function ListaOrdenesTecnico() {
                 setShowDayPicker(false);
                 if (e.type !== "set") return;
               }
-
               if (date) setDayRef(date);
               if (Platform.OS === "ios") setShowDayPicker(true);
             }}
           />
         )}
-
         {showWeekStartPicker && (
           <DateTimePicker
             value={weekStart ?? new Date()}
@@ -1683,17 +1398,14 @@ export default function ListaOrdenesTecnico() {
                 setShowWeekStartPicker(false);
                 if (e.type !== "set") return;
               }
-
               if (date) {
                 setWeekStart(date);
                 if (Platform.OS !== "ios") setShowWeekEndPicker(true);
               }
-
               if (Platform.OS === "ios") setShowWeekStartPicker(true);
             }}
           />
         )}
-
         {showWeekEndPicker && (
           <DateTimePicker
             value={weekEnd ?? weekStart ?? new Date()}
@@ -1705,13 +1417,11 @@ export default function ListaOrdenesTecnico() {
                 setShowWeekEndPicker(false);
                 if (e.type !== "set") return;
               }
-
               if (date) setWeekEnd(date);
               if (Platform.OS === "ios") setShowWeekEndPicker(true);
             }}
           />
         )}
-
         {dateMode === "weekRange" && (
           <View style={styles.rangeButtonsRow}>
             <TouchableOpacity
@@ -1722,7 +1432,6 @@ export default function ListaOrdenesTecnico() {
                 Inicio: {weekStart ? weekStart.toLocaleDateString() : "—"}
               </Text>
             </TouchableOpacity>
-
             <TouchableOpacity
               style={[styles.smallBtn, { backgroundColor: FIORI.cardSubtle }]}
               onPress={() => setShowWeekEndPicker(true)}
@@ -1734,7 +1443,6 @@ export default function ListaOrdenesTecnico() {
           </View>
         )}
       </View>
-
       {/* Modal Mes */}
       <Modal
         visible={showMonthModal}
@@ -1752,9 +1460,7 @@ export default function ListaOrdenesTecnico() {
               >
                 <Text style={styles.modalHeaderBtn}>{"‹"}</Text>
               </TouchableOpacity>
-
               <Text style={styles.modalHeaderTitle}>{monthYear.year}</Text>
-
               <TouchableOpacity
                 onPress={() =>
                   setMonthYear((s) => ({ ...s, year: s.year + 1 }))
@@ -1763,11 +1469,9 @@ export default function ListaOrdenesTecnico() {
                 <Text style={styles.modalHeaderBtn}>{"›"}</Text>
               </TouchableOpacity>
             </View>
-
             <View style={styles.monthGrid}>
               {MONTHS.map((m, idx) => {
                 const active = idx === monthYear.month && dateMode === "month";
-
                 return (
                   <TouchableOpacity
                     key={m}
@@ -1789,7 +1493,6 @@ export default function ListaOrdenesTecnico() {
                 );
               })}
             </View>
-
             <TouchableOpacity
               style={styles.modalClose}
               onPress={() => setShowMonthModal(false)}
@@ -1799,7 +1502,6 @@ export default function ListaOrdenesTecnico() {
           </View>
         </View>
       </Modal>
-
       {/* Modal Año */}
       <Modal
         visible={showYearModal}
@@ -1812,7 +1514,6 @@ export default function ListaOrdenesTecnico() {
             <Text style={[styles.modalHeaderTitle, { marginBottom: 8 }]}>
               Selecciona un año
             </Text>
-
             <YearPickerContent
               selectedYear={yearOnly}
               onSelect={(y) => {
@@ -1822,7 +1523,6 @@ export default function ListaOrdenesTecnico() {
               from={now.getFullYear() - 10}
               to={now.getFullYear() + 2}
             />
-
             <TouchableOpacity
               style={styles.modalClose}
               onPress={() => setShowYearModal(false)}
@@ -1832,7 +1532,6 @@ export default function ListaOrdenesTecnico() {
           </View>
         </View>
       </Modal>
-
       {/* Modal Check-in */}
       <Modal
         visible={showCheckinModal}
@@ -1845,11 +1544,9 @@ export default function ListaOrdenesTecnico() {
             <Text style={styles.modalHeaderTitle}>
               Check-in #{checkinOrderId ?? ""}
             </Text>
-
             <Text style={{ color: FIORI.textMuted, marginBottom: 10 }}>
               Toma una foto de evidencia:
             </Text>
-
             {checkinPhotoUri ? (
               <View style={{ marginBottom: 12 }}>
                 <Image
@@ -1862,7 +1559,6 @@ export default function ListaOrdenesTecnico() {
                   }}
                   resizeMode="cover"
                 />
-
                 <Text
                   style={{ marginTop: 6, color: FIORI.textMuted, fontSize: 12 }}
                 >
@@ -1884,7 +1580,6 @@ export default function ListaOrdenesTecnico() {
                 </Text>
               </View>
             )}
-
             <View
               style={{
                 flexDirection: "row",
@@ -1900,7 +1595,6 @@ export default function ListaOrdenesTecnico() {
               >
                 <Text style={styles.smallBtnText}>Cancelar</Text>
               </TouchableOpacity>
-
               <TouchableOpacity
                 style={[styles.smallBtn, { backgroundColor: FIORI.cardSubtle }]}
                 onPress={takeCheckinPhoto}
@@ -1908,7 +1602,6 @@ export default function ListaOrdenesTecnico() {
               >
                 <Text style={styles.smallBtnText}>Tomar foto</Text>
               </TouchableOpacity>
-
               <TouchableOpacity
                 style={[styles.smallBtn, { backgroundColor: FIORI.accent }]}
                 onPress={enviarCheckinCompletoASap}
@@ -1922,7 +1615,6 @@ export default function ListaOrdenesTecnico() {
           </View>
         </View>
       </Modal>
-
       {loading && allOrdenes.length === 0 ? (
         <ActivityIndicator
           style={{ marginTop: 40 }}
@@ -1934,7 +1626,7 @@ export default function ListaOrdenesTecnico() {
           data={ordenes}
           keyExtractor={(item, idx) => String(item?.Orderid ?? `row-${idx}`)}
           renderItem={renderItem}
-          contentContainerStyle={{ padding: 20, paddingTop: 6 }}
+          contentContainerStyle={{ padding: 12, paddingTop: 6 }}
           refreshing={refreshing}
           onRefresh={() => fetchOrdenes({ isRefresh: true })}
           ListEmptyComponent={
@@ -1959,7 +1651,6 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: FIORI.pageBg,
   },
-
   filtersWrap: {
     paddingHorizontal: 16,
     paddingTop: 10,
@@ -1980,13 +1671,11 @@ const styles = StyleSheet.create({
       default: {},
     }),
   },
-
   searchRow: {
     flexDirection: "row",
     gap: 8,
     alignItems: "center",
   },
-
   searchInput: {
     flex: 1,
     backgroundColor: FIORI.cardSubtle,
@@ -1998,7 +1687,6 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: FIORI.border,
   },
-
   clearBtn: {
     backgroundColor: FIORI.neutralBtn,
     paddingHorizontal: 12,
@@ -2007,43 +1695,36 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: FIORI.border,
   },
-
   clearBtnText: {
     color: FIORI.ink,
     fontWeight: "600",
   },
-
   refreshBtn: {
     backgroundColor: FIORI.accent,
     paddingHorizontal: 12,
     paddingVertical: 8,
     borderRadius: 10,
   },
-
   refreshBtnText: {
     color: "#fff",
     fontWeight: "700",
   },
-
   syncBtn: {
     backgroundColor: "#111827",
     paddingHorizontal: 12,
     paddingVertical: 8,
     borderRadius: 10,
   },
-
   syncBtnText: {
     color: "#fff",
     fontWeight: "800",
   },
-
   chipsRow: {
     flexDirection: "row",
     flexWrap: "wrap",
     gap: 8,
     marginTop: 10,
   },
-
   chip: {
     borderWidth: 1,
     borderColor: FIORI.border,
@@ -2052,33 +1733,27 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     backgroundColor: FIORI.cardBg,
   },
-
   chipActive: {
     backgroundColor: FIORI.accent,
     borderColor: FIORI.accent,
   },
-
   chipText: {
     color: FIORI.ink,
     fontWeight: "600",
   },
-
   chipTextActive: {
     color: "#fff",
   },
-
   activeRangeText: {
     marginTop: 8,
     color: FIORI.textMuted,
     fontSize: 12,
   },
-
   rangeButtonsRow: {
     flexDirection: "row",
     gap: 10,
     marginTop: 10,
   },
-
   smallBtn: {
     paddingHorizontal: 10,
     paddingVertical: 8,
@@ -2087,80 +1762,112 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: FIORI.border,
   },
-
   smallBtnText: {
     color: FIORI.ink,
     fontWeight: "600",
   },
 
+  // ==========================================
+  // ESTILOS ULTRA-COMPACTOS PARA LA TARJETA
+  // ==========================================
   card: {
     backgroundColor: FIORI.cardBg,
-    borderRadius: 10,
-    padding: 14,
-    marginBottom: 14,
+    borderRadius: 8,
+    padding: 10,
+    marginBottom: 8, // Margen súper pequeño
     borderWidth: 1,
     borderColor: FIORI.border,
+    borderLeftWidth: 4, // Borde izquierdo más fino
     shadowColor: "#000",
-    shadowOpacity: 0.06,
-    shadowOffset: { width: 0, height: 2 },
-    shadowRadius: 6,
-    elevation: 2,
-    position: "relative",
+    shadowOpacity: 0.03, // Sombra sutil para que no recargue
+    shadowOffset: { width: 0, height: 1 },
+    shadowRadius: 2,
+    elevation: 1,
   },
-
   cardNoMant: {
-    backgroundColor: "#F0F0F0",
-    borderColor: "#D0D0D0",
+    backgroundColor: "#F8F9FA",
+    borderColor: "#E2E2E2",
   },
-
   cardFinished: {
-    backgroundColor: "#EAF7EF",
-    borderColor: "#CFE9D8",
+    backgroundColor: "#F2FCF5",
+    borderColor: "#D3EEDC",
   },
-
-  cardContent: {
+  cardTopRow: {
     flexDirection: "row",
+    justifyContent: "space-between",
     alignItems: "center",
   },
-
-  statusDot: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    marginRight: 10,
-  },
-
-  title: {
-    fontWeight: "700",
-    fontSize: 16,
-    color: FIORI.ink,
-    marginBottom: 2,
-  },
-
-  label: {
+  cardTitle: {
+    fontWeight: "800",
     fontSize: 14,
+    color: FIORI.ink,
+    flex: 1,
+    marginRight: 6,
+  },
+  cardSubtitle: {
+    fontWeight: "400",
     color: FIORI.textMuted,
   },
-
-  boton: {
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 8,
-    alignSelf: "flex-end",
+  badge: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+    borderRadius: 6,
   },
-
+  statusDot: {
+    width: 5,
+    height: 5,
+    borderRadius: 2.5,
+    marginRight: 4,
+  },
+  badgeText: {
+    fontSize: 9,
+    fontWeight: "800",
+    textTransform: "uppercase",
+  },
+  cardMiddleRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginTop: 6,
+  },
+  infoText: {
+    fontSize: 12,
+    color: FIORI.textMuted,
+  },
+  cardBottomRow: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    alignItems: "center",
+    marginTop: 8,
+    gap: 6,
+    flexWrap: "wrap",
+  },
+  lockText: {
+    color: FIORI.textMuted,
+    fontSize: 11,
+    fontStyle: "italic",
+    flex: 1,
+    textAlign: "right",
+  },
+  boton: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 6,
+  },
   botonTexto: {
     color: "#fff",
     fontWeight: "700",
-    fontSize: 14,
+    fontSize: 11,
   },
-
   botonSecundario: {
     backgroundColor: "#FFFFFF",
     borderWidth: 1,
     borderColor: FIORI.accent,
   },
 
+  // ESTILOS DE MODALES (Mantenidos igual)
   modalBackdrop: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.4)",
@@ -2168,7 +1875,6 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     padding: 16,
   },
-
   modalCard: {
     width: "100%",
     maxWidth: 420,
@@ -2178,34 +1884,29 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: FIORI.border,
   },
-
   modalHeader: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
     marginBottom: 10,
   },
-
   modalHeaderTitle: {
     fontSize: 18,
     fontWeight: "700",
     color: FIORI.ink,
   },
-
   modalHeaderBtn: {
     fontSize: 22,
     fontWeight: "900",
     color: FIORI.accent,
     paddingHorizontal: 12,
   },
-
   monthGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
     gap: 8,
     justifyContent: "space-between",
   },
-
   monthCell: {
     width: "31.5%",
     backgroundColor: FIORI.cardSubtle,
@@ -2216,21 +1917,17 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: FIORI.border,
   },
-
   monthCellActive: {
     backgroundColor: FIORI.accent,
     borderColor: FIORI.accent,
   },
-
   monthCellText: {
     color: FIORI.ink,
     fontWeight: "600",
   },
-
   monthCellTextActive: {
     color: "#fff",
   },
-
   modalClose: {
     marginTop: 10,
     alignSelf: "flex-end",
@@ -2239,12 +1936,10 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     borderRadius: 8,
   },
-
   modalCloseText: {
     color: "#fff",
     fontWeight: "700",
   },
-
   yearItem: {
     paddingVertical: 10,
     paddingHorizontal: 8,
@@ -2254,18 +1949,15 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: FIORI.border,
   },
-
   yearItemActive: {
     backgroundColor: FIORI.accent,
     borderColor: FIORI.accent,
   },
-
   yearItemText: {
     fontSize: 16,
     color: FIORI.ink,
     fontWeight: "600",
   },
-
   yearItemTextActive: {
     color: "#fff",
   },
