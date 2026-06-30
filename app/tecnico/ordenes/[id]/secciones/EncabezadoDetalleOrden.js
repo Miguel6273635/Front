@@ -25,6 +25,10 @@ import { Ionicons } from "@expo/vector-icons";
  * - Texto "Operaciones asignadas"
  */
 
+function safeStr(value) {
+  return String(value ?? "").trim();
+}
+
 function normalizeCode(code) {
   if (code === null || code === undefined) return "";
 
@@ -39,22 +43,99 @@ function normalizeCode(code) {
 
 function resolveHeaderStatusLabel(code, fallback = "") {
   const c = normalizeCode(code);
+  const fb = safeStr(fallback);
 
-  if (!c) return "Sin empezar";
+  /*
+    Miguel Ángel Hernández Álvarez - 30/06/2026
+
+    Si el padre manda una etiqueta especial como
+    "CHECK-IN PENDIENTE (OFFLINE)", respetamos esa etiqueta.
+    Antes, al recibir código 0100, siempre se mostraba "PENDIENTE"
+    y se perdía el texto especial.
+  */
+  if (fb && fb.toUpperCase().includes("OFFLINE")) return fb;
+
+  if (!c) return fb || "Sin empezar";
   if (c === "0100") return "PENDIENTE";
   if (c === "0200") return "EN PROCESO";
   if (c === "0300") return "FINALIZADA";
   if (c === "0400") return "PENDIENTE DE FIRMA";
   if (c === "0600") return "Carta No Mantto";
 
-  return String(fallback || c || "—").trim();
+  return fb || c || "—";
+}
+
+function resolveOrderId(orden, id) {
+  return (
+    safeStr(orden?.Orderid) ||
+    safeStr(orden?.OrderId) ||
+    safeStr(orden?.orderid) ||
+    safeStr(id)
+  );
+}
+
+function resolveOrderType(orden) {
+  return (
+    safeStr(orden?.order_type) ||
+    safeStr(orden?.OrderType) ||
+    safeStr(orden?.orderType) ||
+    safeStr(orden?.Auart) ||
+    "—"
+  );
+}
+
+function resolveEquipment(orden) {
+  return (
+    safeStr(orden?.equipment) ||
+    safeStr(orden?.Equipment) ||
+    safeStr(orden?.equipo) ||
+    safeStr(orden?.Equnr) ||
+    null
+  );
+}
+
+function resolveClienteNombre(orden) {
+  return (
+    safeStr(orden?.cliente) ||
+    safeStr(orden?.razon_social) ||
+    safeStr(orden?.partner_name) ||
+    safeStr(orden?.Name1) ||
+    [orden?.Name1, orden?.Name2, orden?.Name3, orden?.Name4]
+      .map((x) => safeStr(x))
+      .filter(Boolean)
+      .join(" ")
+      .trim() ||
+    null
+  );
+}
+
+function resolveCorreoCliente(orden) {
+  return (
+    safeStr(orden?.cliente_email) ||
+    safeStr(orden?.email_cliente) ||
+    safeStr(orden?.mail_cliente) ||
+    safeStr(orden?.Mail1) ||
+    safeStr(orden?.Mail2) ||
+    null
+  );
+}
+
+function resolveDireccion(orden, direccionValor) {
+  return (
+    safeStr(direccionValor) ||
+    safeStr(orden?.direccion) ||
+    safeStr(orden?.partner_address) ||
+    safeStr(orden?.address) ||
+    safeStr(orden?.Address) ||
+    null
+  );
 }
 
 const Row = ({ label, value, styles, formatValueForRow }) => {
   const text =
     typeof formatValueForRow === "function"
       ? formatValueForRow(value)
-      : value == null
+      : value == null || value === ""
         ? "—"
         : String(value);
 
@@ -90,7 +171,12 @@ export default function EncabezadoDetalleOrden({
   statusLabel: statusLabelProp,
 }) {
   const statusCode = normalizeCode(
-    statusCodeProp || orden?.estatus_code || orden?.userstatus || "",
+    statusCodeProp ||
+      orden?.estatus_code ||
+      orden?.userstatus ||
+      orden?.UserStatus ||
+      orden?.UserStText ||
+      "",
   );
 
   const statusLabel = resolveHeaderStatusLabel(
@@ -109,21 +195,20 @@ export default function EncabezadoDetalleOrden({
   const isPendingFirma0400 = statusCode === "0400";
   const isFinished0300 = statusCode === "0300" || !!isOrderFinished;
 
-  const correoCliente =
-    String(
-      orden?.cliente_email ||
-        orden?.email_cliente ||
-        orden?.mail_cliente ||
-        orden?.Mail1 ||
-        "",
-    ).trim() || null;
+  const orderId = resolveOrderId(orden, id);
+  const orderType = resolveOrderType(orden);
+  const equipo = resolveEquipment(orden);
+  const clienteNombre = resolveClienteNombre(orden);
+  const correoCliente = resolveCorreoCliente(orden);
+  const direccion = resolveDireccion(orden, direccionValor);
+  const materialsCount = Number(allMaterialsLen || 0);
 
   return (
     <>
       <View style={styles.headerBox}>
         <View style={{ flex: 1 }}>
           <Text style={styles.titulo}>
-            #{orden?.Orderid || id || ""} · {orden?.order_type || "—"}
+            #{orderId || ""} · {orderType}
           </Text>
         </View>
 
@@ -185,6 +270,7 @@ export default function EncabezadoDetalleOrden({
       )}
 
       {!isCartaNoMantto &&
+        !isPendingFirma0400 &&
         statusCode !== "0200" &&
         !checkinDone &&
         !isFinished0300 && (
@@ -232,7 +318,14 @@ export default function EncabezadoDetalleOrden({
 
         <Row
           label="Equipo"
-          value={orden?.equipment}
+          value={equipo}
+          styles={styles}
+          formatValueForRow={formatValueForRow}
+        />
+
+        <Row
+          label="Razón social"
+          value={clienteNombre}
           styles={styles}
           formatValueForRow={formatValueForRow}
         />
@@ -246,14 +339,18 @@ export default function EncabezadoDetalleOrden({
 
         <Row
           label="Dirección"
-          value={direccionValor}
+          value={direccion}
           styles={styles}
           formatValueForRow={formatValueForRow}
         />
 
         <Row
           label="Inicio"
-          value={typeof fmtDMY === "function" ? fmtDMY(orden?.start_date) : "—"}
+          value={
+            typeof fmtDMY === "function"
+              ? fmtDMY(orden?.start_date || orden?.StartDate)
+              : "—"
+          }
           styles={styles}
           formatValueForRow={formatValueForRow}
         />
@@ -261,7 +358,9 @@ export default function EncabezadoDetalleOrden({
         <Row
           label="Fin"
           value={
-            typeof fmtDMY === "function" ? fmtDMY(orden?.finish_date) : "—"
+            typeof fmtDMY === "function"
+              ? fmtDMY(orden?.finish_date || orden?.FinishDate)
+              : "—"
           }
           styles={styles}
           formatValueForRow={formatValueForRow}
@@ -304,7 +403,7 @@ export default function EncabezadoDetalleOrden({
           />
         ) : null}
 
-        {allMaterialsLen > 0 && (
+        {materialsCount > 0 && (
           <TouchableOpacity
             style={styles.btnSeeMaterials}
             onPress={onVerMaterialesOrden}

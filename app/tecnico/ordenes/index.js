@@ -33,6 +33,7 @@ import { useFocusEffect } from "@react-navigation/native";
 import {
   loadOrdenesTecnicoList,
   saveOrdenesTecnicoList,
+  loadOrdenTecnicoDetail,
   saveOrdenTecnicoDetail,
   pruneDetallesNoUsados,
   buildOfflineWindow,
@@ -788,13 +789,28 @@ export default function ListaOrdenesTecnico() {
         await saveActiveEquipmentFromItem(item);
 
         /*
-          Respaldo mínimo para TBM/KY:
-          Si la precarga completa del detalle todavía no terminó,
-          guardamos datos básicos desde la lista de órdenes para que
-          Predicción de riesgos no abra sin Fecha, Equipo, Razón social,
-          Dirección o Tipo de orden.
+          Miguel Ángel Hernández Álvarez - 30/06/2026
+
+          Corrección importante:
+          No debemos reemplazar el detalle completo guardado en cache
+          con el item básico que viene desde la lista de órdenes.
+
+          La lista normalmente NO trae:
+          - razón social completa
+          - dirección completa
+          - partners
+          - operaciones
+          - componentes
+
+          Por eso primero leemos lo que ya existe en cache y hacemos merge.
+          Así conservamos la información precargada desde Preparando información
+          cuando el usuario cambia de pantalla hacia TBM/KY.
         */
+        const cachedDetail = await loadOrdenTecnicoDetail(id);
+        const cachedData = cachedDetail?.data || {};
+
         await saveOrdenTecnicoDetail(id, {
+          ...cachedData,
           ...item,
 
           Orderid: id,
@@ -805,59 +821,83 @@ export default function ListaOrdenesTecnico() {
             item?.StartDate ||
             item?.BasicStartDate ||
             item?.Inicio ||
+            cachedData?.start_date ||
+            cachedData?.StartDate ||
             null,
           StartDate:
             item?.StartDate ||
             item?.start_date ||
             item?.BasicStartDate ||
             item?.Inicio ||
+            cachedData?.StartDate ||
+            cachedData?.start_date ||
             null,
 
           finish_date:
             item?.finish_date ||
             item?.FinishDate ||
             item?.BasicFinDate ||
+            cachedData?.finish_date ||
+            cachedData?.FinishDate ||
             null,
           FinishDate:
             item?.FinishDate ||
             item?.finish_date ||
             item?.BasicFinDate ||
+            cachedData?.FinishDate ||
+            cachedData?.finish_date ||
             null,
 
           order_type:
             item?.order_type ||
             item?.OrderType ||
             item?.orderType ||
+            cachedData?.order_type ||
+            cachedData?.OrderType ||
             "",
           OrderType:
             item?.OrderType ||
             item?.order_type ||
             item?.orderType ||
+            cachedData?.OrderType ||
+            cachedData?.order_type ||
             "",
 
           equipment:
             item?.equipment ||
             item?.Equipment ||
+            cachedData?.equipment ||
+            cachedData?.Equipment ||
             "",
           Equipment:
             item?.Equipment ||
             item?.equipment ||
+            cachedData?.Equipment ||
+            cachedData?.equipment ||
             "",
 
           cliente:
             item?.cliente ||
             item?.partner_name ||
             item?.Name1 ||
+            cachedData?.cliente ||
+            cachedData?.razon_social ||
             "",
           direccion:
             item?.direccion ||
             item?.partner_address ||
             item?.address ||
+            cachedData?.direccion ||
+            cachedData?.partner_address ||
+            cachedData?.address ||
             "",
           partner_address:
             item?.partner_address ||
             item?.direccion ||
             item?.address ||
+            cachedData?.partner_address ||
+            cachedData?.direccion ||
+            cachedData?.address ||
             "",
 
           userstatus:
@@ -865,18 +905,27 @@ export default function ListaOrdenesTecnico() {
             item?.UserStatus ||
             item?.UserStText ||
             item?.estatus_code ||
+            cachedData?.userstatus ||
+            cachedData?.UserStatus ||
+            cachedData?.UserStText ||
             "",
           UserStatus:
             item?.UserStatus ||
             item?.userstatus ||
             item?.UserStText ||
             item?.estatus_code ||
+            cachedData?.UserStatus ||
+            cachedData?.userstatus ||
+            cachedData?.UserStText ||
             "",
           UserStText:
             item?.UserStText ||
             item?.userstatus ||
             item?.UserStatus ||
             item?.estatus_code ||
+            cachedData?.UserStText ||
+            cachedData?.userstatus ||
+            cachedData?.UserStatus ||
             "",
 
           estatus_code:
@@ -884,22 +933,53 @@ export default function ListaOrdenesTecnico() {
             item?.userstatus ||
             item?.UserStatus ||
             item?.UserStText ||
+            cachedData?.estatus_code ||
+            cachedData?.userstatus ||
+            cachedData?.UserStatus ||
             "",
           estatus_label:
             item?.estatus_label ||
             item?.estatus ||
             item?.status ||
+            cachedData?.estatus_label ||
+            cachedData?.estatus ||
+            cachedData?.status ||
             "",
 
-          partners: Array.isArray(item?.partners) ? item.partners : [],
-          operaciones: Array.isArray(item?.operaciones) ? item.operaciones : [],
+          partners:
+            Array.isArray(item?.partners) && item.partners.length
+              ? item.partners
+              : Array.isArray(cachedData?.partners)
+                ? cachedData.partners
+                : [],
+
+          operaciones:
+            Array.isArray(item?.operaciones) && item.operaciones.length
+              ? item.operaciones
+              : Array.isArray(cachedData?.operaciones)
+                ? cachedData.operaciones
+                : [],
+
+          componentes:
+            Array.isArray(item?.componentes) && item.componentes.length
+              ? item.componentes
+              : Array.isArray(cachedData?.componentes)
+                ? cachedData.componentes
+                : [],
         });
 
-        console.log("[ORDENES][TBMKY] Respaldo mínimo guardado:", id);
+        console.log("[ORDENES][TBMKY] Respaldo con merge guardado:", {
+          id,
+          cachedCliente: !!cachedData?.cliente,
+          cachedDireccion: !!cachedData?.direccion,
+          cachedOperaciones: Array.isArray(cachedData?.operaciones)
+            ? cachedData.operaciones.length
+            : 0,
+        });
       }
     } catch (e) {
       console.log(
-        "[ORDENES][TBMKY] No se pudo guardar respaldo mínimo:",
+        "[ORDENES][TBMKY] No se pudo guardar respaldo con merge:",
         e?.message || e,
       );
     }
@@ -1026,32 +1106,38 @@ export default function ListaOrdenesTecnico() {
   const postChangeStatusToSap = async (orderId, statusCode = "0100") => {
     const cleanOrderId = String(orderId || "").trim();
     const finalStatus = normalizeCode(statusCode) || "0100";
+
+    /*
+      Miguel Ángel Hernández Álvarez - 30/06/2026
+
+      Limpieza:
+      Esta función vieja ya no debe usar WorkOrderBulkSet.
+      Se deja con WorkOrderSet single order para evitar confusión
+      si en algún momento vuelve a utilizarse.
+    */
     const payload = {
-      BulkId: "PAQUETE_001",
-      WorkOrderSet: [
+      OrderId: cleanOrderId,
+      WorkOrderHeader: {
+        Orderid: cleanOrderId,
+      },
+      WorkOrderUserStatusSet: [
         {
-          OrderId: cleanOrderId,
-          WorkOrderHeader: {
-            Orderid: cleanOrderId,
-          },
-          WorkOrderUserStatusSet: [
-            {
-              UserStText: finalStatus,
-              Langu: "ES",
-              Inactive: "",
-            },
-          ],
-          Return: [],
+          UserStText: finalStatus,
+          Langu: "ES",
+          Inactive: "",
         },
       ],
+      Return: [],
     };
-    console.log("[CHECKIN][STATUS][BULK][SAP]", {
+
+    console.log("[CHECKIN][STATUS][WORKORDERSET][SAP]", {
       orderId: cleanOrderId,
       finalStatus,
       payload,
     });
+
     await api.post(
-      `/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderBulkSet?sap-client=400&sap-language=ES`,
+      `/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet?sap-client=400&sap-language=ES`,
       payload,
       {
         headers: {

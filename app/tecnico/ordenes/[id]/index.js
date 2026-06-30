@@ -394,35 +394,82 @@ function buildConfirmationPayloadFromSelectedOps({
 function mapDireccionLikeBackend(addr) {
   if (!addr) return { cliente: "", direccion: "" };
 
-  const Name1 = addr.Name1 ?? "";
-  const Name2 = addr.Name2 ?? "";
-  const Street = addr.Street ?? addr.StreetName ?? "";
-  const HouseNum1 = addr.HouseNum1 ?? "";
-  const StrSuppl3 = addr.StrSuppl3 ?? "";
-  const Location = addr.Location ?? "";
-  const City1 = addr.City1 ?? "";
-  const Region = addr.Region ?? "";
-  const PostCode1 = addr.PostCode1 ?? "";
-  const Country = addr.Country ?? "";
+  /*
+    Miguel Ángel Hernández Álvarez - 30/06/2026
 
-  const cliente = [Name1, Name2].filter(Boolean).join(" ").trim();
-  const direccion = [
-    `${Street} ${HouseNum1}`.trim(),
-    StrSuppl3,
-    Location,
-    City1,
-    Region,
-    PostCode1,
-    Country,
-  ]
-    .filter((x) => x && String(x).trim().length > 0)
+    Corrección:
+    SAP no siempre manda razón social/dirección en el segundo nodo.
+    Además puede mandar datos repartidos en Name1..Name4 y StrSuppl1..3.
+    Por eso armamos razón social y dirección con todos los campos posibles.
+  */
+  const cliente = [addr?.Name1, addr?.Name2, addr?.Name3, addr?.Name4]
+    .map((x) => String(x || "").trim())
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+
+  const street = [addr?.Street || addr?.StreetName, addr?.HouseNum1]
+    .map((x) => String(x || "").trim())
+    .filter(Boolean)
+    .join(" ");
+
+  const supl = [addr?.StrSuppl1, addr?.StrSuppl2, addr?.StrSuppl3]
+    .map((x) => String(x || "").trim())
+    .filter(Boolean)
+    .join(" ");
+
+  const loc = [addr?.Location, addr?.City2, addr?.City1]
+    .map((x) => String(x || "").trim())
+    .filter(Boolean)
+    .join(", ");
+
+  const reg = [addr?.Region, addr?.PostCode1, addr?.Country]
+    .map((x) => String(x || "").trim())
+    .filter(Boolean)
+    .join(" ");
+
+  const direccion = [street, supl, loc, reg]
+    .map((x) => String(x || "").trim())
+    .filter(Boolean)
     .join(", ");
 
   return { cliente, direccion };
 }
-function pickSecondAddress(results = []) {
+
+function pickBestAddress(results = []) {
   if (!Array.isArray(results) || results.length === 0) return null;
-  return results.length >= 2 ? results[1] : results[0];
+
+  const clean = results.filter(Boolean);
+
+  if (!clean.length) return null;
+
+  const scoreAddress = (a) => {
+    const nameScore = [
+      a?.Name1,
+      a?.Name2,
+      a?.Name3,
+      a?.Name4,
+    ].filter((x) => String(x || "").trim()).length;
+
+    const dirScore = [
+      a?.Street,
+      a?.StreetName,
+      a?.HouseNum1,
+      a?.StrSuppl1,
+      a?.StrSuppl2,
+      a?.StrSuppl3,
+      a?.Location,
+      a?.City2,
+      a?.City1,
+      a?.Region,
+      a?.PostCode1,
+      a?.Country,
+    ].filter((x) => String(x || "").trim()).length;
+
+    return nameScore * 10 + dirScore;
+  };
+
+  return clean.sort((a, b) => scoreAddress(b) - scoreAddress(a))[0] || null;
 }
 
 function mergeOpsWithLocalState(orderId, ops, state) {
@@ -1402,7 +1449,7 @@ export default function DetalleOrden() {
         );
         const results =
           resAddr?.data?.results || resAddr?.data?.d?.results || [];
-        const chosen = pickSecondAddress(results);
+        const chosen = pickBestAddress(results);
         const mapped = mapDireccionLikeBackend(chosen);
         direccionSap = mapped.direccion || "";
         clienteSap = mapped.cliente || "";
@@ -1472,25 +1519,113 @@ export default function DetalleOrden() {
         );
       }
 
+      const cachedDataForMerge = cached?.data || {};
+
       const data = {
+        /*
+          Miguel Ángel Hernández Álvarez - 30/06/2026
+
+          Corrección:
+          No reemplazamos la información buena del cache con respuestas
+          incompletas del endpoint base de SAP.
+
+          Si la precarga ya guardó razón social, dirección, operaciones,
+          partners o componentes, los conservamos cuando SAP no los mande.
+        */
+        ...cachedDataForMerge,
         ...baseOrden,
-        ShortText: shortTextForCoverage || baseOrden?.ShortText || "",
-        cobertura_tipo: coberturaDetectada || baseOrden?.cobertura_tipo || null,
+
+        Orderid: baseOrden?.Orderid || baseOrden?.OrderId || cachedDataForMerge?.Orderid || orderIdReal,
+        OrderId: baseOrden?.OrderId || baseOrden?.Orderid || cachedDataForMerge?.OrderId || orderIdReal,
+
+        ShortText:
+          shortTextForCoverage ||
+          baseOrden?.ShortText ||
+          cachedDataForMerge?.ShortText ||
+          "",
+
+        cobertura_tipo:
+          coberturaDetectada ||
+          baseOrden?.cobertura_tipo ||
+          cachedDataForMerge?.cobertura_tipo ||
+          null,
+
         direccion:
           direccionSap ||
           baseOrden?.direccion ||
           baseOrden?.address ||
           baseOrden?.partner_address ||
+          cachedDataForMerge?.direccion ||
+          cachedDataForMerge?.address ||
+          cachedDataForMerge?.partner_address ||
           "",
+
+        partner_address:
+          direccionSap ||
+          baseOrden?.partner_address ||
+          baseOrden?.direccion ||
+          baseOrden?.address ||
+          cachedDataForMerge?.partner_address ||
+          cachedDataForMerge?.direccion ||
+          cachedDataForMerge?.address ||
+          "",
+
         cliente:
           clienteSap ||
           baseOrden?.cliente ||
-          `${baseOrden?.Name1 ?? ""} ${baseOrden?.Name2 ?? ""}`.trim(),
-        cliente_email: emailFromPartners || baseOrden?.cliente_email || "",
-        operaciones: opsMerged,
-        cliente_nombre: String(clienteNombre || "").trim(),
-        cliente_cargo: String(clienteCargo || "").trim(),
-        aviso_cliente: String(avisoCliente || "").trim(),
+          baseOrden?.razon_social ||
+          cachedDataForMerge?.cliente ||
+          cachedDataForMerge?.razon_social ||
+          `${baseOrden?.Name1 ?? ""} ${baseOrden?.Name2 ?? ""}`.trim() ||
+          "",
+
+        razon_social:
+          clienteSap ||
+          baseOrden?.razon_social ||
+          baseOrden?.cliente ||
+          cachedDataForMerge?.razon_social ||
+          cachedDataForMerge?.cliente ||
+          "",
+
+        cliente_email:
+          emailFromPartners ||
+          baseOrden?.cliente_email ||
+          cachedDataForMerge?.cliente_email ||
+          "",
+
+        partners:
+          Array.isArray(baseOrden?.partners) && baseOrden.partners.length
+            ? baseOrden.partners
+            : Array.isArray(cachedDataForMerge?.partners)
+              ? cachedDataForMerge.partners
+              : [],
+
+        operaciones:
+          Array.isArray(opsMerged) && opsMerged.length
+            ? opsMerged
+            : Array.isArray(cachedDataForMerge?.operaciones)
+              ? cachedDataForMerge.operaciones
+              : [],
+
+        componentes:
+          Array.isArray(baseOrden?.componentes) && baseOrden.componentes.length
+            ? baseOrden.componentes
+            : Array.isArray(cachedDataForMerge?.componentes)
+              ? cachedDataForMerge.componentes
+              : [],
+
+        cliente_nombre:
+          String(clienteNombre || "").trim() ||
+          cachedDataForMerge?.cliente_nombre ||
+          "",
+        cliente_cargo:
+          String(clienteCargo || "").trim() ||
+          cachedDataForMerge?.cliente_cargo ||
+          "",
+        aviso_cliente:
+          String(avisoCliente || "").trim() ||
+          cachedDataForMerge?.aviso_cliente ||
+          "",
       };
 
       setOrden(data);
@@ -1678,6 +1813,94 @@ export default function DetalleOrden() {
   const COMPONENTS_KEY = (orderId, activity) =>
     `orderComponents:${orderId}:${activity}`;
 
+  function getComponentsFromOrderDetail(orderObj, activity) {
+    const act = String(activity || "").trim();
+
+    if (!act) return [];
+
+    const all = Array.isArray(orderObj?.componentes)
+      ? orderObj.componentes
+      : Array.isArray(orderObj?.components)
+        ? orderObj.components
+        : [];
+
+    return all.filter((c) => {
+      const cAct = String(
+        c?.Activity ||
+          c?.activity ||
+          c?.Vornr ||
+          c?.Operation ||
+          c?.operation ||
+          "",
+      ).trim();
+
+      return cAct === act;
+    });
+  }
+
+  async function mergeComponentsIntoOrderCache(orderId, activity, components = []) {
+    const cleanOrderId = String(orderId || "").trim();
+    const cleanActivity = String(activity || "").trim();
+
+    if (!cleanOrderId || !cleanActivity) return;
+
+    try {
+      const cachedDetail = await loadOrdenTecnicoDetail(cleanOrderId);
+      const base = cachedDetail?.data || orden || {};
+
+      const prevComponents = Array.isArray(base?.componentes)
+        ? base.componentes
+        : [];
+
+      const withoutCurrentActivity = prevComponents.filter((c) => {
+        const cAct = String(
+          c?.Activity ||
+            c?.activity ||
+            c?.Vornr ||
+            c?.Operation ||
+            c?.operation ||
+            "",
+        ).trim();
+
+        return cAct !== cleanActivity;
+      });
+
+      const nextComponents = [
+        ...withoutCurrentActivity,
+        ...(Array.isArray(components) ? components : []),
+      ];
+
+      await safeSaveDetailIfWindow(
+        cleanOrderId,
+        {
+          ...(base || {}),
+          componentes: nextComponents,
+        },
+        {
+          force: true,
+          reason: "componentes_operacion",
+        },
+      );
+
+      setOrden((prev) => ({
+        ...(prev || {}),
+        componentes: nextComponents,
+      }));
+
+      console.log("[DETALLE][COMPONENTES][CACHE] Guardados:", {
+        orderId: cleanOrderId,
+        activity: cleanActivity,
+        count: Array.isArray(components) ? components.length : 0,
+        total: nextComponents.length,
+      });
+    } catch (e) {
+      console.log(
+        "[DETALLE][COMPONENTES][CACHE] No se pudo actualizar detalle:",
+        e?.message || e,
+      );
+    }
+  }
+
   async function saveOfflineComponents(orderId, activity, data) {
     try {
       await AsyncStorage.setItem(
@@ -1724,6 +1947,7 @@ export default function DetalleOrden() {
         setCompList(data);
 
         await saveOfflineComponents(Orderid, Activity, data);
+        await mergeComponentsIntoOrderCache(Orderid, Activity, data);
         return;
       }
 
@@ -1731,6 +1955,14 @@ export default function DetalleOrden() {
 
       if (offlineData.length > 0) {
         setCompList(offlineData);
+        return;
+      }
+
+      const detailData = getComponentsFromOrderDetail(orden, Activity);
+
+      if (detailData.length > 0) {
+        setCompList(detailData);
+        await saveOfflineComponents(Orderid, Activity, detailData);
         return;
       }
 
@@ -1756,10 +1988,22 @@ export default function DetalleOrden() {
           "Se mostraron los materiales guardados offline.",
         );
       } else {
-        Alert.alert(
-          "Materiales",
-          "No se pudieron obtener los materiales de esta operación.",
-        );
+        const detailData = getComponentsFromOrderDetail(orden, Activity);
+
+        if (detailData.length > 0) {
+          setCompList(detailData);
+          await saveOfflineComponents(Orderid, Activity, detailData);
+
+          Alert.alert(
+            "Materiales",
+            "Se mostraron los materiales guardados en el detalle offline.",
+          );
+        } else {
+          Alert.alert(
+            "Materiales",
+            "No se pudieron obtener los materiales de esta operación.",
+          );
+        }
       }
     } finally {
       setLoadingComponents(false);
