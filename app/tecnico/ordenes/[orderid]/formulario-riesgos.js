@@ -49,7 +49,11 @@ import {
   patchCacheOrdenesTecnicoList,
   patchCacheOrdenTecnicoDetail,
 } from "../../../../src/offline/ordenesTecnicoLocalPatch";
-import { loadOrdenTecnicoDetail } from "../../../../src/offline/ordenesTecnicoCache";
+import {
+  loadOrdenTecnicoDetail,
+  loadOrdenesTecnicoList,
+  saveOrdenTecnicoDetail,
+} from "../../../../src/offline/ordenesTecnicoCache";
 
 // ===== Paleta Fiori / Horizon =====
 const FIORI = {
@@ -281,6 +285,154 @@ function normalizeTrabajadoresForState(arr) {
   }
 
   return normalized.slice(0, MAX_AUXILIARES + 1);
+}
+
+
+function normalizeOrderForTbmkyFallback(item = {}, orderId = "") {
+  const id = safeStr(
+    item?.Orderid ||
+      item?.OrderId ||
+      item?.orderid ||
+      item?.order_id ||
+      orderId,
+  );
+
+  return {
+    ...item,
+
+    Orderid: id,
+    OrderId: id,
+
+    start_date:
+      item?.start_date ||
+      item?.StartDate ||
+      item?.BasicStartDate ||
+      item?.Inicio ||
+      null,
+    StartDate:
+      item?.StartDate ||
+      item?.start_date ||
+      item?.BasicStartDate ||
+      item?.Inicio ||
+      null,
+
+    finish_date:
+      item?.finish_date ||
+      item?.FinishDate ||
+      item?.BasicFinDate ||
+      null,
+    FinishDate:
+      item?.FinishDate ||
+      item?.finish_date ||
+      item?.BasicFinDate ||
+      null,
+
+    order_type:
+      item?.order_type ||
+      item?.OrderType ||
+      item?.orderType ||
+      "",
+    OrderType:
+      item?.OrderType ||
+      item?.order_type ||
+      item?.orderType ||
+      "",
+
+    equipment:
+      item?.equipment ||
+      item?.Equipment ||
+      "",
+    Equipment:
+      item?.Equipment ||
+      item?.equipment ||
+      "",
+
+    cliente:
+      item?.cliente ||
+      item?.partner_name ||
+      item?.Name1 ||
+      "",
+    direccion:
+      item?.direccion ||
+      item?.partner_address ||
+      item?.address ||
+      "",
+    partner_address:
+      item?.partner_address ||
+      item?.direccion ||
+      item?.address ||
+      "",
+
+    userstatus:
+      item?.userstatus ||
+      item?.UserStatus ||
+      item?.UserStText ||
+      item?.estatus_code ||
+      "",
+    UserStatus:
+      item?.UserStatus ||
+      item?.userstatus ||
+      item?.UserStText ||
+      item?.estatus_code ||
+      "",
+    UserStText:
+      item?.UserStText ||
+      item?.userstatus ||
+      item?.UserStatus ||
+      item?.estatus_code ||
+      "",
+
+    estatus_code:
+      item?.estatus_code ||
+      item?.userstatus ||
+      item?.UserStatus ||
+      item?.UserStText ||
+      "",
+    estatus_label:
+      item?.estatus_label ||
+      item?.estatus ||
+      item?.status ||
+      "",
+
+    partners: Array.isArray(item?.partners) ? item.partners : [],
+    operaciones: Array.isArray(item?.operaciones) ? item.operaciones : [],
+  };
+}
+
+async function loadTbmkyOfflineOrderFallback(orderId, userEmail) {
+  const cleanId = safeStr(orderId);
+
+  if (!cleanId) return null;
+
+  const cached = await loadOrdenTecnicoDetail(cleanId);
+
+  if (cached?.data?.Orderid) {
+    return cached.data;
+  }
+
+  const listCached = await loadOrdenesTecnicoList(userEmail);
+  const list = Array.isArray(listCached?.data) ? listCached.data : [];
+
+  const fromList = list.find((x) => {
+    const id = safeStr(x?.Orderid || x?.OrderId || x?.orderid || x?.order_id);
+    return id === cleanId;
+  });
+
+  if (!fromList) return null;
+
+  const normalized = normalizeOrderForTbmkyFallback(fromList, cleanId);
+
+  try {
+    await saveOrdenTecnicoDetail(cleanId, normalized);
+    console.log("[TBMKY] Fallback guardado desde lista offline:", cleanId);
+  } catch (e) {
+    console.log(
+      "[TBMKY] No se pudo guardar fallback desde lista:",
+      e?.message || e,
+    );
+  }
+
+  return normalized;
 }
 
 export default function FormularioRiesgosScreen() {
@@ -856,8 +1008,10 @@ export default function FormularioRiesgosScreen() {
           return;
         }
 
-        const cached = await loadOrdenTecnicoDetail(orderid);
-        const cachedData = cached?.data || null;
+        const cachedData = await loadTbmkyOfflineOrderFallback(
+          orderid,
+          userEmail,
+        );
 
         if (alive && cachedData?.Orderid) {
           setOrden(cachedData);
@@ -1153,8 +1307,10 @@ export default function FormularioRiesgosScreen() {
         );
 
         try {
-          const cached = await loadOrdenTecnicoDetail(orderid);
-          const cachedData = cached?.data || null;
+          const cachedData = await loadTbmkyOfflineOrderFallback(
+            orderid,
+            userEmail,
+          );
 
           if (alive && cachedData?.Orderid) {
             setOrden(cachedData);

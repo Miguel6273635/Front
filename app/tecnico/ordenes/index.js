@@ -33,6 +33,7 @@ import { useFocusEffect } from "@react-navigation/native";
 import {
   loadOrdenesTecnicoList,
   saveOrdenesTecnicoList,
+  saveOrdenTecnicoDetail,
   pruneDetallesNoUsados,
   buildOfflineWindow,
   filterOrdenesByWindow,
@@ -760,8 +761,144 @@ export default function ListaOrdenesTecnico() {
     router.push(`/tecnico/ordenes/${id}`);
   };
 
-  const irAFormularioRiesgos = (orderId) => {
-    const id = String(orderId);
+  const irAFormularioRiesgos = async (itemOrOrderId) => {
+    const item =
+      typeof itemOrOrderId === "object" && itemOrOrderId ? itemOrOrderId : null;
+
+    const id = String(
+      item?.Orderid ||
+        item?.OrderId ||
+        item?.orderid ||
+        itemOrOrderId ||
+        "",
+    ).trim();
+
+    if (!id) {
+      Alert.alert("Error", "No se encontró el número de orden.");
+      return;
+    }
+
+    try {
+      if (item) {
+        await saveActiveEquipmentFromItem(item);
+
+        /*
+          Respaldo mínimo para TBM/KY:
+          Si la precarga completa del detalle todavía no terminó,
+          guardamos datos básicos desde la lista de órdenes para que
+          Predicción de riesgos no abra sin Fecha, Equipo, Razón social,
+          Dirección o Tipo de orden.
+        */
+        await saveOrdenTecnicoDetail(id, {
+          ...item,
+
+          Orderid: id,
+          OrderId: id,
+
+          start_date:
+            item?.start_date ||
+            item?.StartDate ||
+            item?.BasicStartDate ||
+            item?.Inicio ||
+            null,
+          StartDate:
+            item?.StartDate ||
+            item?.start_date ||
+            item?.BasicStartDate ||
+            item?.Inicio ||
+            null,
+
+          finish_date:
+            item?.finish_date ||
+            item?.FinishDate ||
+            item?.BasicFinDate ||
+            null,
+          FinishDate:
+            item?.FinishDate ||
+            item?.finish_date ||
+            item?.BasicFinDate ||
+            null,
+
+          order_type:
+            item?.order_type ||
+            item?.OrderType ||
+            item?.orderType ||
+            "",
+          OrderType:
+            item?.OrderType ||
+            item?.order_type ||
+            item?.orderType ||
+            "",
+
+          equipment:
+            item?.equipment ||
+            item?.Equipment ||
+            "",
+          Equipment:
+            item?.Equipment ||
+            item?.equipment ||
+            "",
+
+          cliente:
+            item?.cliente ||
+            item?.partner_name ||
+            item?.Name1 ||
+            "",
+          direccion:
+            item?.direccion ||
+            item?.partner_address ||
+            item?.address ||
+            "",
+          partner_address:
+            item?.partner_address ||
+            item?.direccion ||
+            item?.address ||
+            "",
+
+          userstatus:
+            item?.userstatus ||
+            item?.UserStatus ||
+            item?.UserStText ||
+            item?.estatus_code ||
+            "",
+          UserStatus:
+            item?.UserStatus ||
+            item?.userstatus ||
+            item?.UserStText ||
+            item?.estatus_code ||
+            "",
+          UserStText:
+            item?.UserStText ||
+            item?.userstatus ||
+            item?.UserStatus ||
+            item?.estatus_code ||
+            "",
+
+          estatus_code:
+            item?.estatus_code ||
+            item?.userstatus ||
+            item?.UserStatus ||
+            item?.UserStText ||
+            "",
+          estatus_label:
+            item?.estatus_label ||
+            item?.estatus ||
+            item?.status ||
+            "",
+
+          partners: Array.isArray(item?.partners) ? item.partners : [],
+          operaciones: Array.isArray(item?.operaciones) ? item.operaciones : [],
+        });
+
+        console.log("[ORDENES][TBMKY] Respaldo mínimo guardado:", id);
+      }
+    } catch (e) {
+      console.log(
+        "[ORDENES][TBMKY] No se pudo guardar respaldo mínimo:",
+        e?.message || e,
+      );
+    }
+
     router.push(`/tecnico/ordenes/${id}/formulario-riesgos`);
   };
 
@@ -1163,8 +1300,7 @@ export default function ListaOrdenesTecnico() {
                 style={[styles.boton, { backgroundColor: FIORI.neutralBtn }]}
                 onPress={(e) => {
                   e?.stopPropagation?.();
-                  saveActiveEquipmentFromItem(item);
-                  irAFormularioRiesgos(item.Orderid);
+                  irAFormularioRiesgos(item);
                 }}
               >
                 <Text style={[styles.botonTexto, { color: FIORI.ink }]}>

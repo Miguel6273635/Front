@@ -18,8 +18,10 @@ import { router } from "expo-router";
 
 import Header from "../../../src/components/Header";
 import { useAuth } from "../../../src/context/AuthContext";
+import api from "../../../src/services/api";
 
 import { runBackgroundSyncNow } from "../../../src/offline/backgroundSync";
+import { prefetchOrdenesTecnicoDiaRapido } from "../../../src/offline/prefetchOrdenesTecnico";
 import {
   loadOrdenesTecnicoList,
   getOrdenesTecnicoLastSync,
@@ -76,14 +78,16 @@ const STEPS = [
   },
   {
     key: "components",
-    label: "Precargando componentes",
-    description: "Guardando materiales de actividades y datos auxiliares.",
+    label: "Programando componentes",
+    description:
+      "Los componentes se seguirán cargando en segundo plano sin bloquear la app.",
     percent: 82,
   },
   {
     key: "catalogs",
-    label: "Precargando consumibles",
-    description: "Guardando consumibles por agrupadores.",
+    label: "Programando consumibles",
+    description:
+      "Los consumibles se actualizarán en segundo plano mientras usa la app.",
     percent: 94,
   },
   {
@@ -131,6 +135,8 @@ function formatDateTime(value) {
 }
 
 function getTecnicoPrefetchFromResult(result) {
+  if (result?.mode === "day_fast") return result;
+
   return (
     result?.prefetchResult?.tecnicoPrefetchResult ||
     result?.prefetchResult?.result?.tecnicoPrefetchResult ||
@@ -149,7 +155,7 @@ function getConsumiblesFromResult(result) {
 }
 
 export default function PreparandoTecnicoScreen() {
-  const { user } = useAuth();
+  const { user, ensureValidToken } = useAuth();
 
   const userEmail = useMemo(() => resolveUserEmail(user), [user]);
 
@@ -311,39 +317,32 @@ export default function PreparandoTecnicoScreen() {
       }
 
       setProgress(STEPS[1]);
-      setMessage("Revisando pendientes por enviar a SAP...");
-      await wait(250);
+      setMessage("Revisando pendientes locales por enviar a SAP...");
+      await wait(200);
 
       setProgress(STEPS[2]);
-      setMessage("Precargando órdenes asignadas al técnico...");
-      await wait(250);
+      setMessage("Precargando órdenes del día asignadas al técnico...");
+      await wait(200);
 
       setProgress(STEPS[3]);
       setMessage(
-        "Precargando detalle de órdenes, actividades, operaciones, dirección y cliente...",
+        "Precargando detalle básico y operaciones de las órdenes del día...",
       );
 
       /*
-        runBackgroundSyncNow ejecuta:
-        1. outbox pendiente
-        2. cola SAP
-        3. acciones pendientes del técnico
-        4. prefetchOrdenesTecnico()
-           - lista de órdenes
-           - detalle
-           - operaciones / actividades
-           - dirección
-           - partners / correo
-           - componentes por actividad
-        5. bootstrapPrefetchConsumiblesCatalogo()
-           - consumibles por agrupadores
+        Precarga rápida:
+        - Solo trae órdenes del día.
+        - Guarda detalle básico y operaciones del día.
+        - NO carga componentes.
+        - NO carga consumibles.
+        Lo pesado queda para runBackgroundSyncNow en segundo plano.
       */
-      const result = await runBackgroundSyncNow({
-        source: "tecnico_preload_screen",
-        force: true,
+      const result = await prefetchOrdenesTecnicoDiaRapido(userEmail, {
+        apiInstance: api,
+        ensureValidToken,
       });
 
-      console.log("[PRELOAD TECNICO] Resultado:", result);
+      console.log("[PRELOAD TECNICO] Resultado precarga rápida:", result);
 
       if (!mountedRef.current) return;
 
@@ -351,34 +350,38 @@ export default function PreparandoTecnicoScreen() {
 
       const tecnicoPrefetch = getTecnicoPrefetchFromResult(result);
       const detalleResult = tecnicoPrefetch?.detalleResult || {};
-      const components = detalleResult?.components || {};
 
       setProgress(STEPS[4]);
       setMessage(
-        `Actividades y componentes guardados: ${Number(
-          components?.ok || 0,
-        )}/${Number(components?.total || 0)}.`,
+        `Detalles del día guardados: ${Number(
+          detalleResult?.ok || 0,
+        )}. Componentes se cargarán en segundo plano.`,
       );
-      await wait(250);
-
-      const consumiblesResult = getConsumiblesFromResult(result);
+      await wait(200);
 
       setProgress(STEPS[5]);
       setMessage(
-        consumiblesResult?.ok
-          ? "Consumibles por agrupadores guardados para uso offline..."
-          : "Validando consumibles guardados en el dispositivo...",
+        "Consumibles y detalles de otros días se actualizarán en segundo plano.",
       );
-      await wait(250);
+      await wait(200);
 
       await loadLocalSummary();
 
       setProgress(STEPS[6]);
       setMessage(
-        "Puede iniciar con sus órdenes. Que tenga un excelente día.",
+        "Información del día lista. Puede iniciar; lo demás seguirá cargando en segundo plano.",
       );
 
       await markPreloadDone();
+
+      runBackgroundSyncNow({
+        source: "tecnico_preload_full_background",
+      }).catch((e) => {
+        console.log(
+          "[PRELOAD TECNICO] Sync completa en segundo plano error:",
+          e?.message || e,
+        );
+      });
 
       if (!mountedRef.current) return;
 

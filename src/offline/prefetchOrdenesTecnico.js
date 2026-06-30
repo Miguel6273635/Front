@@ -5,6 +5,8 @@ import {
   shouldCacheDetailByOrder,
   buildOfflineWindow,
   saveOrdenesTecnicoList,
+  loadOrdenesTecnicoList,
+  filterOrdenesByWindow,
   pruneDetallesByWindow,
 } from "./ordenesTecnicoCache";
 
@@ -694,6 +696,154 @@ export async function prefetchOrdenesTecnicoDetalles({
       total: componentsTotal,
     },
   };
+}
+
+// ==========================================
+// Precarga rápida del día
+// Se usa desde app/tecnico/preparando/index.js
+// Objetivo:
+// - Cargar solo órdenes del día actual.
+// - Guardar lista del día dentro de la ventana offline.
+// - Precargar detalle básico y operaciones del día.
+// - NO cargar componentes en esta primera vista para evitar lentitud.
+// ==========================================
+function formatLocalYmdPreload(d = new Date()) {
+  const x = new Date(d);
+  const yyyy = x.getFullYear();
+  const mm = String(x.getMonth() + 1).padStart(2, "0");
+  const dd = String(x.getDate()).padStart(2, "0");
+
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function mergeOrdenesById(prev = [], incoming = []) {
+  const map = new Map();
+
+  (Array.isArray(prev) ? prev : []).forEach((item) => {
+    const id = String(
+      item?.Orderid || item?.OrderId || item?.orderid || "",
+    ).trim();
+
+    if (id) map.set(id, item);
+  });
+
+  (Array.isArray(incoming) ? incoming : []).forEach((item) => {
+    const id = String(
+      item?.Orderid || item?.OrderId || item?.orderid || "",
+    ).trim();
+
+    if (!id) return;
+
+    map.set(id, {
+      ...(map.get(id) || {}),
+      ...item,
+      Orderid: item?.Orderid || item?.OrderId || id,
+      OrderId: item?.OrderId || item?.Orderid || id,
+    });
+  });
+
+  return Array.from(map.values());
+}
+
+export async function prefetchOrdenesTecnicoDiaRapido(
+  userEmail = null,
+  options = {},
+) {
+  configurePrefetchRuntime(options);
+
+  try {
+    console.log("[PREFETCH TECNICO][DIA] Iniciando precarga rápida del día...");
+
+    const today = new Date();
+    const todayStr = formatLocalYmdPreload(today);
+
+    const params = new URLSearchParams({
+      start: todayStr,
+      end: todayStr,
+      mode: "range",
+    });
+
+    if (userEmail) {
+      params.set("user", userEmail);
+    }
+
+    const res = await retryOnceWithFreshToken(
+      () =>
+        getPrefetchApi().get(`/api/ordenes/sap/list?${params.toString()}`),
+      "ordenes:list:dia",
+    );
+
+    const data = Array.isArray(res?.data)
+      ? res.data
+      : Array.isArray(res?.data?.data)
+        ? res.data.data
+        : Array.isArray(res?.data?.results)
+          ? res.data.results
+          : [];
+
+    const offlineWindow = buildOfflineWindow(new Date());
+    const cachedPrev = await loadOrdenesTecnicoList(userEmail);
+
+    // Importante:
+    // No reemplazamos toda la lista por solo el día.
+    // Mezclamos lo del día con lo ya guardado para no perder órdenes anteriores
+    // ni información usada por Pendientes de firma.
+    const merged = mergeOrdenesById(cachedPrev?.data || [], data);
+
+    const windowData = filterOrdenesByWindow(
+      merged,
+      offlineWindow.start,
+      offlineWindow.end,
+    );
+
+    await saveOrdenesTecnicoList(userEmail, windowData, offlineWindow);
+
+    const orderIdsDia = data
+      .map((x) => x?.Orderid || x?.OrderId || x?.orderid)
+      .filter(Boolean)
+      .map((x) => String(x).trim());
+
+    console.log("[PREFETCH TECNICO][DIA] Órdenes del día:", orderIdsDia.length);
+
+    const detalleResult = await prefetchOrdenesTecnicoDetalles({
+      orderIds: orderIdsDia,
+      concurrency: 2,
+
+      // En la vista de preparación NO cargamos componentes.
+      // Los componentes se cargan después en segundo plano con runBackgroundSyncNow.
+      prefetchComponents: false,
+
+      apiInstance: options?.apiInstance || getPrefetchApi(),
+      ensureValidToken: options?.ensureValidToken || PREFETCH_ENSURE_VALID_TOKEN,
+    });
+
+    const result = {
+      ok: true,
+      mode: "day_fast",
+      count: orderIdsDia.length,
+      todayStr,
+      window: {
+        startStr: offlineWindow.startStr,
+        endStr: offlineWindow.endStr,
+      },
+      detalleResult,
+    };
+
+    console.log("[PREFETCH TECNICO][DIA] Finalizado:", result);
+
+    return result;
+  } catch (e) {
+    console.log(
+      "[PREFETCH TECNICO][DIA] Error:",
+      e?.response?.data || e?.message || e,
+    );
+
+    return {
+      ok: false,
+      reason: "prefetch_tecnico_dia_error",
+      error: e?.message || String(e),
+    };
+  }
 }
 
 // ==========================================
