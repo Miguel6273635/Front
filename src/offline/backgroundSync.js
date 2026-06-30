@@ -23,6 +23,7 @@ import { bootstrapPrefetchOrdenesSupervisor } from "./bootstrapSync";
 import { syncTecnicoPendingActions } from "./tecnicoPendingSync";
 import { bootstrapPrefetchConsumiblesCatalogo } from "./bootstrapConsumiblesCatalogo";
 import { processSapQueue } from "./sapQueue";
+import { processCheckinQueueForUser } from "./checkinQueue";
 
 const BACKGROUND_SYNC_TASK = "MITSU_BACKGROUND_SYNC_TASK";
 
@@ -265,9 +266,36 @@ async function runSupervisorPrefetch() {
 }
 
 async function runTecnicoFullSync(user) {
+  let checkinQueueResult = null;
   let tecnicoPendingResult = null;
   let tecnicoPrefetchResult = null;
   let consumiblesResult = null;
+
+  /*
+    Miguel Ángel Hernández Álvarez - 30/06/2026
+
+    Ahora el check-in también se procesa desde backgroundSync.
+    Antes dependía principalmente de app/tecnico/ordenes/index.js.
+    Con esto, si la app corre en segundo plano o Android despierta la tarea,
+    también intenta enviar la foto de check-in y el estatus pendiente.
+  */
+  try {
+    checkinQueueResult = await processCheckinQueueForUser(user, {
+      apiInstance: api,
+      ensureValidToken: getEnsureValidToken(),
+    });
+  } catch (e) {
+    console.log(
+      "[BACKGROUND SYNC] Error cola check-in:",
+      e?.response?.data || e?.message || e,
+    );
+
+    checkinQueueResult = {
+      ok: false,
+      reason: "checkin_queue_error",
+      error: e?.message || String(e),
+    };
+  }
 
   try {
     tecnicoPendingResult = await syncTecnicoPendingActions(user, api, {
@@ -320,6 +348,7 @@ async function runTecnicoFullSync(user) {
 
   return {
     ok: true,
+    checkinQueueResult,
     tecnicoPendingResult,
     tecnicoPrefetchResult,
     consumiblesResult,

@@ -47,6 +47,11 @@ import {
 // Prefetch de detalles (para no entrar a cada orden)
 import { prefetchOrdenesTecnicoDetalles } from "../../../src/offline/prefetchOrdenesTecnico";
 import { runBackgroundSyncNow } from "../../../src/offline/backgroundSync";
+import {
+  loadCheckinQueue as loadCheckinQueueCentral,
+  enqueueCheckin as enqueueCheckinCentral,
+  processCheckinQueueForUser,
+} from "../../../src/offline/checkinQueue";
 import { useAuth } from "../../../src/context/AuthContext";
 import Header from "../../../src/components/Header";
 import api from "../../../src/services/api";
@@ -527,7 +532,7 @@ export default function ListaOrdenesTecnico() {
   };
 
   const refreshQueue = useCallback(async () => {
-    const q = await loadCheckinQueue(userEmail);
+    const q = await loadCheckinQueueCentral(userEmail);
     setCheckinQueue(q);
   }, [userEmail]);
 
@@ -1088,47 +1093,35 @@ export default function ListaOrdenesTecnico() {
   const syncCheckinQueue = useCallback(async () => {
     if (!userEmail) return;
     if (syncingRef.current) return;
-    const net = await NetInfo.fetch();
-    const online = !!(net?.isConnected && net?.isInternetReachable !== false);
-    setIsOnline(online);
-    if (!online) return;
+
     syncingRef.current = true;
+
     try {
-      const q = await loadCheckinQueue(userEmail);
-      if (!q.length) return;
-      const ok = await ensureValidToken();
-      if (!ok) return;
-      const ordered = [...q].sort(
-        (a, b) => (a?.createdAt || 0) - (b?.createdAt || 0),
+      const result = await processCheckinQueueForUser(
+        {
+          correo: userEmail,
+          email: userEmail,
+          rol_id: 3,
+        },
+        {
+          apiInstance: api,
+          ensureValidToken,
+        },
       );
-      for (const item of ordered) {
-        const orderId = String(item?.orderId || "").trim();
-        const b64 = String(item?.photoBase64 || "").trim();
-        if (!orderId || !b64) {
-          await removeFromQueue(userEmail, orderId);
-          continue;
-        }
-        try {
-          console.log("[CHECKIN][SYNC] Enviando:", {
-            orderId,
-            b64len: b64.length,
-          });
-          const statusToSend = normalizeCode(item?.statusCode) || "0100";
-          await postCheckinEvidence(orderId, b64);
-          await postChangeStatusToSap(orderId, statusToSend);
-          await removeFromQueue(userEmail, orderId);
-        } catch (e) {
-          console.log(
-            "[CHECKIN][SYNC] Error SAP:",
-            orderId,
-            e?.response?.data || e?.message || e,
-          );
-          break;
-        }
-      }
-      const q2 = await loadCheckinQueue(userEmail);
+
+      console.log("[CHECKIN][SYNC CENTRAL] Resultado:", result);
+
+      const q2 = await loadCheckinQueueCentral(userEmail);
       setCheckinQueue(q2);
-      fetchOrdenes({ isRefresh: true });
+
+      if (result?.processed > 0) {
+        fetchOrdenes({ isRefresh: true });
+      }
+    } catch (e) {
+      console.log(
+        "[CHECKIN][SYNC CENTRAL] Error:",
+        e?.response?.data || e?.message || e,
+      );
     } finally {
       syncingRef.current = false;
     }
@@ -1164,7 +1157,7 @@ export default function ListaOrdenesTecnico() {
       const online = !!(net?.isConnected && net?.isInternetReachable !== false);
       setIsOnline(online);
       await applyLocalOfflineStatus(orderId, CHECKIN_STATUS);
-      const nextQueue = await enqueueCheckin(userEmail, {
+      const nextQueue = await enqueueCheckinCentral(userEmail, {
         orderId,
         photoBase64: String(checkinPhotoBase64).trim(),
         statusCode: CHECKIN_STATUS,
