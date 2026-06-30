@@ -1084,6 +1084,17 @@ export default function FormularioRiesgosScreen() {
 
           setEquipoSeleccionado(tipoLocal.tipo);
           setEquipoLabel(tipoLocal.label);
+
+          /*
+            Miguel Ángel Hernández Álvarez - 30/06/2026
+
+            Si ya tenemos datos offline precargados del día,
+            quitamos el loading de inmediato.
+
+            Lo que venga de SAP después se actualiza en segundo plano,
+            pero ya no bloquea la pantalla TBM/KY.
+          */
+          if (alive) setLoading(false);
         }
 
         const onlineNow = await isOnline();
@@ -2106,11 +2117,42 @@ export default function FormularioRiesgosScreen() {
     return (
       <View style={{ flex: 1, backgroundColor: FIORI.pageBg }}>
         <Header title="Predicción de riesgos (TBM/KY)" />
-        <ActivityIndicator
-          style={{ marginTop: 40 }}
-          size="large"
-          color={FIORI.accent}
-        />
+
+        <View
+          style={{
+            flex: 1,
+            alignItems: "center",
+            justifyContent: "center",
+            paddingHorizontal: 24,
+          }}
+        >
+          <ActivityIndicator size="large" color={FIORI.accent} />
+
+          <Text
+            style={{
+              marginTop: 14,
+              fontSize: 15,
+              fontWeight: "800",
+              color: FIORI.ink,
+              textAlign: "center",
+            }}
+          >
+            Cargando información de la orden
+          </Text>
+
+          <Text
+            style={{
+              marginTop: 6,
+              fontSize: 12,
+              color: FIORI.textMuted,
+              textAlign: "center",
+              lineHeight: 17,
+            }}
+          >
+            Si la orden ya fue precargada, se mostrará en unos segundos. La
+            actualización con SAP continuará en segundo plano.
+          </Text>
+        </View>
       </View>
     );
   }

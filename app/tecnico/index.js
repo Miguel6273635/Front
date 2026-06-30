@@ -1,6 +1,6 @@
 // app/tecnico/index.js
 
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import {
   View,
   Text,
@@ -14,18 +14,12 @@ import {
   ActivityIndicator,
 } from "react-native";
 
-import AsyncStorage from "@react-native-async-storage/async-storage";
-import { router, useFocusEffect } from "expo-router";
+import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
 import Header from "../../src/components/Header";
 
 import { useAuth } from "../../src/context/AuthContext";
 import { useOffline } from "../../src/offline/OfflineProvider";
 import { runBackgroundSyncNow } from "../../src/offline/backgroundSync";
-
-const PRELOAD_DONE_KEY = (userEmail) =>
-  `tecnico:preloadDone:${String(userEmail || "unknown")
-    .toLowerCase()
-    .trim()}`;
 
 // ====== Datos del menú (tiles) ======
 const TILES = [
@@ -112,81 +106,77 @@ function FioriTile({ title, icon, badge, onPress, disabled = false }) {
 export default function TecnicoHome() {
   const { user } = useAuth();
   const { online, dbReady } = useOffline();
+  const params = useLocalSearchParams();
+
+  /*
+    Miguel Ángel Hernández Álvarez - 29/06/2026
+
+    Flujo correcto:
+    - La primera vista del técnico siempre debe ser /tecnico/preparando.
+    - Después de la precarga, el botón "Iniciar con mis órdenes"
+      debe mandar a /tecnico?ready=1.
+    - Solo si ready=1 se muestra este Inicio Técnico.
+
+    Esto evita que el mecánico entre directo al menú sin ver la pantalla
+    de preparación y sin que se precarguen los datos del día.
+  */
+  const puedeVerHome = String(params?.ready || "") === "1";
 
   const [checkingPreload, setCheckingPreload] = useState(true);
 
-  const userEmail = useMemo(() => {
-    return String(
-      user?.correo ||
-        user?.email ||
-        user?.username ||
-        user?.preferred_username ||
-        "unknown",
-    )
-      .toLowerCase()
-      .trim();
-  }, [user]);
-
-  /*
-    Validación de precarga.
-
-    IMPORTANTE:
-    Esta pantalla se abre directo cuando el usuario ya tiene sesión guardada.
-    Por eso no basta con mandar al técnico desde login.
-
-    Flujo:
-    - Si NO tiene bandera de precarga, manda a /tecnico/preparando
-    - Si ya tiene bandera, muestra Inicio Técnico
-  */
   useEffect(() => {
     let mounted = true;
 
-    const revisarPrecarga = async () => {
+    const revisarEntrada = async () => {
       try {
+        if (mounted) {
+          setCheckingPreload(true);
+        }
+
         if (!user) {
-          if (mounted) setCheckingPreload(false);
+          if (mounted) {
+            setCheckingPreload(false);
+          }
+
           return;
         }
 
-        const preloadDone = await AsyncStorage.getItem(
-          PRELOAD_DONE_KEY(userEmail),
-        );
+        if (!puedeVerHome) {
+          console.log(
+            "[TECNICO HOME] Primera vista del técnico. Redirigiendo a precarga...",
+          );
 
-        if (preloadDone !== "true") {
-          console.log("[TECNICO HOME] Precarga no realizada. Redirigiendo...");
           router.replace("/tecnico/preparando");
           return;
         }
 
-        console.log("[TECNICO HOME] Precarga ya realizada.");
+        console.log(
+          "[TECNICO HOME] Viene desde precarga. Mostrando Inicio Técnico.",
+        );
+
+        if (mounted) {
+          setCheckingPreload(false);
+        }
       } catch (e) {
         console.log(
-          "[TECNICO HOME] Error revisando precarga:",
+          "[TECNICO HOME] Error revisando entrada:",
           e?.message || e,
         );
 
         router.replace("/tecnico/preparando");
-        return;
-      } finally {
-        if (mounted) {
-          setCheckingPreload(false);
-        }
       }
     };
 
-    revisarPrecarga();
+    revisarEntrada();
 
     return () => {
       mounted = false;
     };
-  }, [user, userEmail]);
+  }, [user, puedeVerHome]);
 
   /*
     Bloquea el botón físico de regresar en Android
     solo cuando estás en el home principal del técnico.
-
-    Esto evita que el usuario regrese al login desde /tecnico.
-    Las vistas internas siguen funcionando normal.
   */
   useFocusEffect(
     useCallback(() => {
@@ -207,15 +197,14 @@ export default function TecnicoHome() {
   /*
     Sincronización silenciosa del técnico.
 
-    Esta sync se mantiene, pero ya NO es la primera carga obligatoria.
     La primera carga visible la hace /tecnico/preparando.
-
-    Aquí solo dejamos una actualización silenciosa para mantener datos frescos.
+    Aquí solo se deja una actualización silenciosa cuando ya está en el menú.
   */
   useEffect(() => {
     if (!user) return;
     if (!dbReady) return;
     if (checkingPreload) return;
+    if (!puedeVerHome) return;
 
     if (!online) {
       console.log("[TECNICO HOME] Sin internet. Se usará información offline.");
@@ -231,7 +220,7 @@ export default function TecnicoHome() {
       .catch((e) => {
         console.log("[TECNICO HOME] Sync error:", e?.message || e);
       });
-  }, [online, dbReady, user, checkingPreload]);
+  }, [online, dbReady, user, checkingPreload, puedeVerHome]);
 
   if (checkingPreload) {
     return (
@@ -243,10 +232,11 @@ export default function TecnicoHome() {
         <View style={styles.loadingCenter}>
           <ActivityIndicator size="large" color={COLORS.brand} />
 
-          <Text style={styles.loadingTitle}>Validando información</Text>
+          <Text style={styles.loadingTitle}>Abriendo precarga</Text>
 
           <Text style={styles.loadingText}>
-            Estamos revisando si la información del técnico ya fue precargada.
+            Estamos preparando la información antes de mostrar el menú del
+            técnico.
           </Text>
         </View>
       </View>

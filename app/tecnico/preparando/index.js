@@ -411,10 +411,10 @@ export default function PreparandoTecnicoScreen() {
     }
   };
 
-  const goHome = async () => {
-    await markPreloadDone();
-    router.replace("/tecnico");
-  };
+ const goHome = async () => {
+  await markPreloadDone();
+  router.replace("/tecnico?ready=1");
+};
 
   const retryPreload = async () => {
     startedRef.current = false;
