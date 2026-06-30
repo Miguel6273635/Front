@@ -160,7 +160,7 @@ function buildDireccion(a) {
     .filter(Boolean)
     .join(", ");
 
-  const reg = [a?.Region, a?.PostCode1]
+  const reg = [a?.Region, a?.PostCode1, a?.Country]
     .map((x) => String(x || "").trim())
     .filter(Boolean)
     .join(" ");
@@ -169,6 +169,43 @@ function buildDireccion(a) {
     .map((x) => String(x || "").trim())
     .filter(Boolean)
     .join(", ");
+}
+
+
+function pickBestAddressNode(results = []) {
+  if (!Array.isArray(results) || results.length === 0) return null;
+
+  const clean = results.filter(Boolean);
+
+  if (!clean.length) return null;
+
+  const scoreAddress = (a) => {
+    const nameScore = [
+      a?.Name1,
+      a?.Name2,
+      a?.Name3,
+      a?.Name4,
+    ].filter((x) => String(x || "").trim()).length;
+
+    const dirScore = [
+      a?.Street,
+      a?.StreetName,
+      a?.HouseNum1,
+      a?.StrSuppl1,
+      a?.StrSuppl2,
+      a?.StrSuppl3,
+      a?.Location,
+      a?.City2,
+      a?.City1,
+      a?.Region,
+      a?.PostCode1,
+      a?.Country,
+    ].filter((x) => String(x || "").trim()).length;
+
+    return nameScore * 10 + dirScore;
+  };
+
+  return clean.sort((a, b) => scoreAddress(b) - scoreAddress(a))[0] || null;
 }
 
 /* ✅ Helpers ToPartners */
@@ -1056,12 +1093,25 @@ export default function FormularioRiesgosScreen() {
             return copy;
           });
 
-          if (safeStr(cachedData?.cliente)) {
-            setRazonSocial(cachedData.cliente);
+          const cachedRazonSocial =
+            cachedData?.cliente ||
+            cachedData?.razon_social ||
+            cachedData?.partner_name ||
+            cachedData?.Name1 ||
+            "";
+
+          const cachedDireccion =
+            cachedData?.direccion ||
+            cachedData?.partner_address ||
+            cachedData?.address ||
+            "";
+
+          if (safeStr(cachedRazonSocial)) {
+            setRazonSocial(cachedRazonSocial);
           }
 
-          if (safeStr(cachedData?.direccion)) {
-            setDireccion(cachedData.direccion);
+          if (safeStr(cachedDireccion)) {
+            setDireccion(cachedDireccion);
           }
 
           const { z1, z2 } = getCachedNominasFromPartners(
@@ -1203,7 +1253,7 @@ export default function FormularioRiesgosScreen() {
           );
 
           const results = addrRes?.data?.d?.results || [];
-          const node = results?.[1] || null;
+          const node = pickBestAddressNode(results);
 
           if (node && alive) {
             const rs = buildRazonSocial(node);
@@ -1212,11 +1262,97 @@ export default function FormularioRiesgosScreen() {
             setRazonSocial(rs);
             setDireccion(dir);
 
+            try {
+              await saveOrdenTecnicoDetail(orderid, {
+                ...(cachedData || {}),
+                ...(ord || {}),
+
+                Orderid: orderid,
+                OrderId: orderid,
+
+                cliente: rs,
+                razon_social: rs,
+                direccion: dir,
+                partner_address: dir,
+                address: dir,
+
+                start_date:
+                  ord?.start_date ||
+                  ord?.StartDate ||
+                  cachedData?.start_date ||
+                  cachedData?.StartDate ||
+                  null,
+                StartDate:
+                  ord?.StartDate ||
+                  ord?.start_date ||
+                  cachedData?.StartDate ||
+                  cachedData?.start_date ||
+                  null,
+
+                finish_date:
+                  ord?.finish_date ||
+                  ord?.FinishDate ||
+                  cachedData?.finish_date ||
+                  cachedData?.FinishDate ||
+                  null,
+                FinishDate:
+                  ord?.FinishDate ||
+                  ord?.finish_date ||
+                  cachedData?.FinishDate ||
+                  cachedData?.finish_date ||
+                  null,
+
+                order_type:
+                  ord?.order_type ||
+                  ord?.OrderType ||
+                  cachedData?.order_type ||
+                  cachedData?.OrderType ||
+                  "",
+                OrderType:
+                  ord?.OrderType ||
+                  ord?.order_type ||
+                  cachedData?.OrderType ||
+                  cachedData?.order_type ||
+                  "",
+
+                Equipment:
+                  ord?.Equipment ||
+                  ord?.equipment ||
+                  cachedData?.Equipment ||
+                  cachedData?.equipment ||
+                  "",
+                equipment:
+                  ord?.equipment ||
+                  ord?.Equipment ||
+                  cachedData?.equipment ||
+                  cachedData?.Equipment ||
+                  "",
+
+                partners: Array.isArray(cachedData?.partners)
+                  ? cachedData.partners
+                  : [],
+                operaciones: Array.isArray(cachedData?.operaciones)
+                  ? cachedData.operaciones
+                  : [],
+              });
+
+              console.log("[TBMKY] Razón social/dirección guardadas en cache:", {
+                orderid,
+                razonSocial: rs,
+                direccion: dir,
+              });
+            } catch (cacheErr) {
+              console.log(
+                "[TBMKY] No se pudo guardar razón social/dirección en cache:",
+                cacheErr?.message || cacheErr,
+              );
+            }
+
             if (!addrLogOnceRef.current) {
               addrLogOnceRef.current = true;
 
-              console.log("[TBMKY] ToAddresses OK (2do nodo):", {
-                pickedIndex: 1,
+              console.log("[TBMKY] ToAddresses OK (mejor nodo):", {
+                pickedIndex: results.indexOf(node),
                 Name1: node?.Name1,
                 Name4: node?.Name4,
                 Street: node?.Street,
@@ -1226,31 +1362,57 @@ export default function FormularioRiesgosScreen() {
               });
             }
           } else if (!node && alive) {
-            if (safeStr(cachedData?.cliente)) {
-              setRazonSocial(cachedData.cliente);
+            const cachedRazonSocial =
+              cachedData?.cliente ||
+              cachedData?.razon_social ||
+              cachedData?.partner_name ||
+              cachedData?.Name1 ||
+              "";
+
+            const cachedDireccion =
+              cachedData?.direccion ||
+              cachedData?.partner_address ||
+              cachedData?.address ||
+              "";
+
+            if (safeStr(cachedRazonSocial)) {
+              setRazonSocial(cachedRazonSocial);
             }
 
-            if (safeStr(cachedData?.direccion)) {
-              setDireccion(cachedData.direccion);
+            if (safeStr(cachedDireccion)) {
+              setDireccion(cachedDireccion);
             }
 
             if (!addrLogOnceRef.current) {
               addrLogOnceRef.current = true;
 
               console.log(
-                "[TBMKY] ToAddresses sin 2do nodo. results length =",
+                "[TBMKY] ToAddresses sin nodo útil. results length =",
                 results?.length || 0,
               );
             }
           }
         } catch (e) {
           if (alive) {
-            if (safeStr(cachedData?.cliente)) {
-              setRazonSocial(cachedData.cliente);
+            const cachedRazonSocial =
+              cachedData?.cliente ||
+              cachedData?.razon_social ||
+              cachedData?.partner_name ||
+              cachedData?.Name1 ||
+              "";
+
+            const cachedDireccion =
+              cachedData?.direccion ||
+              cachedData?.partner_address ||
+              cachedData?.address ||
+              "";
+
+            if (safeStr(cachedRazonSocial)) {
+              setRazonSocial(cachedRazonSocial);
             }
 
-            if (safeStr(cachedData?.direccion)) {
-              setDireccion(cachedData.direccion);
+            if (safeStr(cachedDireccion)) {
+              setDireccion(cachedDireccion);
             }
           }
 
@@ -1366,12 +1528,25 @@ export default function FormularioRiesgosScreen() {
               return copy;
             });
 
-            if (safeStr(cachedData?.cliente)) {
-              setRazonSocial(cachedData.cliente);
+            const cachedRazonSocial =
+              cachedData?.cliente ||
+              cachedData?.razon_social ||
+              cachedData?.partner_name ||
+              cachedData?.Name1 ||
+              "";
+
+            const cachedDireccion =
+              cachedData?.direccion ||
+              cachedData?.partner_address ||
+              cachedData?.address ||
+              "";
+
+            if (safeStr(cachedRazonSocial)) {
+              setRazonSocial(cachedRazonSocial);
             }
 
-            if (safeStr(cachedData?.direccion)) {
-              setDireccion(cachedData.direccion);
+            if (safeStr(cachedDireccion)) {
+              setDireccion(cachedDireccion);
             }
 
             const { z1, z2 } = getCachedNominasFromPartners(

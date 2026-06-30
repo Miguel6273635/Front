@@ -86,37 +86,71 @@ async function retryOnceWithFreshToken(fn, label = "request") {
 const COMPONENTS_KEY = (orderId, activity) =>
   `orderComponents:${String(orderId || "").trim()}:${String(activity || "").trim()}`;
 
-function pickSecondAddress(results = []) {
+function pickBestAddress(results = []) {
   if (!Array.isArray(results) || results.length === 0) return null;
-  return results.length >= 2 ? results[1] : results[0];
+
+  const clean = results.filter(Boolean);
+
+  if (!clean.length) return null;
+
+  const scoreAddress = (a) => {
+    const nameScore = [a?.Name1, a?.Name2, a?.Name3, a?.Name4].filter((x) =>
+      String(x || "").trim(),
+    ).length;
+
+    const dirScore = [
+      a?.Street,
+      a?.StreetName,
+      a?.HouseNum1,
+      a?.StrSuppl1,
+      a?.StrSuppl2,
+      a?.StrSuppl3,
+      a?.Location,
+      a?.City2,
+      a?.City1,
+      a?.Region,
+      a?.PostCode1,
+      a?.Country,
+    ].filter((x) => String(x || "").trim()).length;
+
+    return nameScore * 10 + dirScore;
+  };
+
+  return clean.sort((a, b) => scoreAddress(b) - scoreAddress(a))[0] || null;
 }
 
 function mapDireccionLikeBackend(addr) {
   if (!addr) return { cliente: "", direccion: "" };
 
-  const Name1 = addr.Name1 ?? "";
-  const Name2 = addr.Name2 ?? "";
-  const Street = addr.Street ?? addr.StreetName ?? "";
-  const HouseNum1 = addr.HouseNum1 ?? "";
-  const StrSuppl3 = addr.StrSuppl3 ?? "";
-  const Location = addr.Location ?? "";
-  const City1 = addr.City1 ?? "";
-  const Region = addr.Region ?? "";
-  const PostCode1 = addr.PostCode1 ?? "";
-  const Country = addr.Country ?? "";
+  const cliente = [addr?.Name1, addr?.Name2, addr?.Name3, addr?.Name4]
+    .map((x) => String(x || "").trim())
+    .filter(Boolean)
+    .join(" ")
+    .trim();
 
-  const cliente = [Name1, Name2].filter(Boolean).join(" ").trim();
+  const street = [addr?.Street || addr?.StreetName, addr?.HouseNum1]
+    .map((x) => String(x || "").trim())
+    .filter(Boolean)
+    .join(" ");
 
-  const direccion = [
-    `${Street} ${HouseNum1}`.trim(),
-    StrSuppl3,
-    Location,
-    City1,
-    Region,
-    PostCode1,
-    Country,
-  ]
-    .filter((x) => x && String(x).trim().length > 0)
+  const supl = [addr?.StrSuppl1, addr?.StrSuppl2, addr?.StrSuppl3]
+    .map((x) => String(x || "").trim())
+    .filter(Boolean)
+    .join(" ");
+
+  const loc = [addr?.Location, addr?.City2, addr?.City1]
+    .map((x) => String(x || "").trim())
+    .filter(Boolean)
+    .join(", ");
+
+  const reg = [addr?.Region, addr?.PostCode1, addr?.Country]
+    .map((x) => String(x || "").trim())
+    .filter(Boolean)
+    .join(" ");
+
+  const direccion = [street, supl, loc, reg]
+    .map((x) => String(x || "").trim())
+    .filter(Boolean)
     .join(", ");
 
   return { cliente, direccion };
@@ -251,7 +285,7 @@ async function fetchAddresses(orderIdReal) {
     );
 
     const results = odataResults(resAddr);
-    const chosen = pickSecondAddress(results);
+    const chosen = pickBestAddress(results);
     const mapped = mapDireccionLikeBackend(chosen);
 
     return {
@@ -269,7 +303,7 @@ async function fetchAddresses(orderIdReal) {
   try {
     const resAddr = await getPrefetchApi().get(`/api/ordenes/sap/${orderIdReal}/addresses`);
     const results = resAddr?.data?.results || resAddr?.data?.d?.results || [];
-    const chosen = pickSecondAddress(results);
+    const chosen = pickBestAddress(results);
     const mapped = mapDireccionLikeBackend(chosen);
 
     return {
