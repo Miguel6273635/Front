@@ -8,7 +8,7 @@ import { useOffline } from "../src/offline/OfflineProvider";
 
 import {
   registerBackgroundSync,
-  runBackgroundSyncNow,
+  runPendingSendsOnly,
 } from "../src/offline/backgroundSync";
 
 function pickHomeByRole(rol_id) {
@@ -28,11 +28,21 @@ export default function Index() {
     if (!user) return;
     if (!dbReady) return;
 
-    /**
-     * Registramos la tarea de segundo plano solo una vez.
-     * No depende de que online sea true, porque la tarea puede quedar lista
-     * y después ejecutarse cuando el sistema operativo lo permita.
-     */
+    /*
+      Miguel Ángel Hernández Álvarez - 01/07/2026
+
+      Se registra la tarea de segundo plano solo una vez.
+
+      Importante:
+      Esta tarea ya NO debe ejecutar precarga completa automáticamente.
+      La precarga fuerte debe vivir en /tecnico/preparando.
+
+      El BackgroundFetch debe quedar preparado para enviar pendientes:
+      - outbox
+      - cola SAP
+      - check-in pendiente
+      - PDFs / firmas / estatus pendientes
+    */
     if (!registeredRef.current) {
       registeredRef.current = true;
 
@@ -43,7 +53,10 @@ export default function Index() {
           console.log("[INDEX] Background sync registrado:", r);
         })
         .catch((e) => {
-          console.log("[INDEX] Error registrando background sync:", e?.message || e);
+          console.log(
+            "[INDEX] Error registrando background sync:",
+            e?.message || e,
+          );
         });
     }
   }, [user, dbReady]);
@@ -52,19 +65,36 @@ export default function Index() {
     if (!user) return;
     if (!dbReady) return;
 
-    /**
-     * Cuando la app abre y hay internet, hacemos una sincronización en segundo plano.
-     * No usamos await directo en pantalla para no trabar la navegación.
-     */
+    /*
+      Miguel Ángel Hernández Álvarez - 01/07/2026
+
+      Corrección de consumo:
+      Antes aquí se llamaba runBackgroundSyncNow(), pero esa función
+      ejecutaba precarga completa:
+      - órdenes
+      - detalles
+      - operaciones
+      - componentes
+      - consumibles
+
+      Eso provocaba que al abrir la app se dispararan muchas peticiones
+      después de la pantalla de precarga.
+
+      Ahora solo se mandan pendientes guardados.
+      La app debe trabajar con la información ya precargada.
+    */
     if (online) {
-      runBackgroundSyncNow({
-        source: "app_index",
+      runPendingSendsOnly({
+        source: "app_index_send_only",
       })
         .then((r) => {
-          console.log("[INDEX] Sync inicial finalizada:", r);
+          console.log("[INDEX] Envíos pendientes revisados:", r);
         })
         .catch((e) => {
-          console.log("[INDEX] Sync inicial error:", e?.message || e);
+          console.log(
+            "[INDEX] Error revisando envíos pendientes:",
+            e?.message || e,
+          );
         });
     } else {
       console.log("[INDEX] Sin internet. Se cargará desde offline.");

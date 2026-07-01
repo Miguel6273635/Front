@@ -19,7 +19,7 @@ import Header from "../../src/components/Header";
 
 import { useAuth } from "../../src/context/AuthContext";
 import { useOffline } from "../../src/offline/OfflineProvider";
-import { runBackgroundSyncNow } from "../../src/offline/backgroundSync";
+import { runPendingSendsOnly } from "../../src/offline/backgroundSync";
 
 // ====== Datos del menú (tiles) ======
 const TILES = [
@@ -195,10 +195,27 @@ export default function TecnicoHome() {
   );
 
   /*
-    Sincronización silenciosa del técnico.
+    Miguel Ángel Hernández Álvarez - 01/07/2026
 
-    La primera carga visible la hace /tecnico/preparando.
-    Aquí solo se deja una actualización silenciosa cuando ya está en el menú.
+    Corrección de consumo:
+    Antes esta vista ejecutaba runBackgroundSyncNow(), pero esa función
+    volvía a disparar precarga completa:
+    - órdenes
+    - detalles
+    - operaciones
+    - componentes
+    - consumibles
+
+    Ahora Inicio Técnico solo revisa envíos pendientes.
+    La información pesada debe venir desde /tecnico/preparando.
+
+    Segundo plano aquí significa:
+    - enviar outbox pendiente
+    - enviar cola SAP
+    - enviar check-in pendiente
+    - enviar PDFs/firmas/estatus pendientes
+
+    No significa volver a precargar órdenes.
   */
   useEffect(() => {
     if (!user) return;
@@ -211,14 +228,17 @@ export default function TecnicoHome() {
       return;
     }
 
-    runBackgroundSyncNow({
-      source: "tecnico_home",
+    runPendingSendsOnly({
+      source: "tecnico_home_send_only",
     })
       .then((r) => {
-        console.log("[TECNICO HOME] Sync segundo plano:", r);
+        console.log("[TECNICO HOME] Envíos pendientes revisados:", r);
       })
       .catch((e) => {
-        console.log("[TECNICO HOME] Sync error:", e?.message || e);
+        console.log(
+          "[TECNICO HOME] Error revisando envíos pendientes:",
+          e?.message || e,
+        );
       });
   }, [online, dbReady, user, checkingPreload, puedeVerHome]);
 

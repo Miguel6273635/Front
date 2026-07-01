@@ -1,15 +1,27 @@
 // src/offline/backgroundSync.js
 // Sincronización en segundo plano para Mike-dev
-// Objetivo:
-// 1. Enviar cola general pendiente cuando haya red estable.
-// 2. Enviar cola SAP pendiente cuando haya red estable.
-// 3. Enviar pendientes específicos del técnico.
-// 4. Actualizar órdenes offline sin trabar la app.
-// 5. Actualizar consumibles/catálogos.
-// 6. Ejecutar por rol: técnico o supervisor.
-// 7. Guardar última sincronización.
-// 8. Evitar que la pantalla de detalle procese cola pesada en primer plano.
-// 9. Validar/renovar token sin depender de AuthContext.
+// Objetivo corregido:
+//
+/*
+  Miguel Ángel Hernández Álvarez - 01/07/2026
+
+  Separación importante:
+  1) runPendingSendsOnly:
+     - Solo envía pendientes.
+     - NO precarga órdenes.
+     - NO precarga operaciones.
+     - NO precarga componentes.
+     - NO precarga consumibles.
+
+  2) runBackgroundSyncNow:
+     - Se conserva como sincronización completa/pesada.
+     - Debe ejecutarse únicamente desde la pantalla de precarga
+       o desde un botón explícito de recarga/precarga completa.
+
+  Con esto, Inicio Técnico, app/index, background fetch y pantallas normales
+  pueden mandar pendientes en segundo plano sin volver a consumir datos SAP
+  de forma masiva.
+*/
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import NetInfo from "@react-native-community/netinfo";
@@ -355,7 +367,258 @@ async function runTecnicoFullSync(user) {
   };
 }
 
+
+/*
+  Miguel Ángel Hernández Álvarez - 01/07/2026
+
+  Esta función es la que deben usar:
+  - app/index.js
+  - app/tecnico/index.js
+  - BackgroundFetch automático
+  - cualquier pantalla que solo necesite enviar pendientes
+
+  IMPORTANTE:
+  Aquí NO se llama:
+  - runTecnicoPrefetch
+  - prefetchOrdenesTecnico
+  - bootstrapPrefetchConsumiblesCatalogo
+  - bootstrapPrefetchOrdenesSupervisor
+
+  Por eso no vuelve a disparar peticiones masivas de componentes como:
+  /api/operaciones/ordenes/{orden}/operaciones/{actividad}/componentes
+*/
+export async function runPendingSendsOnly(options = {}) {
+  const { force = false, source = "pending_sends_only" } = options;
+
+  const alreadyRunning = await isSyncRunning();
+
+  if (alreadyRunning && !force) {
+    return {
+      ok: false,
+      reason: "sync_already_running",
+      source,
+      mode: "pending_sends_only",
+    };
+  }
+
+  await setSyncRunning(true, source);
+
+  try {
+    const user = await getStoredUser();
+
+    if (!user) {
+      const result = {
+        ok: false,
+        reason: "no_user",
+        source,
+        mode: "pending_sends_only",
+      };
+
+      await saveSyncResult(result);
+      return result;
+    }
+
+    const network = await getBackgroundNetworkState();
+
+    if (!network.online) {
+      const result = {
+        ok: false,
+        reason: "offline",
+        source,
+        mode: "pending_sends_only",
+        network,
+      };
+
+      await saveSyncResult(result);
+      return result;
+    }
+
+    if (!network.stable) {
+      const result = {
+        ok: false,
+        reason: "network_not_stable",
+        source,
+        mode: "pending_sends_only",
+        network,
+      };
+
+      await saveSyncResult(result);
+      return result;
+    }
+
+    /*
+      Para enviar pendientes también validamos token.
+      Esto NO precarga nada, solo prepara autorización para outbox/SAP queue.
+    */
+    const tokenReady = await ensureValidAuthToken({
+      source,
+    });
+
+    if (!tokenReady?.ok) {
+      const result = {
+        ok: false,
+        reason: "token_not_available",
+        tokenReason: tokenReady?.reason || null,
+        source,
+        mode: "pending_sends_only",
+        network,
+      };
+
+      await saveSyncResult(result);
+      return result;
+    }
+
+    console.log("[BACKGROUND SEND ONLY] Iniciando envío de pendientes:", {
+      source,
+      rol_id: user?.rol_id,
+      email: getUserEmail(user),
+      network,
+    });
+
+    let outboxResult = null;
+    let sapQueueResult = null;
+    let checkinQueueResult = null;
+    let tecnicoPendingResult = null;
+
+    try {
+      outboxResult = await runOutboxSync(api, { limit: 10 });
+    } catch (e) {
+      console.log("[BACKGROUND SEND ONLY] Error outbox:", e?.message || e);
+
+      outboxResult = {
+        ok: false,
+        reason: "outbox_error",
+        error: e?.message || String(e),
+      };
+    }
+
+    try {
+      sapQueueResult = await runSapQueueSync();
+    } catch (e) {
+      console.log(
+        "[BACKGROUND SEND ONLY] Error SAP queue:",
+        e?.response?.data || e?.message || e,
+      );
+
+      sapQueueResult = {
+        ok: false,
+        reason: "sap_queue_error",
+        error: e?.message || String(e),
+      };
+    }
+
+    const rolId = Number(user?.rol_id);
+
+    if (rolId === 3) {
+      try {
+        checkinQueueResult = await processCheckinQueueForUser(user, {
+          apiInstance: api,
+          ensureValidToken: getEnsureValidToken(),
+        });
+      } catch (e) {
+        console.log(
+          "[BACKGROUND SEND ONLY] Error cola check-in:",
+          e?.response?.data || e?.message || e,
+        );
+
+        checkinQueueResult = {
+          ok: false,
+          reason: "checkin_queue_error",
+          error: e?.message || String(e),
+        };
+      }
+
+      try {
+        tecnicoPendingResult = await syncTecnicoPendingActions(user, api, {
+          limit: 5,
+        });
+      } catch (e) {
+        console.log(
+          "[BACKGROUND SEND ONLY] Error pendientes técnico:",
+          e?.response?.data || e?.message || e,
+        );
+
+        tecnicoPendingResult = {
+          ok: false,
+          reason: "tecnico_pending_error",
+          error: e?.message || String(e),
+        };
+      }
+    } else {
+      checkinQueueResult = {
+        ok: true,
+        skipped: true,
+        reason: "role_not_tecnico",
+        rol_id: user?.rol_id,
+      };
+
+      tecnicoPendingResult = {
+        ok: true,
+        skipped: true,
+        reason: "role_not_tecnico",
+        rol_id: user?.rol_id,
+      };
+    }
+
+    const result = {
+      ok: true,
+      source,
+      mode: "pending_sends_only",
+      network,
+      user: {
+        rol_id: user?.rol_id,
+        email: getUserEmail(user),
+      },
+      outboxResult,
+      sapQueueResult,
+      checkinQueueResult,
+      tecnicoPendingResult,
+
+      /*
+        Bandera visible en logs para confirmar que esta función NO hizo
+        precarga pesada.
+      */
+      prefetchSkipped: true,
+      consumiblesSkipped: true,
+
+      finishedAt: new Date().toISOString(),
+    };
+
+    await saveSyncResult(result);
+
+    console.log("[BACKGROUND SEND ONLY] Finalizado:", result);
+
+    return result;
+  } catch (e) {
+    const result = {
+      ok: false,
+      reason: "pending_sends_only_error",
+      source,
+      mode: "pending_sends_only",
+      error: e?.message || String(e),
+    };
+
+    await saveSyncResult(result);
+
+    console.log("[BACKGROUND SEND ONLY] Error general:", e?.message || e);
+
+    return result;
+  } finally {
+    await setSyncRunning(false, source);
+  }
+}
+
+
 export async function runBackgroundSyncNow(options = {}) {
+  /*
+    Miguel Ángel Hernández Álvarez - 01/07/2026
+
+    Esta función queda como sincronización COMPLETA/PESADA.
+    Úsala solamente desde la pantalla de precarga o desde una acción explícita
+    donde sí se quiera volver a traer órdenes, detalles, componentes y consumibles.
+
+    Para Inicio Técnico, app/index y BackgroundFetch usa runPendingSendsOnly.
+  */
   const { force = false, source = "manual" } = options;
 
   const alreadyRunning = await isSyncRunning();
@@ -510,12 +773,31 @@ export async function runBackgroundSyncNow(options = {}) {
   }
 }
 
+
+/*
+  Alias opcional para que desde la pantalla de precarga se pueda llamar
+  con un nombre más claro.
+*/
+export async function runFullPreloadNow(options = {}) {
+  return runBackgroundSyncNow({
+    ...options,
+    source: options?.source || "full_preload",
+  });
+}
+
+
 TaskManager.defineTask(BACKGROUND_SYNC_TASK, async () => {
   try {
     console.log("[BACKGROUND FETCH] Android despertó la app");
 
-    const result = await runBackgroundSyncNow({
-      source: "background_fetch",
+    /*
+      Miguel Ángel Hernández Álvarez - 01/07/2026
+
+      BackgroundFetch automático NO debe precargar órdenes/componentes.
+      Solo debe intentar enviar pendientes guardados.
+    */
+    const result = await runPendingSendsOnly({
+      source: "background_fetch_send_only",
     });
 
     if (result?.ok) {
@@ -570,8 +852,14 @@ export async function registerBackgroundSync(user = null, options = {}) {
     }
 
     if (runImmediately) {
-      runBackgroundSyncNow({
-        source: "foreground_register",
+      /*
+        Miguel Ángel Hernández Álvarez - 01/07/2026
+
+        Al registrar la tarea no hacemos precarga pesada.
+        Solo intentamos enviar pendientes si existen.
+      */
+      runPendingSendsOnly({
+        source: "foreground_register_send_only",
       }).catch((e) => {
         console.log(
           "[BACKGROUND SYNC] Error en ejecución inmediata:",

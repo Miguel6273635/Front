@@ -35,7 +35,6 @@ import {
   saveOrdenesTecnicoList,
   loadOrdenTecnicoDetail,
   saveOrdenTecnicoDetail,
-  pruneDetallesNoUsados,
   buildOfflineWindow,
   filterOrdenesByWindow,
 } from "../../../src/offline/ordenesTecnicoCache";
@@ -45,9 +44,6 @@ import {
   patchCacheOrdenTecnicoDetail,
 } from "../../../src/offline/ordenesTecnicoLocalPatch";
 
-// Prefetch de detalles (para no entrar a cada orden)
-import { prefetchOrdenesTecnicoDetalles } from "../../../src/offline/prefetchOrdenesTecnico";
-import { runBackgroundSyncNow } from "../../../src/offline/backgroundSync";
 import {
   loadCheckinQueue as loadCheckinQueueCentral,
   enqueueCheckin as enqueueCheckinCentral,
@@ -131,6 +127,12 @@ const formatLocalYmd = (d) => {
   const mm = String(d.getMonth() + 1).padStart(2, "0");
   const dd = String(d.getDate()).padStart(2, "0");
   return `${yyyy}-${mm}-${dd}`;
+};
+
+const isSameLocalDay = (a, b) => {
+  const aa = formatLocalYmd(a);
+  const bb = formatLocalYmd(b);
+  return !!aa && !!bb && aa === bb;
 };
 
 const formatDateDMY = (value) => {
@@ -569,7 +571,7 @@ export default function ListaOrdenesTecnico() {
   }, []);
 
   const fetchOrdenes = useCallback(
-    async ({ isRefresh = false, forceSap = false } = {}) => {
+    async ({ isRefresh = false, forceSap = false, cacheOnly = false } = {}) => {
       try {
         if (isRefresh) setRefreshing(true);
         else setLoading(true);
@@ -588,6 +590,27 @@ export default function ListaOrdenesTecnico() {
         );
         setIsOnline(onlineNow);
 
+        /*
+          Miguel Ángel Hernández Álvarez - 01/07/2026
+
+          Corrección de consumo:
+          Esta vista de Órdenes asignadas debe trabajar con los datos que ya
+          fueron precargados desde /tecnico/preparando.
+
+          Aquí NO se debe ejecutar runBackgroundSyncNow ni ninguna precarga
+          completa en segundo plano.
+
+          Reglas:
+          - Entrada normal a la vista: solo cache.
+          - Regresar/enfocar la vista: solo cache.
+          - Pull refresh / botón Recargar: consulta SAP para el rango actual.
+          - Cambio de fecha/filtro: consulta SAP para ese rango.
+        */
+        if (cacheOnly) {
+          console.log("[ORDENES][CACHE_ONLY] Vista enfocada. Solo se lee cache.");
+          return;
+        }
+
         if (!onlineNow) {
           if (!cached?.data?.length) {
             Alert.alert(
@@ -598,30 +621,21 @@ export default function ListaOrdenesTecnico() {
           return;
         }
 
+        const dayDifferentFromToday =
+          dateMode === "day" && !isSameLocalDay(dayRef, new Date());
+
         const debeConsultarSapPorFiltro =
           forceSap ||
+          dayDifferentFromToday ||
           dateMode === "all" ||
           dateMode === "month" ||
           dateMode === "year" ||
           dateMode === "weekRange";
 
         if (!debeConsultarSapPorFiltro) {
-          runBackgroundSyncNow({
-            source: isRefresh ? "tecnico_ordenes_refresh" : "tecnico_ordenes",
-          })
-            .then(async (r) => {
-              console.log("[ORDENES] Sync segundo plano finalizada:", r);
-              const updated = await loadOrdenesTecnicoList(userEmail);
-              if (updated?.data?.length) {
-                const patchedUpdated = await applyTbmkyOfflineStatuses(
-                  updated.data,
-                );
-                setAllOrdenes(patchedUpdated);
-              }
-            })
-            .catch((e) => {
-              console.log("[ORDENES] Sync segundo plano error:", e?.message || e);
-            });
+          console.log(
+            "[ORDENES][CACHE_ONLY] Día actual. No se consulta SAP ni se precarga en segundo plano.",
+          );
           return;
         }
 
@@ -629,9 +643,10 @@ export default function ListaOrdenesTecnico() {
         if (!okToken) return;
 
         const req = getSapRequestRange();
-        console.log("[ORDENES][FILTRO] Consultando SAP por rango:", {
+        console.log("[ORDENES][SAP_RANGO] Consultando SAP por rango:", {
           dateMode,
           forceSap,
+          dayDifferentFromToday,
           start: req.startStr,
           end: req.endStr,
           user: userEmail,
@@ -663,13 +678,28 @@ export default function ListaOrdenesTecnico() {
             offlineWindow.start,
             offlineWindow.end,
           );
-          await saveOrdenesTecnicoList(userEmail, windowData, offlineWindow);
-          console.log("[ORDENES][CACHE] SAP guardado en cache:", {
-            recibidasSap: patchedSapData.length,
-            guardadasCache: windowData.length,
-            start: offlineWindow.startStr,
-            end: offlineWindow.endStr,
-          });
+
+          /*
+            Protección:
+            Si SAP respondió datos, pero por fechas la ventana queda vacía,
+            no borramos la cache anterior accidentalmente.
+          */
+          if (patchedSapData.length > 0 && windowData.length === 0) {
+            console.log("[ORDENES][CACHE] No se guarda lista vacía por filtro de ventana.", {
+              recibidasSap: patchedSapData.length,
+              guardadasCache: 0,
+              start: offlineWindow.startStr,
+              end: offlineWindow.endStr,
+            });
+          } else {
+            await saveOrdenesTecnicoList(userEmail, windowData, offlineWindow);
+            console.log("[ORDENES][CACHE] SAP guardado en cache:", {
+              recibidasSap: patchedSapData.length,
+              guardadasCache: windowData.length,
+              start: offlineWindow.startStr,
+              end: offlineWindow.endStr,
+            });
+          }
         } catch (cacheError) {
           console.log(
             "[ORDENES][CACHE] No se pudo guardar SAP en cache:",
@@ -679,13 +709,9 @@ export default function ListaOrdenesTecnico() {
 
         setAllOrdenes(patchedSapData);
 
-        runBackgroundSyncNow({
-          source: forceSap
-            ? `tecnico_ordenes_recargar_${dateMode}`
-            : `tecnico_ordenes_filtro_${dateMode}`,
-        }).catch((e) => {
-          console.log("[ORDENES] Background después de filtro:", e?.message || e);
-        });
+        console.log(
+          "[ORDENES][SAP_RANGO] Consulta terminada. No se ejecuta precarga completa desde esta vista.",
+        );
       } catch (error) {
         console.error(
           "Error al cargar órdenes:",
@@ -709,6 +735,7 @@ export default function ListaOrdenesTecnico() {
     [
       userEmail,
       dateMode,
+      dayRef,
       getSapRequestRange,
       ensureValidToken,
       applyTbmkyOfflineStatuses,
@@ -726,7 +753,7 @@ export default function ListaOrdenesTecnico() {
 
   useFocusEffect(
     useCallback(() => {
-      fetchOrdenes({ isRefresh: true });
+      fetchOrdenes({ isRefresh: true, cacheOnly: true });
     }, [fetchOrdenes]),
   );
 
@@ -1843,7 +1870,7 @@ export default function ListaOrdenesTecnico() {
           renderItem={renderItem}
           contentContainerStyle={{ padding: 12, paddingTop: 6 }}
           refreshing={refreshing}
-          onRefresh={() => fetchOrdenes({ isRefresh: true })}
+          onRefresh={() => fetchOrdenes({ isRefresh: true, forceSap: true })}
           ListEmptyComponent={
             <Text
               style={{

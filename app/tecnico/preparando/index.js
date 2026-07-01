@@ -379,8 +379,13 @@ export default function PreparandoTecnicoScreen() {
           "No hay conexión. Puede iniciar con las órdenes guardadas en el dispositivo. Que tenga un excelente día.",
         );
 
-        await markPreloadDone();
+        /*
+          Miguel Ángel Hernández Álvarez - 01/07/2026
 
+          No marcamos la precarga como realizada cuando está offline.
+          Si no hubo consumo real de SAP/API, la app debe volver a intentar
+          precargar cuando tenga conexión.
+        */
         if (!mountedRef.current) return;
 
         await loadLocalSummary();
@@ -441,14 +446,22 @@ export default function PreparandoTecnicoScreen() {
 
         Ahora se espera aquí. Así todo el consumo fuerte se queda en la pantalla
         de precarga.
+
+        Usamos force:true porque app/index o el BackgroundFetch pueden estar
+        revisando envíos pendientes. La precarga visible tiene prioridad para
+        que no se quede en sync_already_running.
       */
+      let fullPreloadOk = false;
+
       try {
         const fullSyncResult = await runBackgroundSyncNow({
           source: "tecnico_preload_full_waited",
+          force: true,
         });
 
         console.log("[PRELOAD TECNICO] Sync completa esperada:", fullSyncResult);
 
+        fullPreloadOk = !!fullSyncResult?.ok;
         applyResultSummary(fullSyncResult);
       } catch (syncErr) {
         console.log(
@@ -466,11 +479,18 @@ export default function PreparandoTecnicoScreen() {
       await loadLocalSummary();
 
       setProgress(STEPS[6]);
-      setMessage(
-        "Información del día lista. Puede iniciar; no se volverá a precargar hasta mañana.",
-      );
 
-      await markPreloadDone();
+      if (fullPreloadOk) {
+        setMessage(
+          "Información del día lista. Puede iniciar; no se volverá a precargar hasta mañana.",
+        );
+
+        await markPreloadDone();
+      } else {
+        setMessage(
+          "Puede iniciar con la información guardada. La precarga completa no se marcó como terminada y se volverá a intentar después.",
+        );
+      }
 
       if (!mountedRef.current) return;
 
@@ -492,7 +512,10 @@ export default function PreparandoTecnicoScreen() {
         "No se pudo terminar la actualización, pero puede iniciar con la información guardada en el dispositivo.",
       );
 
-      await markPreloadDone();
+      /*
+        No marcamos precarga como realizada si cayó al modo parcial.
+        Así mañana o cuando vuelva la red, la pantalla puede intentar de nuevo.
+      */
       await loadLocalSummary();
       setDone(true);
     } finally {
@@ -500,8 +523,7 @@ export default function PreparandoTecnicoScreen() {
     }
   };
 
- const goHome = async () => {
-  await markPreloadDone();
+  const goHome = async () => {
   router.replace("/tecnico?ready=1");
 };
 

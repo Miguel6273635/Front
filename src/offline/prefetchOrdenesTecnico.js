@@ -77,7 +77,7 @@ async function retryOnceWithFreshToken(fn, label = "request") {
   Objetivo:
   - Traer la lista de órdenes del técnico en ventana offline.
   - Guardar la lista en cache.
-  - Descargar en segundo plano el detalle de cada orden:
+  - Precargar el detalle de cada orden:
     cabecera, dirección, partners/correo, operaciones y componentes.
   - Evitar que app/tecnico/ordenes/[id]/index.js tenga que esperar SAP
     cuando el técnico abre el detalle.
@@ -225,6 +225,108 @@ function pickFinishDate(baseOrden) {
     baseOrden?.BasicFinish ||
     null
   );
+}
+
+/*
+  Miguel Ángel Hernández Álvarez - 01/07/2026
+
+  Regla para guardar detalle offline:
+  No debemos saltar una orden únicamente porque SAP no regresó la fecha con
+  el nombre esperado. Si no hay fecha usable, se guarda parcial para que la
+  app pueda trabajar offline con lo que sí se pudo traer.
+
+  Solo se salta cuando sí hay fecha usable y claramente queda fuera de la
+  ventana offline.
+*/
+function parseDateForWindow(value) {
+  if (!value) return null;
+
+  if (value instanceof Date && Number.isFinite(value.getTime())) {
+    return value;
+  }
+
+  if (typeof value === "string" && value.startsWith("/Date(")) {
+    const ms = parseInt(value.replace("/Date(", "").replace(")/", ""), 10);
+    return Number.isNaN(ms) ? null : new Date(ms);
+  }
+
+  const d = new Date(value);
+  return Number.isFinite(d.getTime()) ? d : null;
+}
+
+function getUtcYmdForWindow(d) {
+  if (!d) return null;
+
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(
+    2,
+    "0",
+  )}-${String(d.getUTCDate()).padStart(2, "0")}`;
+}
+
+function getWindowDateCandidates(orderLike = {}) {
+  return [
+    orderLike?.start_date,
+    orderLike?.StartDate,
+    orderLike?.startDate,
+    orderLike?.fecha_inicio,
+    orderLike?.Inicio,
+    orderLike?.BasicStartDate,
+    orderLike?.BasicStart,
+    orderLike?.Start,
+
+    orderLike?.finish_date,
+    orderLike?.FinishDate,
+    orderLike?.finishDate,
+    orderLike?.fecha_fin,
+    orderLike?.Fin,
+    orderLike?.BasicFinDate,
+    orderLike?.BasicFinish,
+    orderLike?.Finish,
+  ]
+    .map(parseDateForWindow)
+    .filter(Boolean);
+}
+
+function isDateInsideWindow(d, win) {
+  const ds = getUtcYmdForWindow(d);
+  const s = getUtcYmdForWindow(win?.start);
+  const e = getUtcYmdForWindow(win?.end);
+
+  if (!ds) return false;
+  if (s && ds < s) return false;
+  if (e && ds > e) return false;
+
+  return true;
+}
+
+function shouldSaveDetailForOffline(orderLike, baseDate = new Date()) {
+  const dates = getWindowDateCandidates(orderLike);
+
+  if (!dates.length) {
+    return {
+      keep: true,
+      reason: "sin_fecha_usable",
+    };
+  }
+
+  /*
+    Conservamos compatibilidad con shouldCacheDetailByOrder, pero agregamos
+    fallback con más nombres de fecha para evitar saltar detalles válidos.
+  */
+  if (shouldCacheDetailByOrder(orderLike, baseDate)) {
+    return {
+      keep: true,
+      reason: "fecha_principal_en_ventana",
+    };
+  }
+
+  const win = buildOfflineWindow(baseDate);
+  const inside = dates.some((d) => isDateInsideWindow(d, win));
+
+  return {
+    keep: inside,
+    reason: inside ? "fecha_alternativa_en_ventana" : "fuera_ventana",
+  };
 }
 
 async function fetchBackendDetalle(orderId) {
@@ -563,22 +665,56 @@ export async function prefetchOrdenesTecnicoDetalles({
         const finishDate = pickFinishDate(baseOrden);
 
         const orderLikeForWindow = {
+          ...baseOrden,
           Orderid: orderIdReal,
+          OrderId: orderIdReal,
+
           start_date: startDate,
           StartDate: startDate,
+          startDate:
+            baseOrden?.startDate ||
+            baseOrden?.BasicStartDate ||
+            baseOrden?.BasicStart ||
+            startDate,
+          fecha_inicio: baseOrden?.fecha_inicio || baseOrden?.Inicio || startDate,
+          Inicio: baseOrden?.Inicio || baseOrden?.fecha_inicio || startDate,
+          BasicStartDate: baseOrden?.BasicStartDate || startDate,
+          BasicStart: baseOrden?.BasicStart || startDate,
+
           finish_date: finishDate,
           FinishDate: finishDate,
+          finishDate:
+            baseOrden?.finishDate ||
+            baseOrden?.BasicFinDate ||
+            baseOrden?.BasicFinish ||
+            finishDate,
+          fecha_fin: baseOrden?.fecha_fin || baseOrden?.Fin || finishDate,
+          Fin: baseOrden?.Fin || baseOrden?.fecha_fin || finishDate,
+          BasicFinDate: baseOrden?.BasicFinDate || finishDate,
+          BasicFinish: baseOrden?.BasicFinish || finishDate,
         };
 
-        if (!shouldCacheDetailByOrder(orderLikeForWindow, new Date())) {
+        const windowDecision = shouldSaveDetailForOffline(
+          orderLikeForWindow,
+          new Date(),
+        );
+
+        if (!windowDecision.keep) {
           console.log("[prefetch][skip fuera ventana]", {
             orderId: orderIdReal,
+            reason: windowDecision.reason,
             start_date: startDate,
             finish_date: finishDate,
           });
 
           skip++;
           continue;
+        }
+
+        if (windowDecision.reason === "sin_fecha_usable") {
+          console.log("[prefetch][sin fecha] Se guarda detalle parcial:", {
+            orderId: orderIdReal,
+          });
         }
 
         const shortTextValue =
@@ -738,8 +874,8 @@ export async function prefetchOrdenesTecnicoDetalles({
 // Objetivo:
 // - Cargar solo órdenes del día actual.
 // - Guardar lista del día dentro de la ventana offline.
-// - Precargar detalle básico y operaciones del día.
-// - NO cargar componentes en esta primera vista para evitar lentitud.
+// - Precargar detalle, operaciones y componentes del día.
+// - La precarga fuerte se hace aquí para que Inicio Técnico y Órdenes usen cache.
 // ==========================================
 function formatLocalYmdPreload(d = new Date()) {
   const x = new Date(d);
@@ -786,7 +922,7 @@ export async function prefetchOrdenesTecnicoDiaRapido(
   configurePrefetchRuntime(options);
 
   try {
-    console.log("[PREFETCH TECNICO][DIA] Iniciando precarga rápida del día...");
+    console.log("[PREFETCH TECNICO][DIA] Iniciando precarga completa del día...");
 
     const today = new Date();
     const todayStr = formatLocalYmdPreload(today);
@@ -843,9 +979,14 @@ export async function prefetchOrdenesTecnicoDiaRapido(
       orderIds: orderIdsDia,
       concurrency: 2,
 
-      // En la vista de preparación NO cargamos componentes.
-      // Los componentes se cargan después en segundo plano con runBackgroundSyncNow.
-      prefetchComponents: false,
+      /*
+        Miguel Ángel Hernández Álvarez - 01/07/2026
+
+        La pantalla de preparación debe dejar listos los componentes.
+        Ya NO se deben cargar después desde Inicio Técnico, Órdenes asignadas
+        ni runBackgroundSyncNow.
+      */
+      prefetchComponents: true,
 
       apiInstance: options?.apiInstance || getPrefetchApi(),
       ensureValidToken: options?.ensureValidToken || PREFETCH_ENSURE_VALID_TOKEN,
@@ -853,7 +994,7 @@ export async function prefetchOrdenesTecnicoDiaRapido(
 
     const result = {
       ok: true,
-      mode: "day_fast",
+      mode: "day_full",
       count: orderIdsDia.length,
       todayStr,
       window: {
@@ -881,8 +1022,9 @@ export async function prefetchOrdenesTecnicoDiaRapido(
 }
 
 // ==========================================
-// Función maestra para sincronizar órdenes del técnico
-// Se usa desde backgroundSync.js
+// Función maestra para precargar órdenes del técnico
+// Debe usarse solo desde la pantalla de precarga o procesos explícitos de recarga,
+// no desde Inicio Técnico como sincronización silenciosa.
 // ==========================================
 export async function prefetchOrdenesTecnico(userEmail = null, options = {}) {
   configurePrefetchRuntime(options);

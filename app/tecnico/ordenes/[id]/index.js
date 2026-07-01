@@ -838,6 +838,58 @@ function hasValidConsumibles(consumiblesRows) {
   });
 }
 
+
+/*
+  Miguel Ángel Hernández Álvarez - 01/07/2026
+
+  Valida si el detalle en cache ya tiene información suficiente para pintar
+  la vista sin volver a consultar SAP/API.
+
+  Esto evita dos problemas:
+  1) Si la precarga sí guardó detalle útil, esta pantalla trabaja 100% cache.
+  2) Si por algún motivo solo existe un respaldo parcial de la lista, se permite
+     consultar API como emergencia cuando hay internet.
+*/
+function hasUsefulCachedOrderDetail(cachedData) {
+  if (!cachedData || typeof cachedData !== "object") return false;
+
+  const hasOrderId = !!String(
+    cachedData?.Orderid ||
+      cachedData?.OrderId ||
+      cachedData?.orderid ||
+      "",
+  ).trim();
+
+  const hasOps =
+    Array.isArray(cachedData?.operaciones) && cachedData.operaciones.length > 0;
+
+  const hasComponents =
+    Array.isArray(cachedData?.componentes) && cachedData.componentes.length > 0;
+
+  const hasAddress = !!String(
+    cachedData?.direccion ||
+      cachedData?.partner_address ||
+      cachedData?.address ||
+      "",
+  ).trim();
+
+  const hasClient = !!String(
+    cachedData?.cliente ||
+      cachedData?.razon_social ||
+      cachedData?.partner_name ||
+      "",
+  ).trim();
+
+  const hasShortText = !!String(
+    cachedData?.ShortText ||
+      cachedData?.shortText ||
+      cachedData?.shorttext ||
+      "",
+  ).trim();
+
+  return hasOrderId && (hasOps || hasComponents || hasAddress || hasClient || hasShortText);
+}
+
 // CAMBIOS agregasdos por miguel
 /* ====================== Componente ====================== */
 export default function DetalleOrden() {
@@ -1391,23 +1443,33 @@ export default function DetalleOrden() {
           Miguel Ángel Hernández Álvarez - 01/07/2026
 
           Corrección consumo de datos:
-          Si la pantalla de precarga ya guardó el detalle completo de la orden,
-          esta vista NO debe volver a consultar SAP/API en segundo plano.
+          Si la pantalla de precarga ya guardó un detalle útil de la orden,
+          esta vista NO debe volver a consultar SAP/API.
 
-          Antes:
-          - Pintaba cache.
-          - Pero después seguía llamando:
-            /api/ordenes/sap/:id
-            WorkOrderHeaderSet
-            /addresses
-            /operaciones/sap/:id
-
-          Ahora:
-          - Si existe cache, se usa cache y se corta el flujo.
-          - Solo se consulta API como emergencia cuando no existe cache.
+          Si solamente existe un cache parcial, se pinta primero lo guardado
+          y se permite consultar API como emergencia cuando hay internet.
         */
-        setLoading(false);
-        return;
+        if (hasUsefulCachedOrderDetail(cached.data)) {
+          console.log("[DETALLE][CACHE_ONLY] Usando detalle precargado. No se consulta API.", {
+            orderId: cachedOrderId,
+            operaciones: Array.isArray(cached?.data?.operaciones)
+              ? cached.data.operaciones.length
+              : 0,
+            componentes: Array.isArray(cached?.data?.componentes)
+              ? cached.data.componentes.length
+              : 0,
+          });
+
+          setLoading(false);
+          return;
+        }
+
+        console.log("[DETALLE][CACHE_PARTIAL] Cache parcial. Se consulta API como respaldo.", {
+          orderId: cachedOrderId,
+          operaciones: Array.isArray(cached?.data?.operaciones)
+            ? cached.data.operaciones.length
+            : 0,
+          });
       }
 
       const net = await NetInfo.fetch();
