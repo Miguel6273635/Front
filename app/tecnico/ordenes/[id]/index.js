@@ -1387,10 +1387,27 @@ export default function DetalleOrden() {
         if (cc) setClienteCargo(cc);
         if (av) setAvisoCliente(av);
 
-        // ✅ Importante para segundo plano:
-        // Si ya existe detalle en caché, pintamos la pantalla de inmediato.
-        // SAP se sigue consultando abajo, pero ya no bloquea la UI con "Cargando orden...".
+        /*
+          Miguel Ángel Hernández Álvarez - 01/07/2026
+
+          Corrección consumo de datos:
+          Si la pantalla de precarga ya guardó el detalle completo de la orden,
+          esta vista NO debe volver a consultar SAP/API en segundo plano.
+
+          Antes:
+          - Pintaba cache.
+          - Pero después seguía llamando:
+            /api/ordenes/sap/:id
+            WorkOrderHeaderSet
+            /addresses
+            /operaciones/sap/:id
+
+          Ahora:
+          - Si existe cache, se usa cache y se corta el flujo.
+          - Solo se consulta API como emergencia cuando no existe cache.
+        */
         setLoading(false);
+        return;
       }
 
       const net = await NetInfo.fetch();
@@ -1933,23 +1950,20 @@ export default function DetalleOrden() {
         return;
       }
 
-      const net = await NetInfo.fetch();
-      const isOnline = !!(
-        net?.isConnected && net?.isInternetReachable !== false
-      );
+      /*
+        Miguel Ángel Hernández Álvarez - 01/07/2026
 
-      if (isOnline) {
-        const res = await api.get(
-          `/api/operaciones/ordenes/${Orderid}/operaciones/${Activity}/componentes`,
-        );
+        Corrección consumo de datos:
+        Los componentes ya deben venir desde la pantalla de precarga.
+        Por eso, al abrir materiales:
 
-        const data = Array.isArray(res.data) ? res.data : [];
-        setCompList(data);
+        1) Primero se lee AsyncStorage por operación.
+        2) Después se busca dentro del detalle offline de la orden.
+        3) Solo si NO existe nada en cache, se hace una consulta de emergencia.
 
-        await saveOfflineComponents(Orderid, Activity, data);
-        await mergeComponentsIntoOrderCache(Orderid, Activity, data);
-        return;
-      }
+        Con esto evitamos que la vista de detalle dispare varias peticiones:
+        /api/operaciones/ordenes/:orderId/operaciones/:activity/componentes
+      */
 
       const offlineData = await loadOfflineComponents(Orderid, Activity);
 
@@ -1966,10 +1980,36 @@ export default function DetalleOrden() {
         return;
       }
 
-      Alert.alert(
-        "Materiales",
-        "No hay conexión y esta operación no tiene materiales guardados offline.",
+      const net = await NetInfo.fetch();
+      const isOnline = !!(
+        net?.isConnected && net?.isInternetReachable !== false
       );
+
+      if (!isOnline) {
+        Alert.alert(
+          "Materiales",
+          "No hay conexión y esta operación no tiene materiales guardados offline.",
+        );
+        return;
+      }
+
+      console.log(
+        "[DETALLE][COMPONENTES] Consulta de emergencia porque no existe cache:",
+        {
+          Orderid,
+          Activity,
+        },
+      );
+
+      const res = await api.get(
+        `/api/operaciones/ordenes/${Orderid}/operaciones/${Activity}/componentes`,
+      );
+
+      const data = Array.isArray(res.data) ? res.data : [];
+      setCompList(data);
+
+      await saveOfflineComponents(Orderid, Activity, data);
+      await mergeComponentsIntoOrderCache(Orderid, Activity, data);
     } catch (error) {
       console.error(
         "Error al obtener componentes:",
@@ -2001,7 +2041,7 @@ export default function DetalleOrden() {
         } else {
           Alert.alert(
             "Materiales",
-            "No se pudieron obtener los materiales de esta operación.",
+            "No se encontraron materiales guardados para esta operación.",
           );
         }
       }

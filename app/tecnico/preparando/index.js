@@ -50,6 +50,23 @@ const PRELOAD_DONE_KEY = (userEmail) =>
     .toLowerCase()
     .trim()}`;
 
+/*
+  Miguel Ángel Hernández Álvarez - 01/07/2026
+
+  Regla de precarga diaria:
+  La precarga completa del técnico solo debe ejecutarse una vez por día
+  por usuario. Si ya se realizó hoy, esta pantalla solo lee cache y permite
+  entrar a Inicio Técnico sin volver a consumir API/SAP.
+*/
+function getTodayKey() {
+  const d = new Date();
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+
+  return `${yyyy}-${mm}-${dd}`;
+}
+
 const STEPS = [
   {
     key: "network",
@@ -78,16 +95,16 @@ const STEPS = [
   },
   {
     key: "components",
-    label: "Programando componentes",
+    label: "Precargando componentes",
     description:
-      "Los componentes se seguirán cargando en segundo plano sin bloquear la app.",
+      "Guardando componentes por operación para evitar peticiones dentro del detalle.",
     percent: 82,
   },
   {
     key: "catalogs",
-    label: "Programando consumibles",
+    label: "Precargando consumibles",
     description:
-      "Los consumibles se actualizarán en segundo plano mientras usa la app.",
+      "Actualizando consumibles durante la precarga, no en Inicio Técnico.",
     percent: 94,
   },
   {
@@ -238,9 +255,40 @@ export default function PreparandoTecnicoScreen() {
 
   const markPreloadDone = async () => {
     try {
-      await AsyncStorage.setItem(PRELOAD_DONE_KEY(userEmail), "true");
+      const payload = {
+        done: true,
+        date: getTodayKey(),
+        doneAt: Date.now(),
+        userEmail,
+      };
+
+      await AsyncStorage.setItem(
+        PRELOAD_DONE_KEY(userEmail),
+        JSON.stringify(payload),
+      );
     } catch (e) {
       console.log("[PRELOAD TECNICO] Error guardando bandera:", e?.message || e);
+    }
+  };
+
+  const wasPreloadDoneToday = async () => {
+    try {
+      const raw = await AsyncStorage.getItem(PRELOAD_DONE_KEY(userEmail));
+
+      if (!raw) return false;
+
+      /*
+        Compatibilidad con versiones anteriores:
+        antes se guardaba "true". Eso ya no es suficiente para bloquear por día,
+        por eso solo aceptamos JSON con date.
+      */
+      if (raw === "true") return false;
+
+      const parsed = JSON.parse(raw);
+
+      return parsed?.done === true && parsed?.date === getTodayKey();
+    } catch {
+      return false;
     }
   };
 
@@ -279,6 +327,30 @@ export default function PreparandoTecnicoScreen() {
     try {
       setSyncing(true);
       setDone(false);
+
+      const alreadyDoneToday = await wasPreloadDoneToday();
+
+      if (alreadyDoneToday && !retry) {
+        setProgress({
+          key: "done_today",
+          label: "Información lista",
+          description:
+            "La precarga de hoy ya fue realizada. Se usará la información guardada.",
+          percent: 100,
+        });
+
+        setMessage(
+          "La precarga de hoy ya se realizó. No se volverán a consumir datos hasta mañana.",
+        );
+
+        await loadLocalSummary();
+
+        if (!mountedRef.current) return;
+
+        setDone(true);
+        setSyncing(false);
+        return;
+      }
 
       setProgress(STEPS[0]);
       setMessage("Validando conexión del dispositivo...");
@@ -330,19 +402,23 @@ export default function PreparandoTecnicoScreen() {
       );
 
       /*
-        Precarga rápida:
-        - Solo trae órdenes del día.
-        - Guarda detalle básico y operaciones del día.
-        - NO carga componentes.
-        - NO carga consumibles.
-        Lo pesado queda para runBackgroundSyncNow en segundo plano.
+        Miguel Ángel Hernández Álvarez - 01/07/2026
+
+        Esta es la precarga principal del día.
+        La idea es que la pantalla de Inicio Técnico y el detalle de orden
+        trabajen con cache y no vuelvan a disparar peticiones masivas.
+
+        Nota:
+        Si prefetchOrdenesTecnicoDiaRapido todavía no carga todos los
+        componentes/consumibles, abajo ejecutamos runBackgroundSyncNow pero
+        ESPERÁNDOLO dentro de esta pantalla de precarga, no después en Inicio.
       */
       const result = await prefetchOrdenesTecnicoDiaRapido(userEmail, {
         apiInstance: api,
         ensureValidToken,
       });
 
-      console.log("[PRELOAD TECNICO] Resultado precarga rápida:", result);
+      console.log("[PRELOAD TECNICO] Resultado precarga del día:", result);
 
       if (!mountedRef.current) return;
 
@@ -355,13 +431,35 @@ export default function PreparandoTecnicoScreen() {
       setMessage(
         `Detalles del día guardados: ${Number(
           detalleResult?.ok || 0,
-        )}. Componentes se cargarán en segundo plano.`,
+        )}. Precargando componentes dentro de esta pantalla...`,
       );
       await wait(200);
 
+      /*
+        Antes esto se lanzaba con .catch() en segundo plano y el usuario podía
+        entrar a Inicio Técnico mientras todavía se consumían datos.
+
+        Ahora se espera aquí. Así todo el consumo fuerte se queda en la pantalla
+        de precarga.
+      */
+      try {
+        const fullSyncResult = await runBackgroundSyncNow({
+          source: "tecnico_preload_full_waited",
+        });
+
+        console.log("[PRELOAD TECNICO] Sync completa esperada:", fullSyncResult);
+
+        applyResultSummary(fullSyncResult);
+      } catch (syncErr) {
+        console.log(
+          "[PRELOAD TECNICO] Sync completa no pudo terminar:",
+          syncErr?.message || syncErr,
+        );
+      }
+
       setProgress(STEPS[5]);
       setMessage(
-        "Consumibles y detalles de otros días se actualizarán en segundo plano.",
+        "Consumibles y componentes actualizados. Leyendo resumen local...",
       );
       await wait(200);
 
@@ -369,19 +467,10 @@ export default function PreparandoTecnicoScreen() {
 
       setProgress(STEPS[6]);
       setMessage(
-        "Información del día lista. Puede iniciar; lo demás seguirá cargando en segundo plano.",
+        "Información del día lista. Puede iniciar; no se volverá a precargar hasta mañana.",
       );
 
       await markPreloadDone();
-
-      runBackgroundSyncNow({
-        source: "tecnico_preload_full_background",
-      }).catch((e) => {
-        console.log(
-          "[PRELOAD TECNICO] Sync completa en segundo plano error:",
-          e?.message || e,
-        );
-      });
 
       if (!mountedRef.current) return;
 
