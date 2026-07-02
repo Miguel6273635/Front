@@ -21,7 +21,7 @@ import { useAuth } from "../../../src/context/AuthContext";
 import api from "../../../src/services/api";
 
 import { runPendingSendsOnly } from "../../../src/offline/backgroundSync";
-import { prefetchOrdenesTecnicoDiaRapido } from "../../../src/offline/prefetchOrdenesTecnico";
+import { prefetchOrdenesTecnico } from "../../../src/offline/prefetchOrdenesTecnico";
 import {
   loadOrdenesTecnicoList,
   getOrdenesTecnicoLastSync,
@@ -161,7 +161,11 @@ function formatDateTime(value) {
   }
 }
 function getTecnicoPrefetchFromResult(result) {
-  if (result?.mode === "day_fast" || result?.mode === "day_full") {
+  if (
+    result?.mode === "day_fast" ||
+    result?.mode === "day_full" ||
+    result?.detalleResult
+  ) {
     return result;
   }
 
@@ -462,32 +466,32 @@ export default function PreparandoTecnicoScreen() {
       await wait(200);
 
       setProgress(STEPS[2]);
-      setMessage("Precargando órdenes del día asignadas al técnico...");
+      setMessage("Precargando órdenes asignadas al técnico...");
       await wait(200);
 
       setProgress(STEPS[3]);
       setMessage(
-        "Precargando detalle básico y operaciones de las órdenes del día...",
+        "Precargando detalle, operaciones y componentes de las órdenes asignadas...",
       );
 
       /*
         Miguel Ángel Hernández Álvarez - 01/07/2026
 
-        Esta es la precarga principal del día.
-        La idea es que la pantalla de Inicio Técnico y el detalle de orden
-        trabajen con cache y no vuelvan a disparar peticiones masivas.
+        Esta es la precarga principal masiva.
+        Aquí se cargan órdenes, detalles, operaciones y componentes usando
+        una sola ejecución de prefetchOrdenesTecnico.
 
-        Nota:
-        Si prefetchOrdenesTecnicoDiaRapido todavía no carga todos los
-        componentes/consumibles, abajo ejecutamos runBackgroundSyncNow pero
-        ESPERÁNDOLO dentro de esta pantalla de precarga, no después en Inicio.
+        Importante:
+        Ya no ejecutamos runBackgroundSyncNow aquí porque duplica la precarga.
+        Después de esta precarga solo revisamos/envíamos pendientes con
+        runPendingSendsOnly, sin volver a traer datos masivos.
       */
-      const result = await prefetchOrdenesTecnicoDiaRapido(userEmail, {
+      const result = await prefetchOrdenesTecnico(userEmail, {
         apiInstance: api,
         ensureValidToken,
       });
 
-      console.log("[PRELOAD TECNICO] Resultado precarga del día:", result);
+      console.log("[PRELOAD TECNICO] Resultado precarga completa:", result);
 
       if (!mountedRef.current) return;
 
@@ -498,80 +502,70 @@ export default function PreparandoTecnicoScreen() {
 
       setProgress(STEPS[4]);
       setMessage(
-        `Detalles del día guardados: ${Number(
+        `Detalles guardados: ${Number(
           detalleResult?.ok || 0,
         )}. Precargando componentes dentro de esta pantalla...`,
       );
       await wait(200);
 
       /*
-        Antes esto se lanzaba con .catch() en segundo plano y el usuario podía
-        entrar a Inicio Técnico mientras todavía se consumían datos.
+        Miguel Ángel Hernández Álvarez - 01/07/2026
 
-        Ahora se espera aquí. Así todo el consumo fuerte se queda en la pantalla
-        de precarga.
-
-        Usamos force:true porque app/index o el BackgroundFetch pueden estar
-        revisando envíos pendientes. La precarga visible tiene prioridad para
-        que no se quede en sync_already_running.
+        Aquí solo revisamos/envíamos pendientes.
+        No usamos runBackgroundSyncNow porque volvería a ejecutar precarga
+        completa y duplicaría órdenes, detalles, operaciones y componentes.
       */
-     /*
-  Miguel Ángel Hernández Álvarez - 01/07/2026
+      let preloadCompletedOk = false;
 
-  Corrección rendimiento precarga:
-  Ya NO ejecutamos runBackgroundSyncNow aquí porque vuelve a lanzar
-  precarga completa y puede duplicar:
-  - órdenes
-  - detalles
-  - operaciones
-  - componentes
-  - consumibles
+      try {
+        const pendingOnlyResult = await runPendingSendsOnly({
+          source: "tecnico_preload_pending_only",
+          force: true,
+        });
 
-  En esta pantalla ya se ejecutó prefetchOrdenesTecnicoDiaRapido().
-  Aquí solo revisamos/envíamos pendientes, sin volver a precargar.
-*/
-let preloadCompletedOk = false;
+        console.log(
+          "[PRELOAD TECNICO] Pendientes revisados sin precargar de nuevo:",
+          pendingOnlyResult,
+        );
+      } catch (pendingErr) {
+        console.log(
+          "[PRELOAD TECNICO] No se pudieron revisar pendientes:",
+          pendingErr?.message || pendingErr,
+        );
+      }
 
-try {
-  const pendingOnlyResult = await runPendingSendsOnly({
-    source: "tecnico_preload_pending_only",
-    force: true,
-  });
+      /*
+        No marcamos la precarga como terminada si hubo fallos.
+        Así evitamos perder datos en la primera precarga.
+      */
+      const ordenesCount = Number(tecnicoPrefetch?.count || 0);
+      const detalleOkCount = Number(detalleResult?.ok || 0);
+      const detalleSkipCount = Number(detalleResult?.skip || 0);
+      const detalleFailCount = Number(detalleResult?.fail || 0);
+      const componentFailCount = Number(detalleResult?.components?.fail || 0);
 
-  console.log(
-    "[PRELOAD TECNICO] Pendientes revisados sin precargar de nuevo:",
-    pendingOnlyResult,
-  );
-} catch (pendingErr) {
-  console.log(
-    "[PRELOAD TECNICO] No se pudieron revisar pendientes:",
-    pendingErr?.message || pendingErr,
-  );
-}
+      const detallesCompletos =
+        ordenesCount === 0 || detalleOkCount + detalleSkipCount >= ordenesCount;
 
-/*
-  No marcamos la precarga como terminada si hubo fallos.
-  Así evitamos perder datos en la primera precarga.
-*/
-const detalleFailCount = Number(detalleResult?.fail || 0);
-const componentFailCount = Number(detalleResult?.components?.fail || 0);
+      preloadCompletedOk =
+        result?.ok === true &&
+        detallesCompletos &&
+        detalleFailCount === 0 &&
+        componentFailCount === 0;
 
-preloadCompletedOk =
-  result?.ok === true &&
-  detalleFailCount === 0 &&
-  componentFailCount === 0;
-
-console.log("[PRELOAD TECNICO] Validación final de precarga:", {
-  ok: result?.ok,
-  detalleFailCount,
-  componentFailCount,
-  preloadCompletedOk,
-});
+      console.log("[PRELOAD TECNICO] Validación final de precarga:", {
+        ok: result?.ok,
+        ordenesCount,
+        detalleOkCount,
+        detalleSkipCount,
+        detalleFailCount,
+        componentFailCount,
+        detallesCompletos,
+        preloadCompletedOk,
+      });
 
       setProgress(STEPS[5]);
-      setMessage(
-        "Consumibles y componentes actualizados. Leyendo resumen local...",
-      );
+      setMessage("Componentes actualizados. Leyendo resumen local...");
       await wait(200);
 
       await loadLocalSummary();
@@ -593,22 +587,22 @@ console.log("[PRELOAD TECNICO] Validación final de precarga:", {
         durationText,
       });
 
-    if (preloadCompletedOk) {
-  setMessage(
-    "Información del día lista. Puede iniciar; no se volverá a precargar hasta mañana.",
-  );
+      if (preloadCompletedOk) {
+        setMessage(
+          "Información lista. Puede iniciar; no se volverá a precargar hasta mañana.",
+        );
 
-  await markPreloadDone({
-    durationMs,
-    durationText,
-    startedAt,
-    finishedAt,
-  });
-} else {
-  setMessage(
-    "Puede iniciar con la información guardada. La precarga no se marcó como terminada porque faltó información. Se volverá a intentar después.",
-  );
-}
+        await markPreloadDone({
+          durationMs,
+          durationText,
+          startedAt,
+          finishedAt,
+        });
+      } else {
+        setMessage(
+          "Puede iniciar con la información guardada. La precarga no se marcó como terminada porque faltó información. Se volverá a intentar después.",
+        );
+      }
 
       if (!mountedRef.current) return;
 
