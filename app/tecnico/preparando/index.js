@@ -119,6 +119,16 @@ function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function msToHMS(ms) {
+  const total = Math.max(0, Math.floor(Number(ms || 0) / 1000));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  const pad = (n) => String(n).padStart(2, "0");
+
+  return `${pad(h)}:${pad(m)}:${pad(s)}`;
+}
+
 function resolveUserEmail(user) {
   return String(
     user?.correo ||
@@ -186,6 +196,18 @@ export default function PreparandoTecnicoScreen() {
   const [syncing, setSyncing] = useState(false);
   const [online, setOnline] = useState(null);
 
+  /*
+    Miguel Ángel Hernández Álvarez - 01/07/2026
+
+    Cronómetro de precarga:
+    - Muestra en vivo cuánto tarda la precarga.
+    - Al terminar, deja visible el tiempo total.
+    - Si la precarga de hoy ya estaba hecha, muestra el último tiempo guardado.
+  */
+  const [preloadStartedAt, setPreloadStartedAt] = useState(null);
+  const [preloadElapsedMs, setPreloadElapsedMs] = useState(0);
+  const [preloadFinishedText, setPreloadFinishedText] = useState("");
+
   const [summary, setSummary] = useState({
     ordenes: 0,
     detalles: 0,
@@ -206,6 +228,16 @@ export default function PreparandoTecnicoScreen() {
     outputRange: ["0%", "100%"],
     extrapolate: "clamp",
   });
+
+  useEffect(() => {
+    if (!preloadStartedAt) return;
+
+    const timer = setInterval(() => {
+      setPreloadElapsedMs(Date.now() - preloadStartedAt);
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [preloadStartedAt]);
 
   const setProgress = (step) => {
     if (!mountedRef.current) return;
@@ -253,13 +285,17 @@ export default function PreparandoTecnicoScreen() {
     }
   };
 
-  const markPreloadDone = async () => {
+  const markPreloadDone = async (timingInfo = {}) => {
     try {
       const payload = {
         done: true,
         date: getTodayKey(),
         doneAt: Date.now(),
         userEmail,
+        durationMs: Number(timingInfo?.durationMs || 0),
+        durationText: timingInfo?.durationText || "",
+        startedAt: timingInfo?.startedAt || null,
+        finishedAt: timingInfo?.finishedAt || null,
       };
 
       await AsyncStorage.setItem(
@@ -271,25 +307,34 @@ export default function PreparandoTecnicoScreen() {
     }
   };
 
-  const wasPreloadDoneToday = async () => {
+  const getPreloadDoneInfoToday = async () => {
     try {
       const raw = await AsyncStorage.getItem(PRELOAD_DONE_KEY(userEmail));
 
-      if (!raw) return false;
+      if (!raw) return null;
 
       /*
         Compatibilidad con versiones anteriores:
         antes se guardaba "true". Eso ya no es suficiente para bloquear por día,
         por eso solo aceptamos JSON con date.
       */
-      if (raw === "true") return false;
+      if (raw === "true") return null;
 
       const parsed = JSON.parse(raw);
 
-      return parsed?.done === true && parsed?.date === getTodayKey();
+      if (parsed?.done === true && parsed?.date === getTodayKey()) {
+        return parsed;
+      }
+
+      return null;
     } catch {
-      return false;
+      return null;
     }
+  };
+
+  const wasPreloadDoneToday = async () => {
+    const info = await getPreloadDoneInfoToday();
+    return !!info;
   };
 
   const applyResultSummary = (result) => {
@@ -324,11 +369,14 @@ export default function PreparandoTecnicoScreen() {
 
     startedRef.current = true;
 
+    let startedAt = null;
+
     try {
       setSyncing(true);
       setDone(false);
 
-      const alreadyDoneToday = await wasPreloadDoneToday();
+      const preloadInfoToday = await getPreloadDoneInfoToday();
+      const alreadyDoneToday = !!preloadInfoToday;
 
       if (alreadyDoneToday && !retry) {
         setProgress({
@@ -342,6 +390,16 @@ export default function PreparandoTecnicoScreen() {
         setMessage(
           "La precarga de hoy ya se realizó. No se volverán a consumir datos hasta mañana.",
         );
+
+        if (preloadInfoToday?.durationText) {
+          setPreloadFinishedText(preloadInfoToday.durationText);
+          setPreloadElapsedMs(Number(preloadInfoToday.durationMs || 0));
+        } else {
+          setPreloadFinishedText("");
+          setPreloadElapsedMs(0);
+        }
+
+        setPreloadStartedAt(null);
 
         await loadLocalSummary();
 
@@ -392,6 +450,11 @@ export default function PreparandoTecnicoScreen() {
         setDone(true);
         return;
       }
+
+      startedAt = Date.now();
+      setPreloadStartedAt(startedAt);
+      setPreloadElapsedMs(0);
+      setPreloadFinishedText("");
 
       setProgress(STEPS[1]);
       setMessage("Revisando pendientes locales por enviar a SAP...");
@@ -478,14 +541,34 @@ export default function PreparandoTecnicoScreen() {
 
       await loadLocalSummary();
 
+      if (!mountedRef.current) return;
+
       setProgress(STEPS[6]);
+
+      const finishedAt = Date.now();
+      const durationMs = startedAt ? finishedAt - startedAt : 0;
+      const durationText = msToHMS(durationMs);
+
+      setPreloadStartedAt(null);
+      setPreloadElapsedMs(durationMs);
+      setPreloadFinishedText(durationText);
+
+      console.log("[PRECARGA] Tiempo total:", {
+        durationMs,
+        durationText,
+      });
 
       if (fullPreloadOk) {
         setMessage(
           "Información del día lista. Puede iniciar; no se volverá a precargar hasta mañana.",
         );
 
-        await markPreloadDone();
+        await markPreloadDone({
+          durationMs,
+          durationText,
+          startedAt,
+          finishedAt,
+        });
       } else {
         setMessage(
           "Puede iniciar con la información guardada. La precarga completa no se marcó como terminada y se volverá a intentar después.",
@@ -499,6 +582,14 @@ export default function PreparandoTecnicoScreen() {
       console.log("[PRELOAD TECNICO] Error general:", e?.message || e);
 
       if (!mountedRef.current) return;
+
+      if (startedAt) {
+        const failedDurationMs = Date.now() - startedAt;
+        setPreloadElapsedMs(failedDurationMs);
+        setPreloadFinishedText(msToHMS(failedDurationMs));
+      }
+
+      setPreloadStartedAt(null);
 
       setProgress({
         key: "partial",
@@ -524,13 +615,16 @@ export default function PreparandoTecnicoScreen() {
   };
 
   const goHome = async () => {
-  router.replace("/tecnico?ready=1");
-};
+    router.replace("/tecnico?ready=1");
+  };
 
   const retryPreload = async () => {
     startedRef.current = false;
     setDone(false);
     setPercent(0);
+    setPreloadStartedAt(null);
+    setPreloadElapsedMs(0);
+    setPreloadFinishedText("");
     progressAnim.setValue(0);
     await startPreload({ retry: true });
   };
@@ -575,6 +669,37 @@ export default function PreparandoTecnicoScreen() {
           </View>
 
           <Text style={styles.percent}>{Math.round(percent)}%</Text>
+
+          <View style={styles.timerBox}>
+            <View style={styles.timerIcon}>
+              <Ionicons
+                name={
+                  preloadFinishedText && !preloadStartedAt
+                    ? "checkmark-done-outline"
+                    : "timer-outline"
+                }
+                size={18}
+                color={
+                  preloadFinishedText && !preloadStartedAt
+                    ? FIORI.ok
+                    : FIORI.brand
+                }
+              />
+            </View>
+
+            <View style={{ flex: 1 }}>
+              <Text style={styles.timerLabel}>
+                {preloadFinishedText && !preloadStartedAt
+                  ? "Precarga terminada en"
+                  : "Tiempo de precarga"}
+              </Text>
+              <Text style={styles.timerValue}>
+                {preloadFinishedText && !preloadStartedAt
+                  ? preloadFinishedText
+                  : msToHMS(preloadElapsedMs)}
+              </Text>
+            </View>
+          </View>
 
           <Text style={styles.message}>{message}</Text>
 
@@ -812,6 +937,39 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: FIORI.brandDark,
     fontWeight: "900",
+  },
+  timerBox: {
+    marginTop: 12,
+    width: "100%",
+    borderWidth: 1,
+    borderColor: FIORI.borderSoft,
+    backgroundColor: FIORI.surfaceAlt,
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  timerIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: FIORI.brandSoft,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  timerLabel: {
+    color: FIORI.textMuted,
+    fontSize: 12,
+    fontWeight: "800",
+  },
+  timerValue: {
+    marginTop: 2,
+    color: FIORI.text,
+    fontSize: 18,
+    fontWeight: "900",
+    letterSpacing: 0.4,
   },
   message: {
     marginTop: 12,
