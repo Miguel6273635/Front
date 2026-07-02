@@ -20,7 +20,7 @@ import Header from "../../../src/components/Header";
 import { useAuth } from "../../../src/context/AuthContext";
 import api from "../../../src/services/api";
 
-import { runBackgroundSyncNow } from "../../../src/offline/backgroundSync";
+import { runPendingSendsOnly } from "../../../src/offline/backgroundSync";
 import { prefetchOrdenesTecnicoDiaRapido } from "../../../src/offline/prefetchOrdenesTecnico";
 import {
   loadOrdenesTecnicoList,
@@ -160,9 +160,10 @@ function formatDateTime(value) {
     return "Sin sincronización previa";
   }
 }
-
 function getTecnicoPrefetchFromResult(result) {
-  if (result?.mode === "day_fast") return result;
+  if (result?.mode === "day_fast" || result?.mode === "day_full") {
+    return result;
+  }
 
   return (
     result?.prefetchResult?.tecnicoPrefetchResult ||
@@ -514,24 +515,58 @@ export default function PreparandoTecnicoScreen() {
         revisando envíos pendientes. La precarga visible tiene prioridad para
         que no se quede en sync_already_running.
       */
-      let fullPreloadOk = false;
+     /*
+  Miguel Ángel Hernández Álvarez - 01/07/2026
 
-      try {
-        const fullSyncResult = await runBackgroundSyncNow({
-          source: "tecnico_preload_full_waited",
-          force: true,
-        });
+  Corrección rendimiento precarga:
+  Ya NO ejecutamos runBackgroundSyncNow aquí porque vuelve a lanzar
+  precarga completa y puede duplicar:
+  - órdenes
+  - detalles
+  - operaciones
+  - componentes
+  - consumibles
 
-        console.log("[PRELOAD TECNICO] Sync completa esperada:", fullSyncResult);
+  En esta pantalla ya se ejecutó prefetchOrdenesTecnicoDiaRapido().
+  Aquí solo revisamos/envíamos pendientes, sin volver a precargar.
+*/
+let preloadCompletedOk = false;
 
-        fullPreloadOk = !!fullSyncResult?.ok;
-        applyResultSummary(fullSyncResult);
-      } catch (syncErr) {
-        console.log(
-          "[PRELOAD TECNICO] Sync completa no pudo terminar:",
-          syncErr?.message || syncErr,
-        );
-      }
+try {
+  const pendingOnlyResult = await runPendingSendsOnly({
+    source: "tecnico_preload_pending_only",
+    force: true,
+  });
+
+  console.log(
+    "[PRELOAD TECNICO] Pendientes revisados sin precargar de nuevo:",
+    pendingOnlyResult,
+  );
+} catch (pendingErr) {
+  console.log(
+    "[PRELOAD TECNICO] No se pudieron revisar pendientes:",
+    pendingErr?.message || pendingErr,
+  );
+}
+
+/*
+  No marcamos la precarga como terminada si hubo fallos.
+  Así evitamos perder datos en la primera precarga.
+*/
+const detalleFailCount = Number(detalleResult?.fail || 0);
+const componentFailCount = Number(detalleResult?.components?.fail || 0);
+
+preloadCompletedOk =
+  result?.ok === true &&
+  detalleFailCount === 0 &&
+  componentFailCount === 0;
+
+console.log("[PRELOAD TECNICO] Validación final de precarga:", {
+  ok: result?.ok,
+  detalleFailCount,
+  componentFailCount,
+  preloadCompletedOk,
+});
 
       setProgress(STEPS[5]);
       setMessage(
@@ -558,22 +593,22 @@ export default function PreparandoTecnicoScreen() {
         durationText,
       });
 
-      if (fullPreloadOk) {
-        setMessage(
-          "Información del día lista. Puede iniciar; no se volverá a precargar hasta mañana.",
-        );
+    if (preloadCompletedOk) {
+  setMessage(
+    "Información del día lista. Puede iniciar; no se volverá a precargar hasta mañana.",
+  );
 
-        await markPreloadDone({
-          durationMs,
-          durationText,
-          startedAt,
-          finishedAt,
-        });
-      } else {
-        setMessage(
-          "Puede iniciar con la información guardada. La precarga completa no se marcó como terminada y se volverá a intentar después.",
-        );
-      }
+  await markPreloadDone({
+    durationMs,
+    durationText,
+    startedAt,
+    finishedAt,
+  });
+} else {
+  setMessage(
+    "Puede iniciar con la información guardada. La precarga no se marcó como terminada porque faltó información. Se volverá a intentar después.",
+  );
+}
 
       if (!mountedRef.current) return;
 

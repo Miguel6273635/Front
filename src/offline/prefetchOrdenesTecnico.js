@@ -538,12 +538,69 @@ async function saveOfflineComponents(orderId, activity, data) {
     return false;
   }
 }
+async function loadOfflineComponentsForPrefetch(orderId, activity) {
+  try {
+    const raw = await AsyncStorage.getItem(COMPONENTS_KEY(orderId, activity));
 
+    /*
+      Importante:
+      raw !== null significa que esa operación ya fue consultada antes.
+      Puede venir [] y eso también es válido, porque hay operaciones sin materiales.
+    */
+    if (raw === null) {
+      return {
+        exists: false,
+        data: [],
+      };
+    }
+
+    const parsed = JSON.parse(raw);
+
+    return {
+      exists: true,
+      data: Array.isArray(parsed) ? parsed : [],
+    };
+  } catch {
+    return {
+      exists: false,
+      data: [],
+    };
+  }
+}
 async function fetchComponentesOperacion(orderId, activity) {
   const cleanOrderId = String(orderId || "").trim();
   const cleanActivity = String(activity || "").trim();
 
-  if (!cleanOrderId || !cleanActivity) return [];
+  if (!cleanOrderId || !cleanActivity) {
+    return {
+      ok: false,
+      skipped: false,
+      activity: cleanActivity,
+      data: [],
+      reason: "missing_order_or_activity",
+    };
+  }
+
+  const cached = await loadOfflineComponentsForPrefetch(
+    cleanOrderId,
+    cleanActivity,
+  );
+
+  if (cached.exists) {
+    console.log("[prefetch][componentes] ya estaban en cache, se omite API:", {
+      orderId: cleanOrderId,
+      activity: cleanActivity,
+      count: cached.data.length,
+    });
+
+    return {
+      ok: true,
+      skipped: true,
+      activity: cleanActivity,
+      data: cached.data,
+      reason: "cached",
+    };
+  }
 
   const label = `componentes:${cleanOrderId}:${cleanActivity}`;
 
@@ -558,9 +615,25 @@ async function fetchComponentesOperacion(orderId, activity) {
 
     const data = Array.isArray(res.data) ? res.data : [];
 
-    await saveOfflineComponents(cleanOrderId, cleanActivity, data);
+ const saved = await saveOfflineComponents(cleanOrderId, cleanActivity, data);
 
-    return data;
+if (!saved) {
+  return {
+    ok: false,
+    skipped: false,
+    activity: cleanActivity,
+    data: [],
+    reason: "save_cache_error",
+  };
+}
+
+return {
+  ok: true,
+  skipped: false,
+  activity: cleanActivity,
+  data,
+  reason: "api",
+};
   } catch (e) {
     console.log(
       "[prefetch][componentes] no se pudieron cargar:",
@@ -569,11 +642,18 @@ async function fetchComponentesOperacion(orderId, activity) {
       e?.response?.data || e?.message || e,
     );
 
-    return [];
+    return {
+      ok: false,
+      skipped: false,
+      activity: cleanActivity,
+      data: [],
+      reason: "api_error",
+      error: e?.message || String(e),
+    };
   }
 }
 
-async function prefetchComponentesOrden(orderId, ops = [], concurrency = 2) {
+async function prefetchComponentesOrden(orderId, ops = [], concurrency = 3) {
   const actividades = [
     ...new Set(
       (Array.isArray(ops) ? ops : [])
@@ -583,22 +663,35 @@ async function prefetchComponentesOrden(orderId, ops = [], concurrency = 2) {
   ];
 
   if (!actividades.length) {
-    return { ok: 0, fail: 0, total: 0 };
+    return {
+      ok: 0,
+      fail: 0,
+      skipped: 0,
+      total: 0,
+    };
   }
 
   let i = 0;
   let ok = 0;
   let fail = 0;
+  let skipped = 0;
 
   async function worker() {
     while (i < actividades.length) {
       const idx = i++;
       const activity = actividades[idx];
 
-      const data = await fetchComponentesOperacion(orderId, activity);
+      const result = await fetchComponentesOperacion(orderId, activity);
 
-      if (Array.isArray(data)) ok++;
-      else fail++;
+      if (result?.ok) {
+        ok++;
+
+        if (result?.skipped) {
+          skipped++;
+        }
+      } else {
+        fail++;
+      }
     }
   }
 
@@ -612,6 +705,7 @@ async function prefetchComponentesOrden(orderId, ops = [], concurrency = 2) {
   return {
     ok,
     fail,
+    skipped,
     total: actividades.length,
   };
 }
@@ -736,7 +830,7 @@ export async function prefetchOrdenesTecnicoDetalles({
         let componentResult = { ok: 0, fail: 0, total: 0 };
 
         if (prefetchComponents) {
-          componentResult = await prefetchComponentesOrden(orderIdReal, ops, 2);
+         componentResult = await prefetchComponentesOrden(orderIdReal, ops, 3);
           componentsOk += componentResult.ok;
           componentsFail += componentResult.fail;
           componentsTotal += componentResult.total;
