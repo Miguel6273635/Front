@@ -62,11 +62,14 @@ export function applyStatusPatchToOrdenes(ordenes = [], patchMap = {}) {
 
 function resolveStatusLabel(code) {
   const c = String(code || "").trim();
+
   if (c === "0100") return "PENDIENTE";
-  if (c === "0200") return "PROCESO";
+  if (c === "0200") return "EN PROCESO";
   if (c === "0300") return "FINALIZADA";
   if (c === "0400") return "PENDIENTE DE FIRMA";
   if (c === "0500") return "FINALIZADA C/PENDIENTES";
+  if (c === "0600") return "Carta No Mantto";
+
   return c || "—";
 }
 
