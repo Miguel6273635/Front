@@ -23,6 +23,7 @@ import { useLocalSearchParams, router } from "expo-router";
 
 import {
   loadOrdenTecnicoDetail,
+  loadOrdenesTecnicoList,
   saveOrdenTecnicoDetail,
   shouldCacheDetailByOrder,
 } from "../../../../src/offline/ordenesTecnicoCache";
@@ -887,7 +888,22 @@ function hasUsefulCachedOrderDetail(cachedData) {
       "",
   ).trim();
 
-  return hasOrderId && (hasOps || hasComponents || hasAddress || hasClient || hasShortText);
+  const hasBasicHeader =
+    !!String(cachedData?.equipment || cachedData?.Equipment || "").trim() ||
+    !!String(cachedData?.order_type || cachedData?.OrderType || "").trim() ||
+    !!String(cachedData?.start_date || cachedData?.StartDate || "").trim();
+
+  /*
+    Miguel Ángel Hernández Álvarez - 03/07/2026
+
+    Ajuste:
+    Si la precarga dejó cabecera básica, cliente, dirección, texto corto
+    u operaciones, se considera cache útil para no forzar consulta API/SAP.
+  */
+  return (
+    hasOrderId &&
+    (hasOps || hasComponents || hasAddress || hasClient || hasShortText || hasBasicHeader)
+  );
 }
 
 // CAMBIOS agregasdos por miguel
@@ -1378,6 +1394,67 @@ export default function DetalleOrden() {
     };
   }, [orden?.Orderid, id, user?.correo, user?.email, user?.username]);
 
+  /*
+    Miguel Ángel Hernández Álvarez - 03/07/2026
+
+    Fallback offline:
+    Si no existe detalle guardado, intentamos pintar la orden desde la lista
+    precargada. Esto evita pantalla vacía cuando la lista sí tiene la orden,
+    pero todavía no se guardó el detalle completo.
+
+    También compara el OrderId con y sin ceros a la izquierda.
+  */
+  const loadOrderFromCachedList = async (orderIdParam) => {
+    try {
+      const cleanId = String(orderIdParam || "").trim();
+      if (!cleanId) return null;
+
+      const removeZeros = (v) => String(v || "").trim().replace(/^0+/, "");
+
+      const cachedList = await loadOrdenesTecnicoList(userEmail);
+      const list = Array.isArray(cachedList?.data) ? cachedList.data : [];
+
+      const found = list.find((item) => {
+        const itemId = String(
+          item?.Orderid || item?.OrderId || item?.orderid || "",
+        ).trim();
+
+        return itemId === cleanId || removeZeros(itemId) === removeZeros(cleanId);
+      });
+
+      if (!found) {
+        console.log("[DETALLE][LIST_FALLBACK] Orden no encontrada en lista offline:", {
+          orderId: cleanId,
+          totalLista: list.length,
+        });
+
+        return null;
+      }
+
+      const normalized = {
+        ...(found || {}),
+        Orderid: found?.Orderid || found?.OrderId || cleanId,
+        OrderId: found?.OrderId || found?.Orderid || cleanId,
+        operaciones: Array.isArray(found?.operaciones) ? found.operaciones : [],
+        partners: Array.isArray(found?.partners) ? found.partners : [],
+        componentes: Array.isArray(found?.componentes) ? found.componentes : [],
+        _fromListFallback: true,
+      };
+
+      await saveOrdenTecnicoDetail(cleanId, normalized);
+
+      console.log("[DETALLE][LIST_FALLBACK] Orden tomada desde lista offline:", {
+        orderId: cleanId,
+        operaciones: normalized.operaciones.length,
+      });
+
+      return normalized;
+    } catch (e) {
+      console.log("[DETALLE][LIST_FALLBACK] Error:", e?.message || e);
+      return null;
+    }
+  };
+
   const obtenerOrden = async () => {
     const orderIdParam = String(id || "").trim();
 
@@ -1479,11 +1556,20 @@ export default function DetalleOrden() {
 
       if (!isOnline) {
         if (!cached?.data) {
+          const fromList = await loadOrderFromCachedList(orderIdParam);
+
+          if (fromList) {
+            setOrden(fromList);
+            setLoading(false);
+            return;
+          }
+
           Alert.alert(
             "Sin conexión",
-            "No hay internet y no hay detalle guardado aún para esta orden.",
+            "No hay internet y no hay detalle guardado aún para esta orden. Vuelve a ejecutar la precarga con internet.",
           );
         }
+
         return;
       }
 

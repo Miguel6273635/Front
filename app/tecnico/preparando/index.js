@@ -10,6 +10,7 @@ import {
   Platform,
   StatusBar,
   ScrollView,
+  Alert,
 } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import NetInfo from "@react-native-community/netinfo";
@@ -21,14 +22,19 @@ import { useAuth } from "../../../src/context/AuthContext";
 import api from "../../../src/services/api";
 
 import { runPendingSendsOnly } from "../../../src/offline/backgroundSync";
+import { bootstrapPrefetchConsumiblesCatalogo } from "../../../src/offline/bootstrapConsumiblesCatalogo";
 import { prefetchOrdenesTecnicoDiaRapido } from "../../../src/offline/prefetchOrdenesTecnico";
 import {
   loadOrdenesTecnicoList,
+  loadOrdenTecnicoDetail,
   getOrdenesTecnicoLastSync,
   clearOrdenesTecnicoCache,
 } from "../../../src/offline/ordenesTecnicoCache";
 import { getSapQueue } from "../../../src/offline/sapQueue";
-import { loadConsumiblesByCobertura } from "../../../src/offline/consumiblesCache";
+import {
+  loadConsumiblesByCobertura,
+  clearConsumiblesCatalog,
+} from "../../../src/offline/consumiblesCache";
 
 const FIORI = {
   pageBg: "#F7F7F7",
@@ -162,7 +168,13 @@ function formatDateTime(value) {
   }
 }
 function getTecnicoPrefetchFromResult(result) {
-  if (result?.mode === "day_fast" || result?.mode === "day_full") {
+  const mode = String(result?.mode || "").trim();
+
+  if (
+    mode === "day_fast" ||
+    mode === "day_full" ||
+    mode === "range_3_days_full"
+  ) {
     return result;
   }
 
@@ -183,6 +195,118 @@ function getConsumiblesFromResult(result) {
   );
 }
 
+const CONSUMIBLES_COBERTURAS = ["BASICA", "MEDIA", "SEMI"];
+
+async function loadConsumiblesSummaryAll() {
+  const results = await Promise.all(
+    CONSUMIBLES_COBERTURAS.map((coberturaTipo) =>
+      loadConsumiblesByCobertura(coberturaTipo),
+    ),
+  );
+
+  const consumibles = results.reduce(
+    (acc, item) => acc + Number(item?.count || 0),
+    0,
+  );
+
+  const gruposConsumibles = results.reduce((acc, item) => {
+    const groups = Array.isArray(item?.groups) ? item.groups : [];
+
+    return (
+      acc +
+      groups.filter((g) => Number(g?.count || 0) > 0).length
+    );
+  }, 0);
+
+  return {
+    consumibles,
+    gruposConsumibles,
+    results,
+  };
+}
+
+async function bootstrapConsumiblesAll() {
+  const results = [];
+
+  for (const coberturaTipo of CONSUMIBLES_COBERTURAS) {
+    const result = await bootstrapPrefetchConsumiblesCatalogo({
+      coberturaTipo,
+    });
+
+    results.push(result);
+  }
+
+  const consumibles = results.reduce((acc, item) => {
+    return acc + Number(item?.count || item?.cachedCount || 0);
+  }, 0);
+
+  const gruposConsumibles = results.reduce((acc, item) => {
+    const groups = Array.isArray(item?.groups) ? item.groups : [];
+
+    return (
+      acc +
+      groups.filter((g) => Number(g?.count || 0) > 0).length
+    );
+  }, 0);
+
+  return {
+    ok: results.some((item) => item?.ok === true),
+    count: consumibles,
+    gruposConsumibles,
+    groups: results.flatMap((item) =>
+      Array.isArray(item?.groups) ? item.groups : [],
+    ),
+    results,
+    updatedAt: Date.now(),
+  };
+}
+
+async function calculatePreloadCacheSummary(userEmail, cachedList) {
+  const list = Array.isArray(cachedList?.data) ? cachedList.data : [];
+  const ids = list
+    .map((x) => x?.Orderid || x?.OrderId || x?.orderid || x?.order_id)
+    .filter(Boolean)
+    .map((x) => String(x).trim());
+
+  let detalles = 0;
+  let actividades = 0;
+
+  for (const orderId of ids) {
+    try {
+      const cachedDetail = await loadOrdenTecnicoDetail(orderId);
+      const detail = cachedDetail?.data;
+
+      if (!detail) continue;
+
+      detalles += 1;
+
+      if (Array.isArray(detail?.operaciones)) {
+        actividades += detail.operaciones.length;
+      }
+    } catch {}
+  }
+
+  let componentes = 0;
+
+  try {
+    const keys = await AsyncStorage.getAllKeys();
+    const idSet = new Set(ids);
+
+    componentes = (keys || []).filter((key) => {
+      if (!String(key || "").startsWith("orderComponents:")) return false;
+
+      const orderId = String(key).split(":")[1] || "";
+      return idSet.has(orderId);
+    }).length;
+  } catch {}
+
+  return {
+    detalles,
+    actividades,
+    componentes,
+  };
+}
+
 export default function PreparandoTecnicoScreen() {
   const { user, ensureValidToken } = useAuth();
 
@@ -196,6 +320,7 @@ export default function PreparandoTecnicoScreen() {
   const [currentStep, setCurrentStep] = useState(STEPS[0]);
   const [done, setDone] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [clearingCache, setClearingCache] = useState(false);
   const [online, setOnline] = useState(null);
 
   /*
@@ -259,19 +384,26 @@ export default function PreparandoTecnicoScreen() {
       const cached = await loadOrdenesTecnicoList(userEmail);
       const queue = await getSapQueue();
       const lastSyncAt = await getOrdenesTecnicoLastSync(userEmail);
-      const consumibles = await loadConsumiblesByCobertura("BASICA");
+
+      const [consumiblesSummary, cacheSummary] = await Promise.all([
+        loadConsumiblesSummaryAll(),
+        calculatePreloadCacheSummary(userEmail, cached),
+      ]);
 
       if (!mountedRef.current) return;
 
       setSummary((prev) => ({
         ...prev,
         ordenes: Array.isArray(cached?.data) ? cached.data.length : 0,
+        detalles: Number(cacheSummary?.detalles || prev.detalles || 0),
+        actividades: Number(cacheSummary?.actividades || prev.actividades || 0),
+        componentes: Number(cacheSummary?.componentes || prev.componentes || 0),
         pendientesSap: Array.isArray(queue) ? queue.length : 0,
         lastSyncAt,
-        consumibles: Number(consumibles?.count || 0),
-        gruposConsumibles: Array.isArray(consumibles?.groups)
-          ? consumibles.groups.filter((g) => Number(g?.count || 0) > 0).length
-          : 0,
+        consumibles: Number(consumiblesSummary?.consumibles || 0),
+        gruposConsumibles: Number(
+          consumiblesSummary?.gruposConsumibles || 0,
+        ),
       }));
     } catch (e) {
       console.log("[PRELOAD TECNICO] Error leyendo resumen:", e?.message || e);
@@ -281,6 +413,11 @@ export default function PreparandoTecnicoScreen() {
       setSummary((prev) => ({
         ...prev,
         ordenes: 0,
+        detalles: 0,
+        actividades: 0,
+        componentes: 0,
+        consumibles: 0,
+        gruposConsumibles: 0,
         pendientesSap: 0,
         lastSyncAt: null,
       }));
@@ -350,8 +487,18 @@ export default function PreparandoTecnicoScreen() {
       ...prev,
       ordenes: Number(tecnicoPrefetch?.count ?? prev.ordenes ?? 0),
       detalles: Number(detalleResult?.ok ?? prev.detalles ?? 0),
-      actividades: Number(detalleResult?.ok ?? prev.actividades ?? 0),
-      componentes: Number(components?.ok ?? prev.componentes ?? 0),
+      actividades: Number(
+        detalleResult?.operaciones?.total ??
+          detalleResult?.actividades?.total ??
+          prev.actividades ??
+          0,
+      ),
+      componentes: Number(
+        components?.total ??
+          components?.ok ??
+          prev.componentes ??
+          0,
+      ),
       consumibles: Number(
         consumiblesResult?.count ??
           consumiblesResult?.cachedCount ??
@@ -501,9 +648,25 @@ export default function PreparandoTecnicoScreen() {
       setMessage(
         `Detalles del rango guardados: ${Number(
           detalleResult?.ok || 0,
-        )}. Precargando componentes dentro de esta pantalla...`,
+        )}. Componentes y operaciones guardados desde la precarga.`,
       );
       await wait(200);
+
+      setProgress(STEPS[5]);
+      setMessage("Precargando consumibles y grupos de consumibles...");
+      await wait(200);
+
+      const consumiblesResult = await bootstrapConsumiblesAll();
+
+      console.log("[PRELOAD TECNICO] Resultado consumibles:", consumiblesResult);
+
+      if (!mountedRef.current) return;
+
+      setSummary((prev) => ({
+        ...prev,
+        consumibles: Number(consumiblesResult?.count || 0),
+        gruposConsumibles: Number(consumiblesResult?.gruposConsumibles || 0),
+      }));
 
       /*
         Antes esto se lanzaba con .catch() en segundo plano y el usuario podía
@@ -569,9 +732,8 @@ console.log("[PRELOAD TECNICO] Validación final de precarga:", {
   preloadCompletedOk,
 });
 
-      setProgress(STEPS[5]);
       setMessage(
-        "Consumibles y componentes actualizados. Leyendo resumen local...",
+        "Información actualizada. Leyendo resumen local...",
       );
       await wait(200);
 
@@ -684,6 +846,106 @@ console.log("[PRELOAD TECNICO] Validación final de precarga:", {
     }
 
     await startPreload({ retry: true });
+  };
+
+  const clearPreloadCacheForTests = async () => {
+    if (clearingCache || syncing) return;
+
+    try {
+      setClearingCache(true);
+
+      /*
+        Miguel Ángel Hernández Álvarez - 02/07/2026
+
+        Botón de pruebas:
+        Limpia únicamente cache de precarga y datos locales relacionados.
+        No elimina colas de envío pendientes a SAP para evitar perder trabajo real.
+      */
+      const keys = await AsyncStorage.getAllKeys();
+
+      const keysToDelete = (keys || []).filter((key) => {
+        const k = String(key || "");
+
+        return (
+          k === PRELOAD_DONE_KEY(userEmail) ||
+          k.startsWith("orderComponents:") ||
+          k.startsWith("consumibles:") ||
+          k.startsWith("tbmky_json_") ||
+          k.startsWith("tbmky_draft_") ||
+          k.startsWith("tbmky_status_")
+        );
+      });
+
+      await clearOrdenesTecnicoCache(userEmail);
+      await clearConsumiblesCatalog();
+
+      if (keysToDelete.length > 0) {
+        await AsyncStorage.multiRemove(keysToDelete);
+      }
+
+      setSummary({
+        ordenes: 0,
+        detalles: 0,
+        actividades: 0,
+        componentes: 0,
+        consumibles: 0,
+        gruposConsumibles: 0,
+        pendientesSap: 0,
+        lastSyncAt: null,
+      });
+
+      setDone(false);
+      startedRef.current = false;
+      setPreloadFinishedText("");
+      setPreloadElapsedMs(0);
+      setPreloadStartedAt(null);
+      setPercent(0);
+      progressAnim.setValue(0);
+
+      setProgress(STEPS[0]);
+      setMessage(
+        "Cache de pruebas eliminado. Ahora puede volver a precargar desde cero.",
+      );
+
+      console.log("[PRELOAD TECNICO] Cache de pruebas eliminado:", {
+        userEmail,
+        keysDeleted: keysToDelete.length,
+      });
+
+      Alert.alert(
+        "Cache eliminado",
+        "Se limpió el cache de precarga, consumibles, componentes y TBM/KY de pruebas. No se eliminaron pendientes SAP.",
+      );
+    } catch (e) {
+      console.log("[PRELOAD TECNICO] Error limpiando cache:", e?.message || e);
+
+      Alert.alert(
+        "Error",
+        "No se pudo limpiar el cache de pruebas. Revise logs.",
+      );
+    } finally {
+      if (mountedRef.current) setClearingCache(false);
+    }
+  };
+
+  const confirmClearPreloadCache = () => {
+    if (syncing || clearingCache) return;
+
+    Alert.alert(
+      "Limpiar cache de pruebas",
+      "Esto borrará órdenes precargadas, detalles, operaciones, componentes, consumibles y datos temporales TBM/KY guardados en este dispositivo. No borra pendientes SAP. ¿Desea continuar?",
+      [
+        {
+          text: "Cancelar",
+          style: "cancel",
+        },
+        {
+          text: "Limpiar",
+          style: "destructive",
+          onPress: clearPreloadCacheForTests,
+        },
+      ],
+    );
   };
 
   useEffect(() => {
@@ -899,6 +1161,21 @@ console.log("[PRELOAD TECNICO] Validación final de precarga:", {
             <Ionicons name="refresh-outline" size={18} color={FIORI.brand} />
             <Text style={styles.secondaryBtnText}>
               Volver a precargar
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[
+              styles.dangerBtn,
+              (syncing || clearingCache) && { opacity: 0.65 },
+            ]}
+            onPress={confirmClearPreloadCache}
+            disabled={syncing || clearingCache}
+            activeOpacity={0.88}
+          >
+            <Ionicons name="trash-outline" size={18} color={FIORI.err} />
+            <Text style={styles.dangerBtnText}>
+              {clearingCache ? "Limpiando cache..." : "Limpiar cache de pruebas"}
             </Text>
           </TouchableOpacity>
         </View>
@@ -1168,6 +1445,22 @@ const styles = StyleSheet.create({
   },
   secondaryBtnText: {
     color: FIORI.brand,
+    fontWeight: "900",
+    fontSize: 13,
+  },
+  dangerBtn: {
+    minHeight: 44,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "#F5B7B1",
+    backgroundColor: "#FFF5F5",
+    alignItems: "center",
+    justifyContent: "center",
+    flexDirection: "row",
+    gap: 8,
+  },
+  dangerBtnText: {
+    color: FIORI.err,
     fontWeight: "900",
     fontSize: 13,
   },

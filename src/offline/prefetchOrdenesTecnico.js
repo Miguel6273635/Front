@@ -632,6 +632,8 @@ export async function prefetchOrdenesTecnicoDetalles({
       ok: 0,
       skip: 0,
       fail: 0,
+      operaciones: { ok: 0, total: 0 },
+      actividades: { ok: 0, total: 0 },
       components: { ok: 0, fail: 0, total: 0 },
     };
   }
@@ -644,6 +646,7 @@ export async function prefetchOrdenesTecnicoDetalles({
   let componentsOk = 0;
   let componentsFail = 0;
   let componentsTotal = 0;
+  let operacionesTotal = 0;
   let i = 0;
 
   async function worker() {
@@ -731,6 +734,17 @@ export async function prefetchOrdenesTecnicoDetalles({
             fetchPartners(orderIdReal),
             fetchOperaciones(orderIdReal),
           ]);
+
+        /*
+          Miguel Ángel Hernández Álvarez - 02/07/2026
+
+          Conteo para la primera vista:
+          detalleResult.ok cuenta órdenes guardadas, no actividades.
+          Por eso acumulamos aquí las operaciones reales que llegaron
+          desde SAP/API durante la precarga.
+        */
+        const opsCount = Array.isArray(ops) ? ops.length : 0;
+        operacionesTotal += opsCount;
 
         let componentResult = { ok: 0, fail: 0, total: 0 };
 
@@ -859,6 +873,14 @@ export async function prefetchOrdenesTecnicoDetalles({
     skip,
     fail,
     window: win,
+    operaciones: {
+      ok: operacionesTotal,
+      total: operacionesTotal,
+    },
+    actividades: {
+      ok: operacionesTotal,
+      total: operacionesTotal,
+    },
     components: {
       ok: componentsOk,
       fail: componentsFail,
@@ -932,7 +954,17 @@ export async function prefetchOrdenesTecnicoDiaRapido(
 
     await saveOrdenesTecnicoList(userEmail, windowData, offlineWindow);
 
-    const orderIdsDia = data
+    /*
+      Miguel Ángel Hernández Álvarez - 02/07/2026
+
+      Corrección:
+      Los detalles, operaciones y componentes deben precargarse solo para
+      las órdenes que quedaron dentro de la ventana offline.
+
+      Antes se usaba data, y si SAP/backend respondía más registros,
+      se podían precargar detalles/componentes de órdenes fuera del rango.
+    */
+    const orderIdsDia = windowData
       .map((x) => x?.Orderid || x?.OrderId || x?.orderid)
       .filter(Boolean)
       .map((x) => String(x).trim());
@@ -1017,9 +1049,18 @@ export async function prefetchOrdenesTecnico(userEmail = null, options = {}) {
           ? res.data.results
           : [];
 
-    await saveOrdenesTecnicoList(userEmail, data, win);
+    /*
+      Miguel Ángel Hernández Álvarez - 02/07/2026
 
-    const orderIds = data
+      Protección para sincronización completa:
+      Aunque esta función ya no debe ejecutarse desde Inicio Técnico,
+      si algún flujo la llama, también debe respetar la ventana offline.
+    */
+    const windowData = filterOrdenesByWindow(data, win.start, win.end);
+
+    await saveOrdenesTecnicoList(userEmail, windowData, win);
+
+    const orderIds = windowData
       .map((x) => x?.Orderid || x?.OrderId || x?.orderid)
       .filter(Boolean)
       .map((x) => String(x).trim());

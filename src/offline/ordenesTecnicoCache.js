@@ -8,6 +8,38 @@ const LIST_KEY = (userEmail) => `ordenesTecnico:list:${userEmail || "unknown"}`;
 const DETAIL_KEY = (orderId) =>
   `ordenesTecnico:detail:${String(orderId || "").trim()}`;
 const META_KEY = (userEmail) => `ordenesTecnico:meta:${userEmail || "unknown"}`;
+/*
+  Miguel Ángel Hernández Álvarez - 03/07/2026
+
+  Corrección detalle offline:
+  SAP/backend a veces devuelve la orden sin ceros a la izquierda.
+
+  Ejemplo:
+    Pantalla detalle: 000040215829
+    Cache guardado:   40215829
+
+  Si solo buscamos la llave exacta, la vista de detalle cree que no existe
+  cache aunque sí se haya precargado.
+
+  Por eso se generan variantes del OrderId:
+  - exacto
+  - sin ceros a la izquierda
+  - con padding a 12 dígitos
+*/
+function buildOrderIdVariants(orderId) {
+  const raw = String(orderId || "").trim();
+  if (!raw) return [];
+
+  const noZeros = raw.replace(/^0+/, "") || raw;
+  const padded12 = /^\d+$/.test(noZeros) ? noZeros.padStart(12, "0") : raw;
+
+  return Array.from(new Set([raw, noZeros, padded12].filter(Boolean)));
+}
+
+function buildDetailKeys(orderId) {
+  return buildOrderIdVariants(orderId).map((x) => DETAIL_KEY(x));
+}
+
 
 // --- helpers fecha ---
 const atStartOfDay = (d) => {
@@ -697,27 +729,43 @@ export async function saveOrdenTecnicoDetail(orderId, data) {
 
   try {
     /*
-      Miguel Ángel Hernández Álvarez - 01/07/2026
+      Miguel Ángel Hernández Álvarez - 03/07/2026
 
       Corrección offline:
-      Antes este guardado reemplazaba todo el detalle completo.
-      Si llegaba un objeto parcial, se podían borrar datos buenos como:
-      - dirección
-      - razón social
-      - partners
-      - operaciones
-      - componentes
+      El detalle se guarda con varias llaves equivalentes del OrderId para que
+      la vista pueda encontrarlo aunque SAP regrese el ID sin ceros.
 
-      Ahora primero se lee el detalle anterior y se hace merge.
+      Ejemplo:
+      - 000040215829
+      - 40215829
     */
-    const previousRaw = await AsyncStorage.getItem(DETAIL_KEY(cleanOrderId));
-    const previousPayload = previousRaw ? JSON.parse(previousRaw) : null;
+
+    const detailKeys = buildDetailKeys(cleanOrderId);
+
+    let previousPayload = null;
+
+    for (const key of detailKeys) {
+      const previousRaw = await AsyncStorage.getItem(key);
+      if (previousRaw) {
+        previousPayload = JSON.parse(previousRaw);
+        break;
+      }
+    }
+
     const previousData = previousPayload?.data || {};
+
+    const canonicalOrderId =
+      buildOrderIdVariants(cleanOrderId).find((x) => x.length === 12) ||
+      cleanOrderId;
 
     const mergedBeforeSanitize = mergeDetailBeforeSanitize(
       previousData,
-      data,
-      cleanOrderId,
+      {
+        ...(data || {}),
+        Orderid: data?.Orderid || canonicalOrderId,
+        OrderId: data?.OrderId || canonicalOrderId,
+      },
+      canonicalOrderId,
     );
 
     const slim = sanitizeDetailForCache(mergedBeforeSanitize);
@@ -757,7 +805,17 @@ export async function saveOrdenTecnicoDetail(orderId, data) {
       return false;
     }
 
-    await AsyncStorage.setItem(DETAIL_KEY(cleanOrderId), raw);
+    const keysToSave = buildDetailKeys(cleanOrderId);
+
+    await AsyncStorage.multiSet(keysToSave.map((key) => [key, raw]));
+
+    console.log("[OFFLINE] Detalle guardado con llaves equivalentes:", {
+      orderId: cleanOrderId,
+      keys: keysToSave,
+      operaciones: Array.isArray(payload?.data?.operaciones)
+        ? payload.data.operaciones.length
+        : 0,
+    });
 
     return true;
   } catch (e) {
@@ -766,17 +824,56 @@ export async function saveOrdenTecnicoDetail(orderId, data) {
   }
 }
 
+
 export async function loadOrdenTecnicoDetail(orderId) {
   try {
     const cleanOrderId = String(orderId || "").trim();
     if (!cleanOrderId) return null;
 
-    const raw = await AsyncStorage.getItem(DETAIL_KEY(cleanOrderId));
-    return raw ? JSON.parse(raw) : null;
-  } catch {
+    /*
+      Miguel Ángel Hernández Álvarez - 03/07/2026
+
+      Corrección:
+      Leer detalle por varias variantes de OrderId:
+      - exacto
+      - sin ceros
+      - con ceros a 12 dígitos
+
+      Esto evita el mensaje:
+      "No hay internet y no hay detalle guardado aún para esta orden."
+    */
+    const keys = buildDetailKeys(cleanOrderId);
+
+    for (const key of keys) {
+      const raw = await AsyncStorage.getItem(key);
+
+      if (raw) {
+        const parsed = JSON.parse(raw);
+
+        console.log("[OFFLINE] Detalle encontrado en cache:", {
+          orderId: cleanOrderId,
+          key,
+          operaciones: Array.isArray(parsed?.data?.operaciones)
+            ? parsed.data.operaciones.length
+            : 0,
+        });
+
+        return parsed;
+      }
+    }
+
+    console.log("[OFFLINE] Detalle NO encontrado en cache:", {
+      orderId: cleanOrderId,
+      keys,
+    });
+
+    return null;
+  } catch (e) {
+    console.log("[OFFLINE] loadOrdenTecnicoDetail ERROR:", e?.message || e);
     return null;
   }
 }
+
 
 /**
  * Limpieza por lista:
@@ -789,8 +886,14 @@ export async function pruneDetallesNoUsados(orderIdsKeep = []) {
       k.startsWith("ordenesTecnico:detail:"),
     );
 
+    /*
+      Miguel Ángel Hernández Álvarez - 03/07/2026
+
+      Como ahora guardamos alias del OrderId, también conservamos las variantes
+      al limpiar detalles no usados.
+    */
     const keepSet = new Set(
-      orderIdsKeep.map((x) => `ordenesTecnico:detail:${String(x).trim()}`),
+      orderIdsKeep.flatMap((x) => buildDetailKeys(String(x).trim())),
     );
 
     const toDelete = detailKeys.filter((k) => !keepSet.has(k));
