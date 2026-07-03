@@ -1,8 +1,8 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
 // Ventana requerida: 8 días antes y 8 después
-export const OFFLINE_DAYS_BEFORE = 8;
-export const OFFLINE_DAYS_AFTER = 8;
+export const OFFLINE_DAYS_BEFORE = 0;
+export const OFFLINE_DAYS_AFTER = 2;
 
 const LIST_KEY = (userEmail) => `ordenesTecnico:list:${userEmail || "unknown"}`;
 const DETAIL_KEY = (orderId) =>

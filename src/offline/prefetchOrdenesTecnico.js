@@ -5,7 +5,6 @@ import {
   shouldCacheDetailByOrder,
   buildOfflineWindow,
   saveOrdenesTecnicoList,
-  loadOrdenesTecnicoList,
   filterOrdenesByWindow,
   pruneDetallesByWindow,
 } from "./ordenesTecnicoCache";
@@ -869,52 +868,14 @@ export async function prefetchOrdenesTecnicoDetalles({
 }
 
 // ==========================================
-// Precarga rápida del día
+// Precarga rápida del rango offline del técnico
 // Se usa desde app/tecnico/preparando/index.js
 // Objetivo:
-// - Cargar solo órdenes del día actual.
-// - Guardar lista del día dentro de la ventana offline.
-// - Precargar detalle, operaciones y componentes del día.
+// - Cargar únicamente el rango configurado en buildOfflineWindow.
+// - Guardar lista limpia sin mezclar cache viejo.
+// - Precargar detalle, operaciones y componentes del rango.
 // - La precarga fuerte se hace aquí para que Inicio Técnico y Órdenes usen cache.
 // ==========================================
-function formatLocalYmdPreload(d = new Date()) {
-  const x = new Date(d);
-  const yyyy = x.getFullYear();
-  const mm = String(x.getMonth() + 1).padStart(2, "0");
-  const dd = String(x.getDate()).padStart(2, "0");
-
-  return `${yyyy}-${mm}-${dd}`;
-}
-
-function mergeOrdenesById(prev = [], incoming = []) {
-  const map = new Map();
-
-  (Array.isArray(prev) ? prev : []).forEach((item) => {
-    const id = String(
-      item?.Orderid || item?.OrderId || item?.orderid || "",
-    ).trim();
-
-    if (id) map.set(id, item);
-  });
-
-  (Array.isArray(incoming) ? incoming : []).forEach((item) => {
-    const id = String(
-      item?.Orderid || item?.OrderId || item?.orderid || "",
-    ).trim();
-
-    if (!id) return;
-
-    map.set(id, {
-      ...(map.get(id) || {}),
-      ...item,
-      Orderid: item?.Orderid || item?.OrderId || id,
-      OrderId: item?.OrderId || item?.Orderid || id,
-    });
-  });
-
-  return Array.from(map.values());
-}
-
 export async function prefetchOrdenesTecnicoDiaRapido(
   userEmail = null,
   options = {},
@@ -922,14 +883,15 @@ export async function prefetchOrdenesTecnicoDiaRapido(
   configurePrefetchRuntime(options);
 
   try {
-    console.log("[PREFETCH TECNICO][DIA] Iniciando precarga completa del día...");
+    console.log(
+      "[PREFETCH TECNICO][3_DIAS] Iniciando precarga completa del rango offline...",
+    );
 
-    const today = new Date();
-    const todayStr = formatLocalYmdPreload(today);
+    const offlineWindow = buildOfflineWindow(new Date());
 
     const params = new URLSearchParams({
-      start: todayStr,
-      end: todayStr,
+      start: offlineWindow.startStr,
+      end: offlineWindow.endStr,
       mode: "range",
     });
 
@@ -951,17 +913,19 @@ export async function prefetchOrdenesTecnicoDiaRapido(
           ? res.data.results
           : [];
 
-    const offlineWindow = buildOfflineWindow(new Date());
-    const cachedPrev = await loadOrdenesTecnicoList(userEmail);
+    /*
+      Miguel Ángel Hernández Álvarez - 02/07/2026
 
-    // Importante:
-    // No reemplazamos toda la lista por solo el día.
-    // Mezclamos lo del día con lo ya guardado para no perder órdenes anteriores
-    // ni información usada por Pendientes de firma.
-    const merged = mergeOrdenesById(cachedPrev?.data || [], data);
+      Corrección:
+      La precarga NO debe mezclar cache viejo con la respuesta nueva de SAP.
+      Antes, si el cache ya traía 250 órdenes, aunque SAP devolviera 26,
+      se volvían a guardar las 250.
 
+      Ahora la precarga guarda únicamente lo que SAP respondió para el rango
+      actual de trabajo.
+    */
     const windowData = filterOrdenesByWindow(
-      merged,
+      data,
       offlineWindow.start,
       offlineWindow.end,
     );
@@ -973,30 +937,24 @@ export async function prefetchOrdenesTecnicoDiaRapido(
       .filter(Boolean)
       .map((x) => String(x).trim());
 
-    console.log("[PREFETCH TECNICO][DIA] Órdenes del día:", orderIdsDia.length);
+    console.log(
+      "[PREFETCH TECNICO][3_DIAS] Órdenes del rango:",
+      orderIdsDia.length,
+    );
 
     const detalleResult = await prefetchOrdenesTecnicoDetalles({
       orderIds: orderIdsDia,
       concurrency: 2,
-
-      /*
-        Miguel Ángel Hernández Álvarez - 01/07/2026
-
-        La pantalla de preparación debe dejar listos los componentes.
-        Ya NO se deben cargar después desde Inicio Técnico, Órdenes asignadas
-        ni runBackgroundSyncNow.
-      */
       prefetchComponents: true,
-
       apiInstance: options?.apiInstance || getPrefetchApi(),
       ensureValidToken: options?.ensureValidToken || PREFETCH_ENSURE_VALID_TOKEN,
     });
 
     const result = {
       ok: true,
-      mode: "day_full",
+      mode: "range_3_days_full",
       count: orderIdsDia.length,
-      todayStr,
+      rangeStr: `${offlineWindow.startStr} -> ${offlineWindow.endStr}`,
       window: {
         startStr: offlineWindow.startStr,
         endStr: offlineWindow.endStr,
@@ -1004,12 +962,12 @@ export async function prefetchOrdenesTecnicoDiaRapido(
       detalleResult,
     };
 
-    console.log("[PREFETCH TECNICO][DIA] Finalizado:", result);
+    console.log("[PREFETCH TECNICO][3_DIAS] Finalizado:", result);
 
     return result;
   } catch (e) {
     console.log(
-      "[PREFETCH TECNICO][DIA] Error:",
+      "[PREFETCH TECNICO][3_DIAS] Error:",
       e?.response?.data || e?.message || e,
     );
 
@@ -1020,7 +978,6 @@ export async function prefetchOrdenesTecnicoDiaRapido(
     };
   }
 }
-
 // ==========================================
 // Función maestra para precargar órdenes del técnico
 // Debe usarse solo desde la pantalla de precarga o procesos explícitos de recarga,

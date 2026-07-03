@@ -25,6 +25,7 @@ import { prefetchOrdenesTecnicoDiaRapido } from "../../../src/offline/prefetchOr
 import {
   loadOrdenesTecnicoList,
   getOrdenesTecnicoLastSync,
+  clearOrdenesTecnicoCache,
 } from "../../../src/offline/ordenesTecnicoCache";
 import { getSapQueue } from "../../../src/offline/sapQueue";
 import { loadConsumiblesByCobertura } from "../../../src/offline/consumiblesCache";
@@ -462,12 +463,12 @@ export default function PreparandoTecnicoScreen() {
       await wait(200);
 
       setProgress(STEPS[2]);
-      setMessage("Precargando órdenes del día asignadas al técnico...");
+      setMessage("Precargando órdenes del rango offline asignadas al técnico...");
       await wait(200);
 
       setProgress(STEPS[3]);
       setMessage(
-        "Precargando detalle básico y operaciones de las órdenes del día...",
+        "Precargando detalle básico, operaciones y componentes del rango offline...",
       );
 
       /*
@@ -487,7 +488,7 @@ export default function PreparandoTecnicoScreen() {
         ensureValidToken,
       });
 
-      console.log("[PRELOAD TECNICO] Resultado precarga del día:", result);
+      console.log("[PRELOAD TECNICO] Resultado precarga del rango offline:", result);
 
       if (!mountedRef.current) return;
 
@@ -498,7 +499,7 @@ export default function PreparandoTecnicoScreen() {
 
       setProgress(STEPS[4]);
       setMessage(
-        `Detalles del día guardados: ${Number(
+        `Detalles del rango guardados: ${Number(
           detalleResult?.ok || 0,
         )}. Precargando componentes dentro de esta pantalla...`,
       );
@@ -595,7 +596,7 @@ console.log("[PRELOAD TECNICO] Validación final de precarga:", {
 
     if (preloadCompletedOk) {
   setMessage(
-    "Información del día lista. Puede iniciar; no se volverá a precargar hasta mañana.",
+    "Información lista. Puede iniciar; no se volverá a precargar hasta mañana.",
   );
 
   await markPreloadDone({
@@ -661,6 +662,27 @@ console.log("[PRELOAD TECNICO] Validación final de precarga:", {
     setPreloadElapsedMs(0);
     setPreloadFinishedText("");
     progressAnim.setValue(0);
+
+    /*
+      Miguel Ángel Hernández Álvarez - 02/07/2026
+
+      Limpieza manual:
+      Si antes se guardaron 250 órdenes en cache, se deben borrar antes
+      de volver a precargar. Si no se limpia, la pantalla puede seguir
+      mostrando datos viejos aunque el código ya esté corregido.
+    */
+    try {
+      if (userEmail) {
+        await clearOrdenesTecnicoCache(userEmail);
+        console.log("[PRELOAD TECNICO] Cache de órdenes limpiado antes de reintentar.");
+      }
+    } catch (e) {
+      console.log(
+        "[PRELOAD TECNICO] No se pudo limpiar cache antes de reintentar:",
+        e?.message || e,
+      );
+    }
+
     await startPreload({ retry: true });
   };
 

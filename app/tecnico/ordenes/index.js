@@ -553,23 +553,6 @@ export default function ListaOrdenesTecnico() {
     return () => unsub();
   }, []);
 
-  const mergeOrdenesForCache = useCallback((prev = [], incoming = []) => {
-    const map = new Map();
-    (Array.isArray(prev) ? prev : []).forEach((item) => {
-      const id = String(item?.Orderid || item?.OrderId || "").trim();
-      if (id) map.set(id, item);
-    });
-    (Array.isArray(incoming) ? incoming : []).forEach((item) => {
-      const id = String(item?.Orderid || item?.OrderId || "").trim();
-      if (!id) return;
-      map.set(id, {
-        ...(map.get(id) || {}),
-        ...item,
-      });
-    });
-    return Array.from(map.values());
-  }, []);
-
   const fetchOrdenes = useCallback(
     async ({ isRefresh = false, forceSap = false, cacheOnly = false } = {}) => {
       try {
@@ -668,13 +651,24 @@ export default function ListaOrdenesTecnico() {
 
         try {
           const offlineWindow = buildOfflineWindow(new Date());
-          const cachedPrev = await loadOrdenesTecnicoList(userEmail);
-          const merged = mergeOrdenesForCache(
-            cachedPrev?.data || [],
-            patchedSapData,
-          );
+
+          /*
+            Miguel Ángel Hernández Álvarez - 02/07/2026
+
+            Corrección:
+            No mezclamos cache viejo con la respuesta nueva de SAP.
+
+            Antes se hacía:
+              cache anterior + respuesta SAP = muchas órdenes duplicadas o viejas.
+
+            Por eso en la pantalla de precarga podían aparecer 250 órdenes,
+            aunque el técnico realmente tuviera cerca de 26.
+
+            Ahora solo se guarda la respuesta nueva de SAP filtrada por la ventana
+            offline configurada.
+          */
           const windowData = filterOrdenesByWindow(
-            merged,
+            patchedSapData,
             offlineWindow.start,
             offlineWindow.end,
           );
@@ -739,7 +733,6 @@ export default function ListaOrdenesTecnico() {
       getSapRequestRange,
       ensureValidToken,
       applyTbmkyOfflineStatuses,
-      mergeOrdenesForCache,
     ],
   );
 
