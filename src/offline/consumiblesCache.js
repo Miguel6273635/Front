@@ -25,10 +25,68 @@ function safeStr(v) {
 function pickFirst(obj, keys = []) {
   for (const k of keys) {
     const v = obj?.[k];
+
     if (v !== null && v !== undefined && safeStr(v)) return v;
   }
 
   return "";
+}
+
+function canonicalAgr1ByCobertura(coberturaTipo = "BASICA") {
+  const cobertura = normalizeCoberturaTipo(coberturaTipo || "BASICA");
+
+  if (cobertura === "MEDIA") return "MEDIO";
+  if (cobertura === "SEMI") return "SEMI";
+
+  return "BASICO";
+}
+
+function detectCoberturaFromAgr1(agr1 = "") {
+  const value = normUpper(agr1);
+
+  if (value.includes("MEDIO") || value.includes("MEDIA")) {
+    return "MEDIA";
+  }
+
+  if (
+    value.includes("SEMI") ||
+    value.includes("SEMIFULL") ||
+    value.includes("SEMI FULL") ||
+    value.includes("SEMI-FULL") ||
+    value.includes("SEMICOMPLETO") ||
+    value.includes("SEMI_COMPLETO") ||
+    value.includes("SEMI COMPLETO")
+  ) {
+    return "SEMI";
+  }
+
+  return "BASICA";
+}
+
+function coberturaLevel(coberturaTipo = "BASICA") {
+  const cobertura = normalizeCoberturaTipo(coberturaTipo || "BASICA");
+
+  if (cobertura === "SEMI") return 3;
+  if (cobertura === "MEDIA") return 2;
+
+  return 1;
+}
+
+function rowCompatibleWithCobertura(row = {}, coberturaTipo = "BASICA") {
+  const rowAgr1 = pickFirst(row, [
+    "Agr1",
+    "AGR1",
+    "agr1",
+    "Agrupador1",
+    "agrupador1",
+    "Categoria",
+    "categoria",
+  ]);
+
+  const rowCobertura = detectCoberturaFromAgr1(rowAgr1);
+  const targetCobertura = normalizeCoberturaTipo(coberturaTipo || "BASICA");
+
+  return coberturaLevel(rowCobertura) <= coberturaLevel(targetCobertura);
 }
 
 export function normalizeConsumibleRow(row = {}, forced = {}) {
@@ -142,6 +200,7 @@ export function normalizeConsumiblesRows(rows = [], forced = {}) {
       normalized.Agr2,
       normalized.Material,
       normalized.Description,
+      normalized.Unidad,
     ].join(":");
 
     map.set(key, normalized);
@@ -154,14 +213,11 @@ async function loadIndex() {
   try {
     const raw = await AsyncStorage.getItem(INDEX_KEY);
     const parsed = raw ? JSON.parse(raw) : {};
+
     return parsed && typeof parsed === "object" ? parsed : {};
   } catch {
     return {};
   }
-}
-
-async function saveIndex(index) {
-  await AsyncStorage.setItem(INDEX_KEY, JSON.stringify(index || {}));
 }
 
 export async function saveConsumiblesGroup({
@@ -170,7 +226,7 @@ export async function saveConsumiblesGroup({
   agr2,
   rows = [],
 }) {
-  const cobertura = normalizeCoberturaTipo(coberturaTipo);
+  const cobertura = normalizeCoberturaTipo(coberturaTipo || "BASICA");
   const Agr1 = normUpper(agr1);
   const Agr2 = normUpper(agr2);
   const key = GROUP_KEY(cobertura, Agr1, Agr2);
@@ -193,6 +249,7 @@ export async function saveConsumiblesGroup({
   await AsyncStorage.setItem(key, JSON.stringify(payload));
 
   const index = await loadIndex();
+
   index[cobertura] = index[cobertura] || {};
   index[cobertura][makeAgrupadorKey(Agr1, Agr2)] = {
     key,
@@ -223,16 +280,18 @@ export async function loadConsumiblesGroup({
   agr2,
 }) {
   try {
-    const cobertura = normalizeCoberturaTipo(coberturaTipo);
-    const key = GROUP_KEY(cobertura, agr1, agr2);
+    const cobertura = normalizeCoberturaTipo(coberturaTipo || "BASICA");
+    const Agr1 = normUpper(agr1);
+    const Agr2 = normUpper(agr2);
+    const key = GROUP_KEY(cobertura, Agr1, Agr2);
     const raw = await AsyncStorage.getItem(key);
 
     if (!raw) {
       return {
         cobertura,
-        Agr1: normUpper(agr1),
-        Agr2: normUpper(agr2),
-        label: makeAgrupadorLabel(agr1, agr2),
+        Agr1,
+        Agr2,
+        label: makeAgrupadorLabel(Agr1, Agr2),
         updatedAt: null,
         count: 0,
         data: [],
@@ -244,6 +303,10 @@ export async function loadConsumiblesGroup({
 
     return {
       ...parsed,
+      cobertura,
+      Agr1: parsed?.Agr1 || Agr1,
+      Agr2: parsed?.Agr2 || Agr2,
+      label: parsed?.label || makeAgrupadorLabel(Agr1, Agr2),
       data,
       count: data.length,
     };
@@ -251,7 +314,7 @@ export async function loadConsumiblesGroup({
     console.log("[CONSUMIBLES CACHE] Error leyendo grupo:", e?.message || e);
 
     return {
-      cobertura: normalizeCoberturaTipo(coberturaTipo),
+      cobertura: normalizeCoberturaTipo(coberturaTipo || "BASICA"),
       Agr1: normUpper(agr1),
       Agr2: normUpper(agr2),
       label: makeAgrupadorLabel(agr1, agr2),
@@ -263,11 +326,41 @@ export async function loadConsumiblesGroup({
 }
 
 export async function loadConsumiblesByCobertura(coberturaTipo = "BASICA") {
-  const cobertura = normalizeCoberturaTipo(coberturaTipo);
-  const agrupadores = getAgrupadoresByCobertura(cobertura);
+  const cobertura = normalizeCoberturaTipo(coberturaTipo || "BASICA");
+  const agrupadoresBase = getAgrupadoresByCobertura(cobertura);
+  const index = await loadIndex();
+  const indexedGroups = Object.values(index?.[cobertura] || {});
+  const groupMap = new Map();
+
+  agrupadoresBase.forEach((agr) => {
+    const Agr1 = normUpper(agr?.Agr1 || agr?.Agrupador1 || "");
+    const Agr2 = normUpper(agr?.Agr2 || agr?.Agrupador2 || "");
+
+    if (!Agr1 || !Agr2) return;
+
+    groupMap.set(makeAgrupadorKey(Agr1, Agr2), {
+      Agr1,
+      Agr2,
+      label: agr?.label || makeAgrupadorLabel(Agr1, Agr2),
+    });
+  });
+
+  indexedGroups.forEach((agr) => {
+    const Agr1 = normUpper(agr?.Agr1 || agr?.Agrupador1 || "");
+    const Agr2 = normUpper(agr?.Agr2 || agr?.Agrupador2 || "");
+
+    if (!Agr1 || !Agr2) return;
+
+    groupMap.set(makeAgrupadorKey(Agr1, Agr2), {
+      Agr1,
+      Agr2,
+      label: agr?.label || makeAgrupadorLabel(Agr1, Agr2),
+    });
+  });
+
   const groups = [];
 
-  for (const agr of agrupadores) {
+  for (const agr of Array.from(groupMap.values())) {
     const group = await loadConsumiblesGroup({
       coberturaTipo: cobertura,
       agr1: agr.Agr1,
@@ -278,54 +371,77 @@ export async function loadConsumiblesByCobertura(coberturaTipo = "BASICA") {
   }
 
   const all = groups.flatMap((g) => g.data || []);
-
-  return {
-    cobertura,
-    updatedAt: groups
+  const updatedAt =
+    groups
       .map((g) => g.updatedAt)
       .filter(Boolean)
       .sort()
-      .pop() || null,
+      .pop() || null;
+
+  return {
+    ok: true,
+    cobertura,
+    coverageKey: cobertura,
+    updatedAt,
     count: all.length,
-    groups,
+    cachedCount: all.length,
+    groups: groups.sort((a, b) =>
+      String(a?.label || "").localeCompare(String(b?.label || "")),
+    ),
     data: all,
   };
 }
 
-/*
-  Compatibilidad:
-  Algunos componentes anteriores usan loadConsumiblesCatalog().
-  Ahora devuelve el catálogo de BASICA unido por grupos.
-*/
 export async function loadConsumiblesCatalog(coberturaTipo = "BASICA") {
   return await loadConsumiblesByCobertura(coberturaTipo);
 }
 
-/*
-  Compatibilidad:
-  Si algún código viejo llama saveConsumiblesCatalog(rows), guardamos
-  repartiendo por Agr1/Agr2 de cada fila. Si no trae Agr1/Agr2, no se puede
-  asignar a un grupo y se omite.
-*/
-export async function saveConsumiblesCatalog(rows = [], coberturaTipo = "BASICA") {
-  const cobertura = normalizeCoberturaTipo(coberturaTipo);
-  const normalized = normalizeConsumiblesRows(rows);
+export async function saveConsumiblesCatalog(
+  rows = [],
+  coberturaTipo = "BASICA",
+  options = {},
+) {
+  const cobertura = normalizeCoberturaTipo(coberturaTipo || "BASICA");
+  const forceAgr1FromCoverage = !!options?.forceAgr1FromCoverage;
+  const forcedAgr1 = forceAgr1FromCoverage
+    ? canonicalAgr1ByCobertura(cobertura)
+    : "";
+
+  const arr = Array.isArray(rows) ? rows : [];
+  const normalized = [];
   const byGroup = new Map();
 
-  normalized.forEach((row) => {
-    const agr = normalizeAgrupador(row);
+  arr.forEach((row) => {
+    const forced = {};
+
+    if (forcedAgr1) {
+      forced.Agr1 = forcedAgr1;
+      forced.Agrupador1 = forcedAgr1;
+    }
+
+    const normalizedRow = normalizeConsumibleRow(row, forced);
+
+    if (!normalizedRow.Material && !normalizedRow.Description) return;
+
+    normalized.push(normalizedRow);
+
+    const agr = normalizeAgrupador(normalizedRow);
+
     if (!agr.Agr1 || !agr.Agr2) return;
 
     const key = makeAgrupadorKey(agr.Agr1, agr.Agr2);
     const list = byGroup.get(key) || [];
-    list.push(row);
+
+    list.push(normalizedRow);
     byGroup.set(key, list);
   });
 
   let count = 0;
+  const groups = [];
 
   for (const [, list] of byGroup.entries()) {
     const first = list[0];
+
     const saved = await saveConsumiblesGroup({
       coberturaTipo: cobertura,
       agr1: first.Agr1,
@@ -334,11 +450,17 @@ export async function saveConsumiblesCatalog(rows = [], coberturaTipo = "BASICA"
     });
 
     count += saved.count || 0;
+    groups.push(saved);
   }
 
   return {
+    ok: count > 0,
+    cobertura,
+    coverageKey: cobertura,
     updatedAt: Date.now(),
     count,
+    cachedCount: count,
+    groups,
     data: normalized,
   };
 }
@@ -347,6 +469,7 @@ export async function getConsumiblesLastSync() {
   try {
     const raw = await AsyncStorage.getItem(META_KEY);
     const parsed = raw ? JSON.parse(raw) : null;
+
     return parsed?.lastSyncAt || null;
   } catch {
     return null;
@@ -378,6 +501,7 @@ export function getConsumiblesCategories(rowsOrGroups = []) {
   rows.forEach((row) => {
     const agr = normalizeAgrupador(row);
     const label = makeAgrupadorLabel(agr.Agr1, agr.Agr2);
+
     if (label) set.add(label);
   });
 
@@ -390,7 +514,8 @@ export function filterConsumiblesByCategory(rows = [], category = "") {
   return (Array.isArray(rows) ? rows : []).filter((row) => {
     const agr = normalizeAgrupador(row);
     const label = makeAgrupadorLabel(agr.Agr1, agr.Agr2);
-    return !cat || normUpper(label) === cat;
+
+    return !cat || normUpper(label) === cat || normUpper(row?.Categoria) === cat;
   });
 }
 
@@ -403,9 +528,95 @@ export function searchConsumibles(rows = [], query = "") {
     const searchText =
       row?.searchText ||
       normUpper(
-        `${row?.Categoria || row?.categoria || ""} ${row?.Agr1 || ""} ${row?.Agr2 || ""} ${row?.Material || row?.material || ""} ${row?.Description || row?.description || ""}`,
+        `${row?.Categoria || row?.categoria || ""} ${
+          row?.Agr1 || row?.Agrupador1 || ""
+        } ${row?.Agr2 || row?.Agrupador2 || ""} ${
+          row?.Material || row?.material || ""
+        } ${
+          row?.Description ||
+          row?.description ||
+          row?.Descripcion ||
+          row?.descripcion ||
+          ""
+        } ${row?.Unidad || row?.unidad || ""}`,
       );
 
     return searchText.includes(q);
   });
 }
+
+export function extractConsumiblesRowsFromPayload(payload) {
+  if (Array.isArray(payload)) return payload;
+
+  if (Array.isArray(payload?.d?.results)) return payload.d.results;
+  if (Array.isArray(payload?.data?.d?.results)) return payload.data.d.results;
+  if (Array.isArray(payload?.results)) return payload.results;
+  if (Array.isArray(payload?.data?.results)) return payload.data.results;
+  if (Array.isArray(payload?.value)) return payload.value;
+  if (Array.isArray(payload?.data)) return payload.data;
+
+  return [];
+}
+
+export async function seedConsumiblesFromJsonPayload(
+  payload,
+  coberturaTipo = null,
+) {
+  const rows = extractConsumiblesRowsFromPayload(payload);
+
+  if (!rows.length) {
+    return {
+      ok: false,
+      reason: "json_sin_materiales",
+      count: 0,
+      cachedCount: 0,
+      results: [],
+    };
+  }
+
+  const coverages = coberturaTipo
+    ? [normalizeCoberturaTipo(coberturaTipo)]
+    : ["BASICA", "MEDIA", "SEMI"];
+
+  const results = [];
+
+  for (const coverageKey of coverages) {
+    const coverageRows = rows.filter((row) =>
+      rowCompatibleWithCobertura(row, coverageKey),
+    );
+
+    if (!coverageRows.length) continue;
+
+    const saved = await saveConsumiblesCatalog(coverageRows, coverageKey, {
+      forceAgr1FromCoverage: true,
+    });
+
+    results.push(saved);
+  }
+
+  const total = results.reduce((acc, item) => acc + Number(item?.count || 0), 0);
+
+  return {
+    ok: total > 0,
+    count: total,
+    cachedCount: total,
+    results,
+  };
+}
+
+export default {
+  clearConsumiblesCatalog,
+  extractConsumiblesRowsFromPayload,
+  filterConsumiblesByCategory,
+  getConsumiblesCategories,
+  getConsumiblesLastSync,
+  loadConsumiblesByCobertura,
+  loadConsumiblesCatalog,
+  loadConsumiblesGroup,
+  normalizeConsumibleRow,
+  normalizeConsumiblesRows,
+  saveConsumiblesCatalog,
+  saveConsumiblesGroup,
+  searchConsumibles,
+  seedConsumiblesFromJsonPayload,
+};

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   View,
   Text,
@@ -11,12 +11,11 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import * as Device from "expo-device";
-import { Paths } from "expo-file-system";
+import { File, Paths } from "expo-file-system";
 import * as Application from "expo-application";
 import * as Network from "expo-network";
 import NetInfo from "@react-native-community/netinfo";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { captureRef } from "react-native-view-shot";
 import * as Sharing from "expo-sharing";
 
 import Header from "../../src/components/Header";
@@ -24,7 +23,7 @@ import Colors from "../../src/constants/colors";
 
 const MIN_RAM_GB = 6;
 const MIN_FREE_STORAGE_GB = 5;
-const MIN_ANDROID_API = 30; // Android 11
+const MIN_ANDROID_API = 30;
 
 const MAX_JSON_RECOMENDADO_MB = 15;
 const MAX_JSON_RIESGO_MB = 25;
@@ -34,9 +33,8 @@ export default function DiagnosticoScreen() {
   const [info, setInfo] = useState(null);
   const [performanceTest, setPerformanceTest] = useState(null);
   const [mitsuLoadTest, setMitsuLoadTest] = useState(null);
+  const [appsUsageTest, setAppsUsageTest] = useState(null);
   const [sendingReport, setSendingReport] = useState(false);
-
-  const reporteRef = useRef(null);
 
   useEffect(() => {
     cargarDiagnostico();
@@ -258,6 +256,62 @@ export default function DiagnosticoScreen() {
     }
   };
 
+  const medirUsoOtrasApps = async (performanceResult = null) => {
+    try {
+      const rendimiento = performanceResult || performanceTest;
+
+      let posibleAfectacion = "Baja";
+      let conclusion =
+        "No se detecta afectación evidente por carga externa durante la prueba de rendimiento.";
+
+      if (rendimiento?.fluidez === "Mala") {
+        posibleAfectacion = "Alta";
+        conclusion =
+          "El dispositivo presentó lentitud durante la prueba. Puede deberse a apps abiertas en segundo plano, reproducción de video, almacenamiento bajo, batería, red o carga local pesada.";
+      } else if (rendimiento?.fluidez === "Regular") {
+        posibleAfectacion = "Media";
+        conclusion =
+          "El dispositivo presentó rendimiento regular. Se recomienda cerrar apps como YouTube, mapas, cámara, redes sociales o apps pesadas antes de usar Mitsu App.";
+      }
+
+      const resultado = {
+        deteccionDirectaApps: "No disponible por permisos del sistema",
+        youtubeDetectado: "No disponible por permisos del sistema",
+        appsAbiertasDetectadas: "No disponible por permisos del sistema",
+        numeroAppsAbiertas: "No disponible por permisos del sistema",
+        posibleAfectacion,
+        metodo:
+          "Expo/React Native no permite consultar directamente otras apps abiertas sin módulo nativo y permisos especiales.",
+        recomendacion:
+          "Antes de usar Mitsu App se recomienda cerrar YouTube, redes sociales, cámara, mapas, juegos, apps de video o cualquier app pesada.",
+        conclusion,
+        fechaPrueba: new Date().toLocaleString("es-MX"),
+      };
+
+      setAppsUsageTest(resultado);
+      return resultado;
+    } catch (error) {
+      console.log("Error midiendo uso de otras apps:", error);
+
+      const resultado = {
+        deteccionDirectaApps: "No disponible",
+        youtubeDetectado: "No disponible",
+        appsAbiertasDetectadas: "No disponible",
+        numeroAppsAbiertas: "No disponible",
+        posibleAfectacion: "No disponible",
+        metodo: "No se pudo completar la medición.",
+        recomendacion:
+          "Cerrar apps abiertas y reiniciar el dispositivo si continúa lento.",
+        conclusion:
+          "No se pudo analizar la posible afectación por otras aplicaciones.",
+        fechaPrueba: new Date().toLocaleString("es-MX"),
+      };
+
+      setAppsUsageTest(resultado);
+      return resultado;
+    }
+  };
+
   const medirCargaRealMitsu = async () => {
     const inicioTotal = Date.now();
 
@@ -302,6 +356,7 @@ export default function DiagnosticoScreen() {
 
       for (const [key, value] of pares) {
         const sizeBytes = medirBytesTexto(value || "");
+
         totalBytes += sizeBytes;
         registrosLocales++;
 
@@ -439,41 +494,54 @@ export default function DiagnosticoScreen() {
     }
   };
 
-  const obtenerConclusionGeneral = () => {
-    if (!info) return "Sin información suficiente.";
+  const obtenerConclusionGeneral = (
+    infoBase = info,
+    performanceBase = performanceTest,
+    mitsuBase = mitsuLoadTest,
+    appsBase = appsUsageTest,
+  ) => {
+    if (!infoBase) return "Sin información suficiente.";
 
     const problemas = [];
 
-    if (!info.cumpleAndroid) {
+    if (!infoBase.cumpleAndroid) {
       problemas.push("Android menor al recomendado");
     }
 
-    if (!info.cumpleRam) {
+    if (!infoBase.cumpleRam) {
       problemas.push("RAM menor a la recomendada");
     }
 
-    if (!info.cumpleStorage) {
+    if (!infoBase.cumpleStorage) {
       problemas.push("almacenamiento libre bajo");
     }
 
-    if (!info.cumpleRed) {
+    if (!infoBase.cumpleRed) {
       problemas.push("sin internet disponible");
     }
 
-    if (performanceTest?.fluidez === "Mala") {
+    if (performanceBase?.fluidez === "Mala") {
       problemas.push("teléfono lento o trabándose");
     }
 
-    if (performanceTest?.fluidez === "Regular") {
+    if (performanceBase?.fluidez === "Regular") {
       problemas.push("rendimiento del teléfono regular");
     }
 
-    if (mitsuLoadTest?.riesgoCarga === "Alto") {
+    if (mitsuBase?.riesgoCarga === "Alto") {
       problemas.push("carga local Mitsu pesada");
     }
 
-    if (mitsuLoadTest?.riesgoCarga === "Medio") {
+    if (mitsuBase?.riesgoCarga === "Medio") {
       problemas.push("carga local Mitsu considerable");
+    }
+
+    if (appsBase?.posibleAfectacion === "Alta") {
+      problemas.push("posible afectación alta por apps abiertas o carga externa");
+    }
+
+    if (appsBase?.posibleAfectacion === "Media") {
+      problemas.push("posible afectación media por apps abiertas o carga externa");
     }
 
     if (problemas.length === 0) {
@@ -483,26 +551,375 @@ export default function DiagnosticoScreen() {
     return `Se detectaron posibles puntos a revisar: ${problemas.join(", ")}.`;
   };
 
+  const generarContenidoTxt = ({
+    diagnostico,
+    rendimiento,
+    cargaMitsu,
+    apps,
+    conclusionGeneral,
+  }) => {
+    const lineas = [];
+
+    agregarLineaTxt(lineas, "Sección", "Campo", "Valor");
+
+    agregarLineaTxt(
+      lineas,
+      "Reporte",
+      "Generado",
+      new Date().toLocaleString("es-MX"),
+    );
+
+    agregarLineaTxt(lineas, "Reporte", "Formato", "TXT separado por tabulaciones");
+    agregarLineaTxt(lineas, "Reporte", "Uso recomendado", "Abrir en Excel");
+
+    agregarLineaTxt(lineas, "Aplicación", "Nombre", diagnostico?.appName);
+    agregarLineaTxt(lineas, "Aplicación", "Versión", diagnostico?.appVersion);
+    agregarLineaTxt(lineas, "Aplicación", "Build", diagnostico?.buildVersion);
+
+    agregarLineaTxt(lineas, "Dispositivo", "Marca", diagnostico?.brand);
+    agregarLineaTxt(lineas, "Dispositivo", "Fabricante", diagnostico?.manufacturer);
+    agregarLineaTxt(lineas, "Dispositivo", "Modelo", diagnostico?.modelName);
+    agregarLineaTxt(lineas, "Dispositivo", "Producto", diagnostico?.productName);
+    agregarLineaTxt(lineas, "Dispositivo", "Tipo", diagnostico?.isDevice);
+
+    agregarLineaTxt(lineas, "Sistema operativo", "Sistema", diagnostico?.osName);
+    agregarLineaTxt(lineas, "Sistema operativo", "Versión", diagnostico?.osVersion);
+    agregarLineaTxt(
+      lineas,
+      "Sistema operativo",
+      "Android API",
+      diagnostico?.androidApi ? String(diagnostico.androidApi) : "No disponible",
+    );
+    agregarLineaTxt(
+      lineas,
+      "Sistema operativo",
+      "Validación Android",
+      diagnostico?.cumpleAndroid ? "Correcto" : "Revisar",
+    );
+
+    agregarLineaTxt(
+      lineas,
+      "Memoria",
+      "RAM total",
+      bytesToGB(diagnostico?.totalMemory),
+    );
+    agregarLineaTxt(
+      lineas,
+      "Memoria",
+      "Memoria máxima app",
+      bytesToGB(diagnostico?.maxMemory),
+    );
+    agregarLineaTxt(
+      lineas,
+      "Memoria",
+      "Validación RAM",
+      diagnostico?.cumpleRam ? "Correcto" : "Revisar",
+    );
+
+    agregarLineaTxt(
+      lineas,
+      "Almacenamiento",
+      "Almacenamiento total",
+      bytesToGB(diagnostico?.totalStorage),
+    );
+    agregarLineaTxt(
+      lineas,
+      "Almacenamiento",
+      "Almacenamiento libre",
+      bytesToGB(diagnostico?.freeStorage),
+    );
+    agregarLineaTxt(
+      lineas,
+      "Almacenamiento",
+      "Validación almacenamiento",
+      diagnostico?.cumpleStorage ? "Correcto" : "Revisar",
+    );
+
+    agregarLineaTxt(
+      lineas,
+      "Procesador",
+      "Arquitectura CPU",
+      diagnostico?.cpuArchitectures?.length > 0
+        ? diagnostico.cpuArchitectures.join(", ")
+        : "No disponible",
+    );
+
+    agregarLineaTxt(
+      lineas,
+      "Red",
+      "Conectado",
+      diagnostico?.isConnected ? "Sí" : "No",
+    );
+    agregarLineaTxt(
+      lineas,
+      "Red",
+      "Internet disponible",
+      diagnostico?.isInternetReachable ? "Sí" : "No",
+    );
+    agregarLineaTxt(
+      lineas,
+      "Red",
+      "Tipo de conexión",
+      traducirTipoRed(diagnostico?.networkType),
+    );
+    agregarLineaTxt(
+      lineas,
+      "Red",
+      "Red móvil",
+      traducirGeneracionCelular(diagnostico?.cellularGeneration),
+    );
+    agregarLineaTxt(lineas, "Red", "Compañía", diagnostico?.carrier);
+    agregarLineaTxt(
+      lineas,
+      "Red",
+      "Conexión de costo alto",
+      diagnostico?.isConnectionExpensive ? "Sí" : "No",
+    );
+    agregarLineaTxt(
+      lineas,
+      "Red",
+      "Validación red",
+      diagnostico?.cumpleRed ? "Correcto" : "Revisar",
+    );
+
+    agregarLineaTxt(lineas, "Rendimiento", "Fluidez", rendimiento?.fluidez);
+    agregarLineaTxt(
+      lineas,
+      "Rendimiento",
+      "Tiempo CPU",
+      rendimiento?.tiempoCpu !== null && rendimiento?.tiempoCpu !== undefined
+        ? `${rendimiento.tiempoCpu} ms`
+        : "Sin prueba",
+    );
+    agregarLineaTxt(
+      lineas,
+      "Rendimiento",
+      "Retraso promedio",
+      rendimiento?.retrasoPromedio !== null &&
+        rendimiento?.retrasoPromedio !== undefined
+        ? `${rendimiento.retrasoPromedio} ms`
+        : "Sin prueba",
+    );
+    agregarLineaTxt(
+      lineas,
+      "Rendimiento",
+      "Retraso máximo",
+      rendimiento?.retrasoMaximo !== null &&
+        rendimiento?.retrasoMaximo !== undefined
+        ? `${rendimiento.retrasoMaximo} ms`
+        : "Sin prueba",
+    );
+    agregarLineaTxt(
+      lineas,
+      "Rendimiento",
+      "Muestras",
+      rendimiento?.muestras !== undefined ? String(rendimiento.muestras) : "Sin prueba",
+    );
+    agregarLineaTxt(
+      lineas,
+      "Rendimiento",
+      "Conclusión",
+      rendimiento?.conclusion || "Sin prueba",
+    );
+
+    agregarLineaTxt(
+      lineas,
+      "Apps en segundo plano",
+      "Detección directa de apps",
+      apps?.deteccionDirectaApps,
+    );
+    agregarLineaTxt(
+      lineas,
+      "Apps en segundo plano",
+      "YouTube detectado",
+      apps?.youtubeDetectado,
+    );
+    agregarLineaTxt(
+      lineas,
+      "Apps en segundo plano",
+      "Apps abiertas detectadas",
+      apps?.appsAbiertasDetectadas,
+    );
+    agregarLineaTxt(
+      lineas,
+      "Apps en segundo plano",
+      "Número de apps abiertas",
+      apps?.numeroAppsAbiertas,
+    );
+    agregarLineaTxt(
+      lineas,
+      "Apps en segundo plano",
+      "Posible afectación",
+      apps?.posibleAfectacion,
+    );
+    agregarLineaTxt(lineas, "Apps en segundo plano", "Método", apps?.metodo);
+    agregarLineaTxt(
+      lineas,
+      "Apps en segundo plano",
+      "Recomendación",
+      apps?.recomendacion,
+    );
+    agregarLineaTxt(
+      lineas,
+      "Apps en segundo plano",
+      "Conclusión",
+      apps?.conclusion,
+    );
+
+    agregarLineaTxt(
+      lineas,
+      "Carga Mitsu",
+      "Total keys AsyncStorage",
+      cargaMitsu?.totalKeysAsyncStorage,
+    );
+    agregarLineaTxt(lineas, "Carga Mitsu", "Keys Mitsu", cargaMitsu?.keysMitsu);
+    agregarLineaTxt(
+      lineas,
+      "Carga Mitsu",
+      "Registros locales",
+      cargaMitsu?.registrosLocales,
+    );
+    agregarLineaTxt(
+      lineas,
+      "Carga Mitsu",
+      "Registros con error parseo",
+      cargaMitsu?.registrosConErrorParseo,
+    );
+    agregarLineaTxt(
+      lineas,
+      "Carga Mitsu",
+      "Posibles órdenes",
+      cargaMitsu?.posiblesOrdenes,
+    );
+    agregarLineaTxt(
+      lineas,
+      "Carga Mitsu",
+      "Posibles PDFs",
+      cargaMitsu?.posiblesPdfs,
+    );
+    agregarLineaTxt(
+      lineas,
+      "Carga Mitsu",
+      "Posibles base64",
+      cargaMitsu?.posiblesBase64,
+    );
+    agregarLineaTxt(
+      lineas,
+      "Carga Mitsu",
+      "Peso local aproximado",
+      bytesToMB(cargaMitsu?.totalBytes),
+    );
+    agregarLineaTxt(
+      lineas,
+      "Carga Mitsu",
+      "Peso reporte JSON",
+      bytesToMB(cargaMitsu?.jsonFinalBytes),
+    );
+    agregarLineaTxt(
+      lineas,
+      "Carga Mitsu",
+      "Tiempo lectura/parseo",
+      cargaMitsu?.tiempoLecturaParseo !== null &&
+        cargaMitsu?.tiempoLecturaParseo !== undefined
+        ? `${cargaMitsu.tiempoLecturaParseo} ms`
+        : "Sin prueba",
+    );
+    agregarLineaTxt(
+      lineas,
+      "Carga Mitsu",
+      "Tiempo armado JSON",
+      cargaMitsu?.tiempoArmadoJson !== null &&
+        cargaMitsu?.tiempoArmadoJson !== undefined
+        ? `${cargaMitsu.tiempoArmadoJson} ms`
+        : "Sin prueba",
+    );
+    agregarLineaTxt(
+      lineas,
+      "Carga Mitsu",
+      "Tiempo total prueba",
+      cargaMitsu?.tiempoTotal !== null && cargaMitsu?.tiempoTotal !== undefined
+        ? `${cargaMitsu.tiempoTotal} ms`
+        : "Sin prueba",
+    );
+    agregarLineaTxt(
+      lineas,
+      "Carga Mitsu",
+      "Riesgo de carga",
+      cargaMitsu?.riesgoCarga,
+    );
+    agregarLineaTxt(
+      lineas,
+      "Carga Mitsu",
+      "Conclusión carga",
+      cargaMitsu?.conclusion,
+    );
+
+    agregarLineaTxt(lineas, "Conclusión general", "Resultado", conclusionGeneral);
+
+    agregarLineaTxt(
+      lineas,
+      "Seguridad",
+      "Nota",
+      "La IP, URL de API y contenido real de órdenes/PDFs no se muestran. Solo se reportan métricas técnicas.",
+    );
+
+    return `\ufeff${lineas.join("\n")}`;
+  };
+
+  const crearArchivoTxt = async (contenido) => {
+    const fecha = new Date()
+      .toISOString()
+      .replace(/[:.]/g, "-")
+      .replace("T", "_")
+      .slice(0, 19);
+
+    const fileName = `diagnostico_mitsu_${fecha}.txt`;
+    const file = new File(Paths.cache, fileName);
+
+    try {
+      if (file.exists) {
+        file.delete();
+      }
+
+      file.create({
+        overwrite: true,
+        intermediates: true,
+      });
+
+      file.write(contenido);
+
+      return file.uri;
+    } catch (error) {
+      console.log("Error creando TXT:", error);
+      throw error;
+    }
+  };
+
   const mandarInformacion = async () => {
     try {
       setSendingReport(true);
 
-      await cargarDiagnostico();
-      await medirRendimientoTelefono();
-      await medirCargaRealMitsu();
+      const diagnostico = await cargarDiagnostico();
+      const rendimiento = await medirRendimientoTelefono();
+      const cargaMitsu = await medirCargaRealMitsu();
+      const apps = await medirUsoOtrasApps(rendimiento);
 
-      await esperar(900);
+      const conclusionGeneral = obtenerConclusionGeneral(
+        diagnostico,
+        rendimiento,
+        cargaMitsu,
+        apps,
+      );
 
-      if (!reporteRef.current) {
-        Alert.alert("Error", "No se pudo generar el reporte.");
-        return;
-      }
-
-      const uri = await captureRef(reporteRef, {
-        format: "png",
-        quality: 1,
-        result: "tmpfile",
+      const contenidoTxt = generarContenidoTxt({
+        diagnostico,
+        rendimiento,
+        cargaMitsu,
+        apps,
+        conclusionGeneral,
       });
+
+      const uri = await crearArchivoTxt(contenidoTxt);
 
       const disponible = await Sharing.isAvailableAsync();
 
@@ -515,9 +932,9 @@ export default function DiagnosticoScreen() {
       }
 
       await Sharing.shareAsync(uri, {
-        mimeType: "image/png",
-        dialogTitle: "Compartir diagnóstico Mitsu",
-        UTI: "public.png",
+        mimeType: "text/plain",
+        dialogTitle: "Compartir diagnóstico Mitsu TXT",
+        UTI: "public.plain-text",
       });
     } catch (error) {
       console.log("Error al mandar información:", error);
@@ -538,7 +955,8 @@ export default function DiagnosticoScreen() {
     info.cumpleRam &&
     info.cumpleStorage &&
     info.cumpleAndroid &&
-    info.cumpleRed;
+    info.cumpleRed &&
+    (!appsUsageTest || appsUsageTest.posibleAfectacion !== "Alta");
 
   return (
     <View style={styles.container}>
@@ -554,8 +972,8 @@ export default function DiagnosticoScreen() {
 
           <Text style={styles.description}>
             Información técnica para validar si el dispositivo, almacenamiento,
-            red, sistema operativo, rendimiento o carga local pueden afectar el
-            funcionamiento de Mitsu App.
+            red, sistema operativo, rendimiento, apps abiertas o carga local
+            pueden afectar el funcionamiento de Mitsu App.
           </Text>
 
           {!info ? (
@@ -700,6 +1118,89 @@ export default function DiagnosticoScreen() {
                 />
               </Section>
 
+              {performanceTest && (
+                <Section title="Check de rendimiento">
+                  <InfoRow label="Fluidez" value={performanceTest.fluidez} />
+                  <InfoRow
+                    label="Tiempo CPU"
+                    value={`${performanceTest.tiempoCpu} ms`}
+                    danger={performanceTest.fluidez === "Mala"}
+                  />
+                  <InfoRow
+                    label="Retraso promedio"
+                    value={`${performanceTest.retrasoPromedio} ms`}
+                    danger={performanceTest.fluidez === "Mala"}
+                  />
+                  <InfoRow
+                    label="Retraso máximo"
+                    value={`${performanceTest.retrasoMaximo} ms`}
+                    danger={performanceTest.fluidez === "Mala"}
+                  />
+                  <InfoRow
+                    label="Conclusión"
+                    value={performanceTest.conclusion}
+                    danger={performanceTest.fluidez === "Mala"}
+                  />
+                </Section>
+              )}
+
+              {appsUsageTest && (
+                <Section title="Apps en segundo plano">
+                  <InfoRow
+                    label="Detección directa"
+                    value={appsUsageTest.deteccionDirectaApps}
+                  />
+                  <InfoRow
+                    label="YouTube"
+                    value={appsUsageTest.youtubeDetectado}
+                  />
+                  <InfoRow
+                    label="Número de apps abiertas"
+                    value={appsUsageTest.numeroAppsAbiertas}
+                  />
+                  <InfoRow
+                    label="Posible afectación"
+                    value={appsUsageTest.posibleAfectacion}
+                    danger={appsUsageTest.posibleAfectacion === "Alta"}
+                  />
+                  <InfoRow
+                    label="Conclusión"
+                    value={appsUsageTest.conclusion}
+                    danger={appsUsageTest.posibleAfectacion === "Alta"}
+                  />
+                </Section>
+              )}
+
+              {mitsuLoadTest && (
+                <Section title="Prueba de carga Mitsu">
+                  <InfoRow
+                    label="Registros locales"
+                    value={String(mitsuLoadTest.registrosLocales)}
+                  />
+                  <InfoRow
+                    label="Posibles órdenes"
+                    value={String(mitsuLoadTest.posiblesOrdenes)}
+                  />
+                  <InfoRow
+                    label="Posibles PDFs"
+                    value={String(mitsuLoadTest.posiblesPdfs)}
+                  />
+                  <InfoRow
+                    label="Posibles base64"
+                    value={String(mitsuLoadTest.posiblesBase64)}
+                  />
+                  <InfoRow
+                    label="Peso local aproximado"
+                    value={bytesToMB(mitsuLoadTest.totalBytes)}
+                  />
+                  <InfoRow
+                    label="Riesgo"
+                    value={mitsuLoadTest.riesgoCarga}
+                    danger={mitsuLoadTest.riesgoCarga === "Alto"}
+                  />
+                </Section>
+              )}
+
               <TouchableOpacity
                 style={styles.buttonSecondary}
                 activeOpacity={0.8}
@@ -710,7 +1211,7 @@ export default function DiagnosticoScreen() {
                   <ActivityIndicator color="#fff" />
                 ) : (
                   <Ionicons
-                    name="share-social-outline"
+                    name="document-text-outline"
                     size={20}
                     color="#fff"
                   />
@@ -718,8 +1219,8 @@ export default function DiagnosticoScreen() {
 
                 <Text style={styles.buttonText}>
                   {sendingReport
-                    ? "Preparando información..."
-                    : "Mandar información"}
+                    ? "Preparando archivo TXT..."
+                    : "Mandar información TXT"}
                 </Text>
               </TouchableOpacity>
 
@@ -736,245 +1237,6 @@ export default function DiagnosticoScreen() {
           )}
         </View>
       </ScrollView>
-
-      {info && (
-        <View style={styles.hiddenReportContainer}>
-          <View ref={reporteRef} collapsable={false} style={styles.reportCard}>
-            <Text style={styles.reportTitle}>Diagnóstico Mitsu App</Text>
-
-            <Text style={styles.reportDate}>
-              Generado: {new Date().toLocaleString("es-MX")}
-            </Text>
-
-            <View style={styles.reportDivider} />
-
-            <Text style={styles.reportSection}>Aplicación</Text>
-            <ReportRow label="Nombre" value={info.appName} />
-            <ReportRow label="Versión" value={info.appVersion} />
-            <ReportRow label="Build" value={info.buildVersion} />
-
-            <Text style={styles.reportSection}>Dispositivo</Text>
-            <ReportRow label="Marca" value={info.brand} />
-            <ReportRow label="Fabricante" value={info.manufacturer} />
-            <ReportRow label="Modelo" value={info.modelName} />
-            <ReportRow label="Producto" value={info.productName} />
-            <ReportRow label="Tipo" value={info.isDevice} />
-
-            <Text style={styles.reportSection}>Sistema operativo</Text>
-            <ReportRow label="Sistema" value={info.osName} />
-            <ReportRow label="Versión" value={info.osVersion} />
-            <ReportRow
-              label="Android API"
-              value={
-                info.androidApi ? String(info.androidApi) : "No disponible"
-              }
-            />
-            <ReportRow
-              label="Validación Android"
-              value={info.cumpleAndroid ? "Correcto" : "Revisar"}
-            />
-
-            <Text style={styles.reportSection}>Memoria y almacenamiento</Text>
-            <ReportRow label="RAM total" value={bytesToGB(info.totalMemory)} />
-            <ReportRow
-              label="Memoria máxima app"
-              value={bytesToGB(info.maxMemory)}
-            />
-            <ReportRow
-              label="RAM"
-              value={info.cumpleRam ? "Correcto" : "Revisar"}
-            />
-            <ReportRow
-              label="Almacenamiento total"
-              value={bytesToGB(info.totalStorage)}
-            />
-            <ReportRow
-              label="Almacenamiento libre"
-              value={bytesToGB(info.freeStorage)}
-            />
-            <ReportRow
-              label="Almacenamiento"
-              value={info.cumpleStorage ? "Correcto" : "Revisar"}
-            />
-
-            <Text style={styles.reportSection}>Procesador</Text>
-            <ReportRow
-              label="Arquitectura CPU"
-              value={
-                info.cpuArchitectures.length > 0
-                  ? info.cpuArchitectures.join(", ")
-                  : "No disponible"
-              }
-            />
-
-            <Text style={styles.reportSection}>Red</Text>
-            <ReportRow
-              label="Conectado"
-              value={info.isConnected ? "Sí" : "No"}
-            />
-            <ReportRow
-              label="Internet disponible"
-              value={info.isInternetReachable ? "Sí" : "No"}
-            />
-            <ReportRow
-              label="Tipo de conexión"
-              value={traducirTipoRed(info.networkType)}
-            />
-            <ReportRow
-              label="Red móvil"
-              value={traducirGeneracionCelular(info.cellularGeneration)}
-            />
-            <ReportRow
-              label="Compañía"
-              value={info.carrier || "No disponible"}
-            />
-            <ReportRow
-              label="Conexión de costo alto"
-              value={info.isConnectionExpensive ? "Sí" : "No"}
-            />
-            <ReportRow
-              label="Validación red"
-              value={info.cumpleRed ? "Correcto" : "Revisar"}
-            />
-
-            <Text style={styles.reportSection}>Check de rendimiento</Text>
-            <ReportRow
-              label="Fluidez"
-              value={performanceTest?.fluidez || "Sin prueba"}
-            />
-            <ReportRow
-              label="Tiempo CPU"
-              value={
-                performanceTest?.tiempoCpu !== null &&
-                performanceTest?.tiempoCpu !== undefined
-                  ? `${performanceTest.tiempoCpu} ms`
-                  : "Sin prueba"
-              }
-            />
-            <ReportRow
-              label="Retraso promedio"
-              value={
-                performanceTest?.retrasoPromedio !== null &&
-                performanceTest?.retrasoPromedio !== undefined
-                  ? `${performanceTest.retrasoPromedio} ms`
-                  : "Sin prueba"
-              }
-            />
-            <ReportRow
-              label="Retraso máximo"
-              value={
-                performanceTest?.retrasoMaximo !== null &&
-                performanceTest?.retrasoMaximo !== undefined
-                  ? `${performanceTest.retrasoMaximo} ms`
-                  : "Sin prueba"
-              }
-            />
-            <ReportRow
-              label="Conclusión rendimiento"
-              value={performanceTest?.conclusion || "Sin prueba"}
-            />
-
-            <Text style={styles.reportSection}>Prueba de carga Mitsu</Text>
-            <ReportRow
-              label="Registros locales"
-              value={
-                mitsuLoadTest
-                  ? String(mitsuLoadTest.registrosLocales)
-                  : "Sin prueba"
-              }
-            />
-            <ReportRow
-              label="Posibles órdenes"
-              value={
-                mitsuLoadTest
-                  ? String(mitsuLoadTest.posiblesOrdenes)
-                  : "Sin prueba"
-              }
-            />
-            <ReportRow
-              label="Posibles PDFs"
-              value={
-                mitsuLoadTest
-                  ? String(mitsuLoadTest.posiblesPdfs)
-                  : "Sin prueba"
-              }
-            />
-            <ReportRow
-              label="Posibles base64"
-              value={
-                mitsuLoadTest
-                  ? String(mitsuLoadTest.posiblesBase64)
-                  : "Sin prueba"
-              }
-            />
-            <ReportRow
-              label="Peso local aproximado"
-              value={
-                mitsuLoadTest
-                  ? bytesToMB(mitsuLoadTest.totalBytes)
-                  : "Sin prueba"
-              }
-            />
-            <ReportRow
-              label="Peso reporte JSON"
-              value={
-                mitsuLoadTest
-                  ? bytesToMB(mitsuLoadTest.jsonFinalBytes)
-                  : "Sin prueba"
-              }
-            />
-            <ReportRow
-              label="Tiempo lectura/parseo"
-              value={
-                mitsuLoadTest?.tiempoLecturaParseo !== null &&
-                mitsuLoadTest?.tiempoLecturaParseo !== undefined
-                  ? `${mitsuLoadTest.tiempoLecturaParseo} ms`
-                  : "Sin prueba"
-              }
-            />
-            <ReportRow
-              label="Tiempo armado JSON"
-              value={
-                mitsuLoadTest?.tiempoArmadoJson !== null &&
-                mitsuLoadTest?.tiempoArmadoJson !== undefined
-                  ? `${mitsuLoadTest.tiempoArmadoJson} ms`
-                  : "Sin prueba"
-              }
-            />
-            <ReportRow
-              label="Tiempo total prueba"
-              value={
-                mitsuLoadTest?.tiempoTotal !== null &&
-                mitsuLoadTest?.tiempoTotal !== undefined
-                  ? `${mitsuLoadTest.tiempoTotal} ms`
-                  : "Sin prueba"
-              }
-            />
-            <ReportRow
-              label="Riesgo de carga"
-              value={mitsuLoadTest?.riesgoCarga || "Sin prueba"}
-            />
-            <ReportRow
-              label="Conclusión carga"
-              value={mitsuLoadTest?.conclusion || "Sin prueba"}
-            />
-
-            <View style={styles.reportDivider} />
-
-            <Text style={styles.reportConclusionTitle}>Conclusión general</Text>
-            <Text style={styles.reportConclusion}>
-              {obtenerConclusionGeneral()}
-            </Text>
-
-            <View style={styles.reportDivider} />
-
-            <Text style={styles.reportFooter}>
-              La IP, la URL de la API y el contenido real de órdenes/PDFs no se
-              muestran por seguridad. Solo se reportan métricas técnicas.
-            </Text>
-          </View>
-        </View>
-      )}
     </View>
   );
 }
@@ -996,15 +1258,6 @@ function InfoRow({ label, value, danger }) {
       <Text style={[styles.value, danger && styles.danger]}>
         {value || "No disponible"}
       </Text>
-    </View>
-  );
-}
-
-function ReportRow({ label, value }) {
-  return (
-    <View style={styles.reportRow}>
-      <Text style={styles.reportLabel}>{label}:</Text>
-      <Text style={styles.reportValue}>{value || "No disponible"}</Text>
     </View>
   );
 }
@@ -1085,6 +1338,27 @@ function ocultarNombreKey(key) {
   return `${texto.slice(0, 3)}***${texto.slice(-3)}`;
 }
 
+function limpiarValorTxt(value) {
+  if (value === null || value === undefined || value === "") {
+    return "No disponible";
+  }
+
+  return String(value)
+    .replace(/\t/g, " ")
+    .replace(/\r/g, " ")
+    .replace(/\n/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function agregarLineaTxt(lineas, seccion, campo, valor) {
+  lineas.push(
+    `${limpiarValorTxt(seccion)}\t${limpiarValorTxt(campo)}\t${limpiarValorTxt(
+      valor,
+    )}`,
+  );
+}
+
 function contarDatosMitsu(parsed, valueLower, keyLower) {
   let ordenes = 0;
   let pdfs = 0;
@@ -1151,6 +1425,7 @@ function recorrerJsonMitsu(data) {
 
       const tieneOrderId = keys.some((key) => {
         const lower = key.toLowerCase();
+
         return (
           lower === "orderid" ||
           lower === "order_id" ||
@@ -1166,6 +1441,7 @@ function recorrerJsonMitsu(data) {
 
       const tienePdf = keys.some((key) => {
         const lower = key.toLowerCase();
+
         return (
           lower.includes("pdf") ||
           lower.includes("attachment") ||
@@ -1179,6 +1455,7 @@ function recorrerJsonMitsu(data) {
 
       const tieneBase64 = keys.some((key) => {
         const lower = key.toLowerCase();
+
         return lower.includes("base64");
       });
 
@@ -1380,94 +1657,5 @@ const styles = StyleSheet.create({
     color: "#fff",
     fontSize: 15,
     fontWeight: "bold",
-  },
-
-  hiddenReportContainer: {
-    position: "absolute",
-    left: -10000,
-    top: 0,
-  },
-
-  reportCard: {
-    width: 900,
-    backgroundColor: "#FFFFFF",
-    padding: 32,
-    borderRadius: 20,
-  },
-
-  reportTitle: {
-    fontSize: 30,
-    fontWeight: "bold",
-    color: Colors?.primary || "#a10000",
-    textAlign: "center",
-    marginBottom: 8,
-  },
-
-  reportDate: {
-    fontSize: 16,
-    color: "#555",
-    textAlign: "center",
-    marginBottom: 18,
-  },
-
-  reportDivider: {
-    height: 1,
-    backgroundColor: "#E5E7EB",
-    marginVertical: 16,
-  },
-
-  reportSection: {
-    fontSize: 20,
-    fontWeight: "bold",
-    color: Colors?.primary || "#a10000",
-    marginTop: 14,
-    marginBottom: 8,
-  },
-
-  reportRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    borderBottomWidth: 1,
-    borderBottomColor: "#F1F1F1",
-    paddingVertical: 8,
-    gap: 16,
-  },
-
-  reportLabel: {
-    fontSize: 16,
-    color: "#666",
-    flex: 1,
-  },
-
-  reportValue: {
-    fontSize: 16,
-    color: "#222",
-    fontWeight: "600",
-    flex: 1,
-    textAlign: "right",
-  },
-
-  reportConclusionTitle: {
-    fontSize: 20,
-    fontWeight: "bold",
-    color: Colors?.primary || "#a10000",
-    marginBottom: 8,
-    textAlign: "center",
-  },
-
-  reportConclusion: {
-    fontSize: 16,
-    color: "#222",
-    lineHeight: 24,
-    textAlign: "center",
-    fontWeight: "600",
-  },
-
-  reportFooter: {
-    fontSize: 14,
-    color: "#555",
-    textAlign: "center",
-    marginTop: 10,
   },
 });

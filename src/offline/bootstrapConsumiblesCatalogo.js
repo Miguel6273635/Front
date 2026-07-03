@@ -13,8 +13,12 @@ import {
 
 const DEFAULT_TIMEOUT_MS = 90_000;
 
+function safeStr(v) {
+  return String(v ?? "").trim();
+}
+
 function encodeFilterValue(v) {
-  return String(v ?? "").replace(/'/g, "''");
+  return safeStr(v).replace(/'/g, "''");
 }
 
 function getResults(data) {
@@ -23,6 +27,9 @@ function getResults(data) {
   if (Array.isArray(data?.d?.results)) return data.d.results;
   if (Array.isArray(data?.value)) return data.value;
   if (Array.isArray(data?.data)) return data.data;
+  if (Array.isArray(data?.data?.results)) return data.data.results;
+  if (Array.isArray(data?.data?.d?.results)) return data.data.d.results;
+
   return [];
 }
 
@@ -43,11 +50,6 @@ function makeCandidateUrls({ Agr1, Agr2 }) {
     `/api/odata/ZSD_CATALOGOS_SRV/MaterialesCoberturaSet?${filterAgrupador}`,
     `/api/odata/ZSD_CATALOGOS_SRV/MaterialesCoberturaSet?${filterAgr}`,
     `/api/odata/ZSD_CATALOGOS_SRV/MaterialesCoberturaSet?${filterLower}`,
-
-    /*
-      Fallbacks por si tu backend ya tiene endpoints propios.
-      No rompen si no existen; solo se prueban.
-    */
     `/api/catalogos/materiales-cobertura?agr1=${encodeURIComponent(
       Agr1,
     )}&agr2=${encodeURIComponent(Agr2)}`,
@@ -112,6 +114,29 @@ async function fetchMaterialesPorAgrupador({ Agr1, Agr2 }) {
   };
 }
 
+async function getCachedSummary(cobertura) {
+  try {
+    const cached = await loadConsumiblesByCobertura(cobertura);
+
+    return {
+      cachedCount: Number(cached?.count || cached?.cachedCount || 0),
+      cachedGroups: Array.isArray(cached?.groups) ? cached.groups.length : 0,
+      updatedAt: cached?.updatedAt || null,
+    };
+  } catch (e) {
+    console.log(
+      "[CONSUMIBLES PREFETCH] No se pudo leer cache actual:",
+      e?.message || e,
+    );
+
+    return {
+      cachedCount: 0,
+      cachedGroups: 0,
+      updatedAt: null,
+    };
+  }
+}
+
 export async function bootstrapPrefetchConsumiblesCatalogo(options = {}) {
   const cobertura = normalizeCoberturaTipo(options?.coberturaTipo || "BASICA");
 
@@ -120,61 +145,142 @@ export async function bootstrapPrefetchConsumiblesCatalogo(options = {}) {
     const online = !!(net?.isConnected && net?.isInternetReachable !== false);
 
     if (!online) {
-      const cached = await loadConsumiblesByCobertura(cobertura);
+      const cached = await getCachedSummary(cobertura);
+
+      console.log("[CONSUMIBLES PREFETCH] Offline. Se conserva cache:", {
+        cobertura,
+        cachedCount: cached.cachedCount,
+      });
 
       return {
         ok: false,
         reason: "offline",
         cobertura,
-        cachedCount: cached?.count || 0,
+        cachedCount: cached.cachedCount,
+        cachedGroups: cached.cachedGroups,
+        updatedAt: cached.updatedAt,
       };
     }
 
     const agrupadores = getAgrupadoresByCobertura(cobertura);
 
     let total = 0;
+    let savedGroups = 0;
+    let skippedGroups = 0;
+
     const groups = [];
 
     for (const agr of agrupadores) {
+      const Agr1 = agr?.Agr1 || agr?.Agrupador1 || "";
+      const Agr2 = agr?.Agr2 || agr?.Agrupador2 || "";
+      const label = agr?.label || `${Agr1} - ${Agr2}`;
+
+      if (!Agr1 || !Agr2) {
+        skippedGroups += 1;
+
+        groups.push({
+          Agr1,
+          Agr2,
+          label,
+          ok: false,
+          count: 0,
+          skipped: true,
+          error: "Agrupador incompleto",
+        });
+
+        continue;
+      }
+
       const result = await fetchMaterialesPorAgrupador({
-        Agr1: agr.Agr1,
-        Agr2: agr.Agr2,
+        Agr1,
+        Agr2,
       });
+
+      if (!result.ok || !Array.isArray(result.rows) || !result.rows.length) {
+        skippedGroups += 1;
+
+        groups.push({
+          Agr1,
+          Agr2,
+          label,
+          ok: false,
+          count: 0,
+          skipped: true,
+          error: result.error || "Sin datos nuevos, se conserva cache anterior",
+        });
+
+        console.log("[CONSUMIBLES PREFETCH] Grupo sin datos. No se sobrescribe cache:", {
+          cobertura,
+          Agr1,
+          Agr2,
+          error: result.error || "Sin datos",
+        });
+
+        continue;
+      }
 
       const saved = await saveConsumiblesGroup({
         coberturaTipo: cobertura,
-        agr1: agr.Agr1,
-        agr2: agr.Agr2,
-        rows: result.rows || [],
+        agr1: Agr1,
+        agr2: Agr2,
+        rows: result.rows,
       });
 
-      total += saved.count || 0;
+      const savedCount = Number(saved?.count || 0);
+
+      total += savedCount;
+      savedGroups += 1;
 
       groups.push({
-        Agr1: agr.Agr1,
-        Agr2: agr.Agr2,
-        label: agr.label,
-        ok: result.ok,
-        count: saved.count || 0,
-        error: result.error || null,
+        Agr1,
+        Agr2,
+        label,
+        ok: true,
+        count: savedCount,
+        skipped: false,
+        error: null,
       });
     }
+
+    const cached = await getCachedSummary(cobertura);
 
     console.log("[CONSUMIBLES PREFETCH] Guardado por agrupadores:", {
       cobertura,
       total,
+      savedGroups,
+      skippedGroups,
+      cachedCount: cached.cachedCount,
       groups: groups.length,
     });
+
+    if (total <= 0) {
+      return {
+        ok: false,
+        reason: "sin_datos_nuevos_se_conserva_cache",
+        cobertura,
+        count: 0,
+        savedGroups,
+        skippedGroups,
+        cachedCount: cached.cachedCount,
+        cachedGroups: cached.cachedGroups,
+        groups,
+        updatedAt: cached.updatedAt,
+      };
+    }
 
     return {
       ok: true,
       cobertura,
       count: total,
+      savedGroups,
+      skippedGroups,
+      cachedCount: cached.cachedCount,
+      cachedGroups: cached.cachedGroups,
       groups,
       updatedAt: Date.now(),
     };
   } catch (e) {
-    const cached = await loadConsumiblesByCobertura(cobertura);
+    const cached = await getCachedSummary(cobertura);
 
     console.log(
       "[CONSUMIBLES PREFETCH] Error general:",
@@ -186,7 +292,9 @@ export async function bootstrapPrefetchConsumiblesCatalogo(options = {}) {
       reason: "prefetch_consumibles_error",
       cobertura,
       error: e?.message || String(e),
-      cachedCount: cached?.count || 0,
+      cachedCount: cached.cachedCount,
+      cachedGroups: cached.cachedGroups,
+      updatedAt: cached.updatedAt,
     };
   }
 }

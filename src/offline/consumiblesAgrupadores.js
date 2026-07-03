@@ -4,16 +4,14 @@
   Miguel Ángel Hernández Álvarez - 30/06/2026
 
   Objetivo:
-  Definir los agrupadores permitidos por cobertura para consumibles.
+  Definir y normalizar los agrupadores permitidos por cobertura para consumibles.
 
   Importante:
   - En SAP/JSON puede venir "BASICO", pero en la app usamos "BASICA".
   - En SAP/JSON puede venir "MEDIO", pero en la app usamos "MEDIA".
-  - SEMI puede venir como "SEMI", "SEMICOMPLETO", "SEMI_COMPLETO", etc.
-
-  Mejora aplicada:
-  Antes MEDIA y SEMI estaban vacíos y la app caía a BASICA.
-  Eso provocaba que una orden con COBERTURA MEDIA no mostrara materiales MEDIO.
+  - SEMI puede venir como "SEMI", "SEMIFULL", "SEMI FULL", "SEMICOMPLETO", etc.
+  - Si la cobertura es MEDIA, también puede usar consumibles BASICOS.
+  - Si la cobertura es SEMI, también puede usar consumibles BASICOS y MEDIOS.
 */
 
 function safeStr(v) {
@@ -27,21 +25,6 @@ export function normUpper(v) {
     .replace(/[\u0300-\u036f]/g, "");
 }
 
-/*
-  Agrupadores base por cobertura.
-
-  BASICA:
-  Vienen como Agrupador1 = BASICO en el JSON/SAP.
-
-  MEDIA:
-  Vienen como Agrupador1 = MEDIO en el JSON/SAP.
-
-  SEMI:
-  Se dejan agrupadores comunes para que la app no se quede sin categorías.
-  Además, isAgrupadorAllowed tiene una validación flexible por Agrupador1,
-  por lo que si el JSON trae Agrupador1 = SEMI con un Agrupador2 nuevo,
-  también se permitirá.
-*/
 export const AGRUPADORES_POR_COBERTURA = {
   BASICA: [
     { Agr1: "BASICO", Agr2: "GRASAS" },
@@ -63,27 +46,17 @@ export const AGRUPADORES_POR_COBERTURA = {
     { Agr1: "MEDIO", Agr2: "BATERIA_RE" },
     { Agr1: "MEDIO", Agr2: "CAM_ACEITE" },
 
-    /*
-      Agrupadores extra frecuentes.
-      No afectan si no existen en el JSON; solo sirven como fallback visual
-      cuando el catálogo todavía no se cargó.
-    */
     { Agr1: "MEDIO", Agr2: "GRASAS" },
+    { Agr1: "MEDIO", Agr2: "DIELECTRIC" },
     { Agr1: "MEDIO", Agr2: "ACEITE" },
     { Agr1: "MEDIO", Agr2: "TRAPO" },
     { Agr1: "MEDIO", Agr2: "PAPEL_LIJA" },
     { Agr1: "MEDIO", Agr2: "TORNILLOS" },
     { Agr1: "MEDIO", Agr2: "PERNOS" },
+    { Agr1: "MEDIO", Agr2: "ARAN_CUER" },
   ],
 
   SEMI: [
-    /*
-      Si en el JSON tus registros vienen con Agrupador1 = SEMI,
-      estos grupos aparecerán como categorías fallback.
-
-      Aunque no estén todos aquí, isAgrupadorAllowed también acepta
-      cualquier Agrupador2 cuando Agrupador1 pertenece a SEMI.
-    */
     { Agr1: "SEMI", Agr2: "GRASAS" },
     { Agr1: "SEMI", Agr2: "DIELECTRIC" },
     { Agr1: "SEMI", Agr2: "ACEITE" },
@@ -99,6 +72,32 @@ export const AGRUPADORES_POR_COBERTURA = {
     { Agr1: "SEMI", Agr2: "LAMP_EMERG" },
     { Agr1: "SEMI", Agr2: "BATERIA_RE" },
     { Agr1: "SEMI", Agr2: "CAM_ACEITE" },
+
+    { Agr1: "SEMIFULL", Agr2: "GRASAS" },
+    { Agr1: "SEMIFULL", Agr2: "DIELECTRIC" },
+    { Agr1: "SEMIFULL", Agr2: "ACEITE" },
+    { Agr1: "SEMIFULL", Agr2: "TRAPO" },
+    { Agr1: "SEMIFULL", Agr2: "PAPEL_LIJA" },
+    { Agr1: "SEMIFULL", Agr2: "TORNILLOS" },
+    { Agr1: "SEMIFULL", Agr2: "PERNOS" },
+    { Agr1: "SEMIFULL", Agr2: "ARAN_CUER" },
+    { Agr1: "SEMIFULL", Agr2: "FUSIBLE_TC" },
+    { Agr1: "SEMIFULL", Agr2: "MECHAS" },
+    { Agr1: "SEMIFULL", Agr2: "FOCOS" },
+    { Agr1: "SEMIFULL", Agr2: "LAMPARA" },
+    { Agr1: "SEMIFULL", Agr2: "LAMP_EMERG" },
+    { Agr1: "SEMIFULL", Agr2: "BATERIA_RE" },
+    { Agr1: "SEMIFULL", Agr2: "CAM_ACEITE" },
+
+    { Agr1: "SEMIFULL", Agr2: "ACEITERAS" },
+    { Agr1: "SEMIFULL", Agr2: "BALASTRAS" },
+    { Agr1: "SEMIFULL", Agr2: "BAND_MOTOR" },
+    { Agr1: "SEMIFULL", Agr2: "BOTONES" },
+    { Agr1: "SEMIFULL", Agr2: "CONTACTOR" },
+    { Agr1: "SEMIFULL", Agr2: "ESCOBILLAS" },
+    { Agr1: "SEMIFULL", Agr2: "GUIAS" },
+    { Agr1: "SEMIFULL", Agr2: "RODAMIENTOS" },
+    { Agr1: "SEMIFULL", Agr2: "SENSORES" },
   ],
 };
 
@@ -125,47 +124,18 @@ export function normalizeCoberturaTipo(value) {
 
   if (
     s.includes("SEMI") ||
+    s.includes("SEMIFULL") ||
+    s.includes("SEMI FULL") ||
+    s.includes("SEMI-FULL") ||
     s.includes("SEMICOMPLETO") ||
     s.includes("SEMI_COMPLETO") ||
-    s.includes("SEMI COMPLETO")
+    s.includes("SEMI COMPLETO") ||
+    s.includes("SEMI-COMPLETO")
   ) {
     return "SEMI";
   }
 
   return s;
-}
-
-export function normalizeAgrupador(agr = {}) {
-  const Agr1 = normUpper(
-    agr?.Agr1 ||
-      agr?.AGR1 ||
-      agr?.agr1 ||
-      agr?.Agrupador1 ||
-      agr?.agrupador1 ||
-      agr?.Grupo ||
-      agr?.grupo ||
-      agr?.Categoria ||
-      agr?.categoria,
-  );
-
-  const Agr2 = normUpper(
-    agr?.Agr2 ||
-      agr?.AGR2 ||
-      agr?.agr2 ||
-      agr?.Agrupador2 ||
-      agr?.agrupador2 ||
-      agr?.Subcategoria ||
-      agr?.subcategoria ||
-      agr?.Familia ||
-      agr?.familia,
-  );
-
-  return {
-    Agr1,
-    Agr2,
-    key: makeAgrupadorKey(Agr1, Agr2),
-    label: makeAgrupadorLabel(Agr1, Agr2),
-  };
 }
 
 export function makeAgrupadorKey(agr1, agr2) {
@@ -180,6 +150,41 @@ export function makeAgrupadorLabel(agr1, agr2) {
   return a1 || a2 || "GENERAL";
 }
 
+export function normalizeAgrupador(agr = {}) {
+  const Agr1 = normUpper(
+    agr?.Agr1 ||
+      agr?.AGR1 ||
+      agr?.agr1 ||
+      agr?.Agrupador1 ||
+      agr?.agrupador1 ||
+      agr?.Grupo ||
+      agr?.grupo ||
+      agr?.Categoria ||
+      agr?.categoria ||
+      "",
+  );
+
+  const Agr2 = normUpper(
+    agr?.Agr2 ||
+      agr?.AGR2 ||
+      agr?.agr2 ||
+      agr?.Agrupador2 ||
+      agr?.agrupador2 ||
+      agr?.Subcategoria ||
+      agr?.subcategoria ||
+      agr?.Familia ||
+      agr?.familia ||
+      "",
+  );
+
+  return {
+    Agr1,
+    Agr2,
+    key: makeAgrupadorKey(Agr1, Agr2),
+    label: makeAgrupadorLabel(Agr1, Agr2),
+  };
+}
+
 function uniqueAgrupadores(rows = []) {
   const map = new Map();
 
@@ -191,7 +196,18 @@ function uniqueAgrupadores(rows = []) {
     map.set(agr.key, agr);
   }
 
-  return Array.from(map.values());
+  return Array.from(map.values()).sort((a, b) =>
+    String(a.label || "").localeCompare(String(b.label || "")),
+  );
+}
+
+function getCoberturaLevel(coberturaTipo) {
+  const cobertura = normalizeCoberturaTipo(coberturaTipo);
+
+  if (cobertura === "SEMI") return 3;
+  if (cobertura === "MEDIA") return 2;
+
+  return 1;
 }
 
 function getCoberturaAgr1Aliases(coberturaTipo) {
@@ -208,6 +224,9 @@ function getCoberturaAgr1Aliases(coberturaTipo) {
   if (cobertura === "SEMI") {
     return new Set([
       "SEMI",
+      "SEMIFULL",
+      "SEMI FULL",
+      "SEMI-FULL",
       "SEMICOMPLETO",
       "SEMI_COMPLETO",
       "SEMI COMPLETO",
@@ -218,20 +237,47 @@ function getCoberturaAgr1Aliases(coberturaTipo) {
   return new Set([cobertura]);
 }
 
+function getCoberturaFromAgr1(agr1) {
+  const normalizedAgr1 = normUpper(agr1);
+
+  if (
+    normalizedAgr1.includes("SEMI") ||
+    normalizedAgr1.includes("SEMIFULL") ||
+    normalizedAgr1.includes("SEMI FULL") ||
+    normalizedAgr1.includes("SEMI-FULL") ||
+    normalizedAgr1.includes("SEMICOMPLETO") ||
+    normalizedAgr1.includes("SEMI_COMPLETO") ||
+    normalizedAgr1.includes("SEMI COMPLETO") ||
+    normalizedAgr1.includes("SEMI-COMPLETO")
+  ) {
+    return "SEMI";
+  }
+
+  if (
+    normalizedAgr1.includes("MEDIA") ||
+    normalizedAgr1.includes("MEDIO") ||
+    normalizedAgr1.includes("MEDIUM")
+  ) {
+    return "MEDIA";
+  }
+
+  if (
+    normalizedAgr1.includes("BASICA") ||
+    normalizedAgr1.includes("BASICO") ||
+    normalizedAgr1.includes("BASIC")
+  ) {
+    return "BASICA";
+  }
+
+  return normalizedAgr1 || "BASICA";
+}
+
 function isAgr1CompatibleWithCobertura(agr1, coberturaTipo) {
   const normalizedAgr1 = normUpper(agr1);
   const aliases = getCoberturaAgr1Aliases(coberturaTipo);
 
   if (aliases.has(normalizedAgr1)) return true;
 
-  /*
-    Regla flexible:
-    Si SAP/JSON manda textos largos como:
-    - COBERTURA MEDIA
-    - COBERTURA BASICA
-    - MANTTO SEMI
-    también deben ser compatibles.
-  */
   for (const alias of aliases) {
     if (normalizedAgr1.includes(alias)) return true;
   }
@@ -247,11 +293,6 @@ export function getAgrupadoresByCobertura(coberturaTipo) {
     return uniqueAgrupadores(exact);
   }
 
-  /*
-    Fallback:
-    Si llega una cobertura desconocida, regresamos todos los agrupadores
-    configurados para que la app no se quede sin modal.
-  */
   return uniqueAgrupadores([
     ...(AGRUPADORES_POR_COBERTURA.BASICA || []),
     ...(AGRUPADORES_POR_COBERTURA.MEDIA || []),
@@ -267,19 +308,40 @@ export function getAllAgrupadores() {
   ]);
 }
 
+export function getAgrupadoresAcumuladosByCobertura(coberturaTipo) {
+  const cobertura = normalizeCoberturaTipo(coberturaTipo);
+
+  if (cobertura === "SEMI") {
+    return uniqueAgrupadores([
+      ...(AGRUPADORES_POR_COBERTURA.BASICA || []),
+      ...(AGRUPADORES_POR_COBERTURA.MEDIA || []),
+      ...(AGRUPADORES_POR_COBERTURA.SEMI || []),
+    ]);
+  }
+
+  if (cobertura === "MEDIA") {
+    return uniqueAgrupadores([
+      ...(AGRUPADORES_POR_COBERTURA.BASICA || []),
+      ...(AGRUPADORES_POR_COBERTURA.MEDIA || []),
+    ]);
+  }
+
+  return uniqueAgrupadores(AGRUPADORES_POR_COBERTURA.BASICA || []);
+}
+
 export function isAgrupadorAllowed(row, coberturaTipo) {
   const cobertura = normalizeCoberturaTipo(coberturaTipo);
   const current = normalizeAgrupador(row);
 
   if (!current.Agr1) return false;
 
-  /*
-    Regla principal:
-    Si Agrupador1 coincide con la cobertura normalizada, se permite.
-    Esto evita que se pierdan materiales nuevos del JSON solo porque
-    Agrupador2 todavía no esté escrito en AGRUPADORES_POR_COBERTURA.
-  */
   if (isAgr1CompatibleWithCobertura(current.Agr1, cobertura)) {
+    return true;
+  }
+
+  const rowCobertura = getCoberturaFromAgr1(current.Agr1);
+
+  if (getCoberturaLevel(rowCobertura) <= getCoberturaLevel(cobertura)) {
     return true;
   }
 
@@ -288,14 +350,22 @@ export function isAgrupadorAllowed(row, coberturaTipo) {
 
   if (allowedKeys.has(current.key)) return true;
 
-  /*
-    Fallback controlado:
-    Si por alguna razón la cobertura viene vacía o como SIN COBERTURA,
-    permitimos BASICA para no bloquear el flujo del técnico.
-  */
   if (!cobertura || cobertura === "BASICA") {
     return isAgr1CompatibleWithCobertura(current.Agr1, "BASICA");
   }
 
   return false;
 }
+
+export default {
+  AGRUPADORES_POR_COBERTURA,
+  getAgrupadoresAcumuladosByCobertura,
+  getAgrupadoresByCobertura,
+  getAllAgrupadores,
+  isAgrupadorAllowed,
+  makeAgrupadorKey,
+  makeAgrupadorLabel,
+  normUpper,
+  normalizeAgrupador,
+  normalizeCoberturaTipo,
+};

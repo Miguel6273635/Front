@@ -2,6 +2,7 @@
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import NetInfo from "@react-native-community/netinfo";
+import * as FileSystem from "expo-file-system/legacy";
 
 const MAX_TRIES = 8;
 const REQUEST_TIMEOUT_MS = 2 * 60 * 1000;
@@ -16,6 +17,81 @@ function normalizeCode(code) {
   const n = parseInt(s, 10);
   if (Number.isNaN(n)) return s;
   return String(n).padStart(4, "0");
+}
+
+/*
+  Miguel Ángel Hernández Álvarez - 03/07/2026
+
+  Corrección check-in:
+  La cola ya NO debe guardar base64 pesado en AsyncStorage.
+
+  Nuevo flujo:
+  1. La vista de órdenes toma la foto sin base64.
+  2. La comprime sin base64.
+  3. Encola solo photoUri.
+  4. Justo antes de enviar a SAP, este archivo lee el URI y lo convierte a base64.
+  5. Si SAP responde correctamente, elimina la imagen local.
+*/
+async function readPhotoBase64FromQueueItem(item = {}) {
+  const photoUri = safeStr(item?.photoUri);
+
+  /*
+    Compatibilidad temporal:
+    Si el usuario ya tenía check-ins viejos en cola con photoBase64,
+    todavía se pueden enviar sin perderlos.
+  */
+  const oldPhotoBase64 = safeStr(item?.photoBase64);
+  if (oldPhotoBase64) {
+    return oldPhotoBase64;
+  }
+
+  if (!photoUri) {
+    return "";
+  }
+
+  try {
+    const info = await FileSystem.getInfoAsync(photoUri);
+
+    if (!info?.exists) {
+      console.log("[CHECKIN QUEUE] Archivo local no existe:", {
+        photoUri,
+      });
+      return "";
+    }
+
+    const base64 = await FileSystem.readAsStringAsync(photoUri, {
+      encoding: FileSystem.EncodingType.Base64,
+    });
+
+    return safeStr(base64);
+  } catch (e) {
+    console.log(
+      "[CHECKIN QUEUE] Error leyendo foto como base64:",
+      e?.message || e,
+    );
+    return "";
+  }
+}
+
+async function deleteLocalPhotoIfPossible(item = {}) {
+  const photoUri = safeStr(item?.photoUri);
+
+  if (!photoUri) return;
+
+  try {
+    await FileSystem.deleteAsync(photoUri, {
+      idempotent: true,
+    });
+
+    console.log("[CHECKIN QUEUE] Foto local eliminada:", {
+      photoUri,
+    });
+  } catch (e) {
+    console.log(
+      "[CHECKIN QUEUE] No se pudo eliminar foto local:",
+      e?.message || e,
+    );
+  }
 }
 
 function resolveUserEmail(userOrEmail) {
@@ -57,7 +133,10 @@ export async function loadCheckinQueue(userEmail) {
 async function saveCheckinQueue(userEmail, items = []) {
   try {
     const key = makeCheckinQueueKey(userEmail);
-    await AsyncStorage.setItem(key, JSON.stringify(Array.isArray(items) ? items : []));
+    await AsyncStorage.setItem(
+      key,
+      JSON.stringify(Array.isArray(items) ? items : []),
+    );
     return true;
   } catch (e) {
     console.log("[CHECKIN QUEUE] save error:", e?.message || e);
@@ -68,13 +147,21 @@ async function saveCheckinQueue(userEmail, items = []) {
 export async function enqueueCheckin(userEmail, item = {}) {
   const cleanEmail = resolveUserEmail(userEmail);
   const orderId = safeStr(item?.orderId);
-  const photoBase64 = safeStr(item?.photoBase64);
+  const photoUri = safeStr(item?.photoUri);
 
-  if (!cleanEmail || !orderId || !photoBase64) {
+  /*
+    Compatibilidad:
+    Ya no queremos guardar base64, pero si existe una cola vieja o una llamada
+    vieja todavía manda photoBase64, no la bloqueamos.
+  */
+  const oldPhotoBase64 = safeStr(item?.photoBase64);
+
+  if (!cleanEmail || !orderId || (!photoUri && !oldPhotoBase64)) {
     console.log("[CHECKIN QUEUE] No se puede encolar. Datos incompletos:", {
       hasEmail: !!cleanEmail,
       orderId,
-      hasPhoto: !!photoBase64,
+      hasPhotoUri: !!photoUri,
+      hasOldPhotoBase64: !!oldPhotoBase64,
     });
 
     return await loadCheckinQueue(cleanEmail);
@@ -85,7 +172,19 @@ export async function enqueueCheckin(userEmail, item = {}) {
   const nextItem = {
     ...item,
     orderId,
-    photoBase64,
+
+    /*
+      Nuevo:
+      Guardar URI local del archivo comprimido.
+    */
+    photoUri,
+
+    /*
+      No guardar base64 en nuevas colas.
+      Solo se conserva si venía de una cola/código anterior.
+    */
+    photoBase64: oldPhotoBase64 || "",
+
     statusCode: normalizeCode(item?.statusCode) || "0100",
     lastValidStatus: normalizeCode(item?.lastValidStatus) || "0100",
     createdAt: Number(item?.createdAt || Date.now()),
@@ -94,9 +193,7 @@ export async function enqueueCheckin(userEmail, item = {}) {
     lastError: item?.lastError || null,
   };
 
-  const idx = q.findIndex(
-    (x) => safeStr(x?.orderId) === orderId,
-  );
+  const idx = q.findIndex((x) => safeStr(x?.orderId) === orderId);
 
   if (idx >= 0) {
     q[idx] = {
@@ -116,6 +213,8 @@ export async function enqueueCheckin(userEmail, item = {}) {
   console.log("[CHECKIN QUEUE] Encolado:", {
     orderId,
     statusCode: nextItem.statusCode,
+    hasPhotoUri: !!nextItem.photoUri,
+    hasPhotoBase64: !!nextItem.photoBase64,
     total: q.length,
   });
 
@@ -128,9 +227,7 @@ export async function removeCheckinFromQueue(userEmail, orderId) {
 
   const q = await loadCheckinQueue(cleanEmail);
 
-  const next = q.filter(
-    (x) => safeStr(x?.orderId) !== cleanOrderId,
-  );
+  const next = q.filter((x) => safeStr(x?.orderId) !== cleanOrderId);
 
   await saveCheckinQueue(cleanEmail, next);
 
@@ -290,13 +387,15 @@ export async function processCheckinQueueForUser(userOrEmail, options = {}) {
 
   for (const rawItem of ordered) {
     const orderId = safeStr(rawItem?.orderId);
-    const photoBase64 = safeStr(rawItem?.photoBase64);
+    const photoUri = safeStr(rawItem?.photoUri);
+    const oldPhotoBase64 = safeStr(rawItem?.photoBase64);
     const tries = Number(rawItem?.tries || 0);
 
-    if (!orderId || !photoBase64) {
+    if (!orderId || (!photoUri && !oldPhotoBase64)) {
       console.log("[CHECKIN QUEUE] Item inválido, se elimina:", {
         orderId,
-        hasPhoto: !!photoBase64,
+        hasPhotoUri: !!photoUri,
+        hasOldPhotoBase64: !!oldPhotoBase64,
       });
       continue;
     }
@@ -314,6 +413,32 @@ export async function processCheckinQueueForUser(userOrEmail, options = {}) {
       continue;
     }
 
+    const photoBase64 = await readPhotoBase64FromQueueItem(rawItem);
+
+    if (!photoBase64) {
+      failed++;
+
+      console.log("[CHECKIN QUEUE] No se pudo obtener base64 para enviar:", {
+        orderId,
+        photoUri,
+        hasOldPhotoBase64: !!oldPhotoBase64,
+        tries: tries + 1,
+      });
+
+      keep.push({
+        ...rawItem,
+        tries: tries + 1,
+        updatedAt: Date.now(),
+        lastError: "photo_base64_read_error",
+      });
+
+      /*
+        Cortamos para no intentar muchas órdenes si el problema es de lectura
+        de archivos o permisos.
+      */
+      break;
+    }
+
     try {
       const statusToSend =
         normalizeCode(rawItem?.statusCode) ||
@@ -324,11 +449,18 @@ export async function processCheckinQueueForUser(userOrEmail, options = {}) {
         orderId,
         statusToSend,
         b64Length: photoBase64.length,
+        hasPhotoUri: !!photoUri,
         tries,
       });
 
       await postCheckinEvidence(apiInstance, orderId, photoBase64);
       await postCheckinStatus(apiInstance, orderId, statusToSend);
+
+      /*
+        Si SAP respondió correctamente, eliminamos el archivo local.
+        El item NO se agrega a keep, por eso también sale de la cola.
+      */
+      await deleteLocalPhotoIfPossible(rawItem);
 
       processed++;
 

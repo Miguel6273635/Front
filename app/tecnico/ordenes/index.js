@@ -26,6 +26,7 @@ import DateTimePicker from "@react-native-community/datetimepicker";
 import { router } from "expo-router";
 import * as ImagePicker from "expo-image-picker";
 import * as ImageManipulator from "expo-image-manipulator";
+import * as FileSystem from "expo-file-system/legacy";
 import NetInfo from "@react-native-community/netinfo";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useFocusEffect } from "@react-navigation/native";
@@ -65,7 +66,41 @@ const ACTIVE_EQUIP_KEY = (userEmail) =>
 
 const TBMKY_STATUS_KEY = (orderId) =>
   `tbmky_status_${String(orderId || "").trim()}`;
+/*
+  Miguel Ángel Hernández Álvarez - 03/07/2026
 
+  Corrección check-in:
+  La evidencia del check-in se guarda como archivo local comprimido.
+  Ya no se guarda base64 en estado ni en AsyncStorage.
+*/
+const CHECKIN_PHOTO_DIR = `${FileSystem.documentDirectory}checkin_evidencias/`;
+
+async function ensureCheckinPhotoDir() {
+  try {
+    const info = await FileSystem.getInfoAsync(CHECKIN_PHOTO_DIR);
+    if (!info?.exists) {
+      await FileSystem.makeDirectoryAsync(CHECKIN_PHOTO_DIR, {
+        intermediates: true,
+      });
+    }
+  } catch (e) {
+    console.log("[CHECKIN][PHOTO_DIR] Error:", e?.message || e);
+  }
+}
+
+async function persistCompressedCheckinPhoto(tempUri, orderId) {
+  const cleanOrderId = String(orderId || "sin_orden").trim();
+  await ensureCheckinPhotoDir();
+
+  const finalUri = `${CHECKIN_PHOTO_DIR}CHECKIN_${cleanOrderId}_${Date.now()}.jpg`;
+
+  await FileSystem.copyAsync({
+    from: tempUri,
+    to: finalUri,
+  });
+
+  return finalUri;
+}
 // ===== Fiori Palette =====
 const FIORI = {
   pageBg: "#F7F7F7",
@@ -1033,26 +1068,40 @@ export default function ListaOrdenesTecnico() {
   const takeCheckinPhoto = async () => {
     try {
       const perm = await ImagePicker.requestCameraPermissionsAsync();
+
       if (!perm.granted) {
         Alert.alert(
           "Permiso requerido",
-          "Necesitamos permiso de cámara para tomar la evidencia."
+          "Necesitamos permiso de cámara para tomar la evidencia.",
         );
         return;
       }
+
       const result = await ImagePicker.launchCameraAsync({
         quality: 0.6,
         base64: false,
         allowsEditing: false,
       });
+
       if (result.canceled) return;
+
       const asset = result.assets?.[0];
+
       if (!asset?.uri) {
         Alert.alert("Error", "No se pudo obtener la foto.");
         return;
       }
 
-      const MAX_BASE64_LENGTH = 2_500_000;
+      /*
+        Miguel Ángel Hernández Álvarez - 03/07/2026
+
+        Cambio check-in:
+        - La cámara toma foto sin base64.
+        - La compresión tampoco genera base64.
+        - Solo guardamos el URI local del JPG comprimido.
+        - El base64 se genera después, justo al enviar a SAP.
+      */
+      const MAX_FILE_BYTES = 900 * 1024; // 900 KB aprox.
       const opcionesCompresion = [
         { width: 1280, compress: 0.65 },
         { width: 1080, compress: 0.55 },
@@ -1061,46 +1110,82 @@ export default function ListaOrdenesTecnico() {
         { width: 640, compress: 0.35 },
         { width: 540, compress: 0.32 },
       ];
-      let manipulated = null;
+
+      let selectedUri = "";
+      let selectedInfo = null;
+
       for (const opcion of opcionesCompresion) {
-        manipulated = await ImageManipulator.manipulateAsync(
+        const manipulated = await ImageManipulator.manipulateAsync(
           asset.uri,
           [{ resize: { width: opcion.width } }],
           {
             compress: opcion.compress,
             format: ImageManipulator.SaveFormat.JPEG,
-            base64: true,
-          }
+            base64: false,
+          },
         );
-        const base64Length = manipulated?.base64?.length || 0;
-        const aproximadoMB = (base64Length / 1024 / 1024).toFixed(2);
-        console.log("[CHECKIN][COMPRESION]", {
+
+        if (!manipulated?.uri) continue;
+
+        const info = await FileSystem.getInfoAsync(manipulated.uri);
+        const sizeBytes = Number(info?.size || 0);
+
+        console.log("[CHECKIN][COMPRESION][SIN_BASE64]", {
           width: opcion.width,
           compress: opcion.compress,
-          base64Length,
-          aproximadoMB,
+          uri: manipulated.uri,
+          sizeBytes,
+          aproximadoMB: sizeBytes
+            ? (sizeBytes / 1024 / 1024).toFixed(2)
+            : "desconocido",
         });
-        if (manipulated?.base64 && base64Length <= MAX_BASE64_LENGTH) {
+
+        selectedUri = manipulated.uri;
+        selectedInfo = info;
+
+        if (sizeBytes > 0 && sizeBytes <= MAX_FILE_BYTES) {
           break;
         }
       }
-      if (!manipulated?.base64) {
-        Alert.alert("Error", "No se pudo convertir la imagen.");
+
+      if (!selectedUri) {
+        Alert.alert("Error", "No se pudo comprimir la imagen.");
         return;
       }
-      if (manipulated.base64.length > MAX_BASE64_LENGTH) {
+
+      const finalSizeBytes = Number(selectedInfo?.size || 0);
+
+      if (finalSizeBytes > MAX_FILE_BYTES) {
         Alert.alert(
           "Foto muy pesada",
-          "No se pudo reducir la imagen. Intenta tomar otra foto con mejor iluminación o un poco más lejos."
+          "No se pudo reducir la imagen. Intenta tomar otra foto con mejor iluminación o un poco más lejos.",
         );
         return;
       }
-      setCheckinPhotoUri(manipulated.uri);
-      setCheckinPhotoBase64(manipulated.base64);
-      console.log("[CHECKIN] FOTO FINAL:", {
-        base64Length: manipulated.base64.length,
-        aproximadoMB: (manipulated.base64.length / 1024 / 1024).toFixed(2),
-        uri: manipulated.uri,
+
+      const orderIdForPhoto = String(checkinOrderId || "sin_orden").trim();
+      const persistedUri = await persistCompressedCheckinPhoto(
+        selectedUri,
+        orderIdForPhoto,
+      );
+
+      const persistedInfo = await FileSystem.getInfoAsync(persistedUri);
+      const persistedSize = Number(persistedInfo?.size || 0);
+
+      setCheckinPhotoUri(persistedUri);
+
+      /*
+        Ya no usamos base64 en memoria para check-in.
+        Se deja en null para evitar guardar una cadena pesada.
+      */
+      setCheckinPhotoBase64(null);
+
+      console.log("[CHECKIN] FOTO FINAL GUARDADA COMO URI:", {
+        uri: persistedUri,
+        sizeBytes: persistedSize,
+        aproximadoMB: persistedSize
+          ? (persistedSize / 1024 / 1024).toFixed(2)
+          : "desconocido",
       });
     } catch (e) {
       console.log("takeCheckinPhoto ERROR:", e);
@@ -1108,7 +1193,7 @@ export default function ListaOrdenesTecnico() {
     }
   };
 
-  const postCheckinEvidence = async (orderId, base64) => {
+    const postCheckinEvidence = async (orderId, base64) => {
     const payload = {
       WorkOrderHeader: { Orderid: orderId },
       Attachments: [
@@ -1251,7 +1336,7 @@ export default function ListaOrdenesTecnico() {
       Alert.alert("Error", "No hay orden seleccionada.");
       return;
     }
-    if (!checkinPhotoBase64) {
+    if (!checkinPhotoUri) {
       Alert.alert("Falta evidencia", "Primero toma una foto.");
       return;
     }
@@ -1270,9 +1355,16 @@ export default function ListaOrdenesTecnico() {
       const online = !!(net?.isConnected && net?.isInternetReachable !== false);
       setIsOnline(online);
       await applyLocalOfflineStatus(orderId, CHECKIN_STATUS);
+      /*
+        Miguel Ángel Hernández Álvarez - 03/07/2026
+
+        Corrección check-in:
+        En la cola se guarda solo el URI local de la imagen comprimida.
+        No se guarda base64 en AsyncStorage.
+      */
       const nextQueue = await enqueueCheckinCentral(userEmail, {
         orderId,
-        photoBase64: String(checkinPhotoBase64).trim(),
+        photoUri: String(checkinPhotoUri).trim(),
         statusCode: CHECKIN_STATUS,
         lastValidStatus: CHECKIN_STATUS,
         createdAt: Date.now(),
@@ -1804,7 +1896,7 @@ export default function ListaOrdenesTecnico() {
                 <Text
                   style={{ marginTop: 6, color: FIORI.textMuted, fontSize: 12 }}
                 >
-                  Base64 listo ✅ ({checkinPhotoBase64?.length || 0})
+                  Foto comprimida lista ✅
                 </Text>
               </View>
             ) : (

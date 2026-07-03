@@ -14,6 +14,8 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import NetInfo from "@react-native-community/netinfo";
 
+import consumiblesPrecargados from "../json.json";
+
 import { bootstrapPrefetchConsumiblesCatalogo } from "../../../../../src/offline/bootstrapConsumiblesCatalogo";
 import {
   filterConsumiblesByCategory,
@@ -44,8 +46,209 @@ function safeStr(v) {
   return String(v ?? "").trim();
 }
 
+function normUpper(v) {
+  return safeStr(v)
+    .toUpperCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+}
+
 function makeRowId() {
   return `${Date.now()}_${Math.random().toString(16).slice(2)}`;
+}
+
+function makeAgrupadorLabel(agr1, agr2) {
+  const a1 = normUpper(agr1);
+  const a2 = normUpper(agr2);
+
+  if (a1 && a2) return `${a1} - ${a2}`;
+  return a1 || a2 || "GENERAL";
+}
+
+function getResultsFromPayload(payload) {
+  if (Array.isArray(payload)) return payload;
+  if (Array.isArray(payload?.d?.results)) return payload.d.results;
+  if (Array.isArray(payload?.data?.d?.results)) return payload.data.d.results;
+  if (Array.isArray(payload?.results)) return payload.results;
+  if (Array.isArray(payload?.data?.results)) return payload.data.results;
+  if (Array.isArray(payload?.value)) return payload.value;
+
+  return [];
+}
+
+function getCoverageAgr1(coberturaTipo) {
+  const cobertura = normalizeCoberturaTipo(coberturaTipo || "BASICA");
+
+  if (cobertura === "MEDIA") return "MEDIO";
+  if (cobertura === "SEMI") return "SEMI";
+
+  return "BASICO";
+}
+
+function getRawAgr1(row = {}) {
+  return normUpper(
+    row?.Agr1 ||
+      row?.agr1 ||
+      row?.AGR1 ||
+      row?.Agrupador1 ||
+      row?.agrupador1 ||
+      row?.Categoria ||
+      row?.categoria ||
+      "",
+  );
+}
+
+function getRawAgr2(row = {}) {
+  return normUpper(
+    row?.Agr2 ||
+      row?.agr2 ||
+      row?.AGR2 ||
+      row?.Agrupador2 ||
+      row?.agrupador2 ||
+      row?.Subcategoria ||
+      row?.subcategoria ||
+      row?.Familia ||
+      row?.familia ||
+      "",
+  );
+}
+
+function getCoverageFromAgr1(agr1) {
+  const a1 = normUpper(agr1);
+
+  if (a1.includes("MEDIO") || a1.includes("MEDIA")) return "MEDIA";
+
+  if (
+    a1.includes("SEMI") ||
+    a1.includes("SEMIFULL") ||
+    a1.includes("SEMI FULL") ||
+    a1.includes("SEMI-FULL") ||
+    a1.includes("SEMICOMPLETO") ||
+    a1.includes("SEMI_COMPLETO") ||
+    a1.includes("SEMI COMPLETO")
+  ) {
+    return "SEMI";
+  }
+
+  return "BASICA";
+}
+
+function rowCompatibleWithCoverage(row = {}, coberturaTipo = "BASICA") {
+  const cobertura = normalizeCoberturaTipo(coberturaTipo || "BASICA");
+  const rowCoverage = getCoverageFromAgr1(getRawAgr1(row));
+
+  if (cobertura === "BASICA") {
+    return rowCoverage === "BASICA";
+  }
+
+  if (cobertura === "MEDIA") {
+    return rowCoverage === "BASICA" || rowCoverage === "MEDIA";
+  }
+
+  if (cobertura === "SEMI") {
+    return (
+      rowCoverage === "BASICA" ||
+      rowCoverage === "MEDIA" ||
+      rowCoverage === "SEMI"
+    );
+  }
+
+  return true;
+}
+
+function normalizeMaterialFromJson(row = {}, coberturaTipo = "BASICA") {
+  const Agr1 = getCoverageAgr1(coberturaTipo);
+  const Agr2 = getRawAgr2(row);
+
+  const Material = safeStr(
+    row?.Material ||
+      row?.material ||
+      row?.MATNR ||
+      row?.Matnr ||
+      row?.matnr ||
+      row?.Codigo ||
+      row?.codigo ||
+      row?.Code ||
+      row?.code ||
+      "",
+  );
+
+  const Description = safeStr(
+    row?.Description ||
+      row?.description ||
+      row?.Descripcion ||
+      row?.descripcion ||
+      row?.MAKTX ||
+      row?.Maktx ||
+      row?.maktx ||
+      row?.TextoMaterial ||
+      row?.textoMaterial ||
+      row?.ShortText ||
+      row?.shortText ||
+      "",
+  );
+
+  const Unidad =
+    safeStr(
+      row?.Unidad ||
+        row?.unidad ||
+        row?.Unit ||
+        row?.unit ||
+        row?.MEINS ||
+        row?.Meins ||
+        row?.meins ||
+        row?.BaseUnit ||
+        row?.baseUnit ||
+        row?.Uom ||
+        row?.uom ||
+        "",
+    ) || "PZA";
+
+  const Centro = safeStr(
+    row?.Centro ||
+      row?.centro ||
+      row?.Plant ||
+      row?.plant ||
+      row?.WERKS ||
+      row?.Werks ||
+      row?.werks ||
+      "",
+  );
+
+  const Categoria = makeAgrupadorLabel(Agr1, Agr2);
+
+  return {
+    ...row,
+    id: `${Agr1}:${Agr2}:${Material || Description}`.replace(/\s+/g, "_"),
+
+    Agr1,
+    agr1: Agr1,
+    Agrupador1: Agr1,
+
+    Agr2,
+    agr2: Agr2,
+    Agrupador2: Agr2,
+
+    Categoria,
+    categoria: Categoria,
+
+    Material,
+    material: Material,
+
+    Description,
+    description: Description,
+    Descripcion: Description,
+
+    Unidad,
+    unidad: Unidad,
+
+    Centro,
+    centro: Centro,
+
+    searchText: normUpper(
+      `${Categoria} ${Agr1} ${Agr2} ${Material} ${Description} ${Unidad}`,
+    ),
+  };
 }
 
 function normalizeInitialRow(row = {}) {
@@ -61,6 +264,74 @@ function normalizeInitialRow(row = {}) {
     Cantidad: safeStr(row?.Cantidad || row?.cantidad || "1"),
     Unidad: safeStr(row?.Unidad || row?.unidad || "PZA"),
     Centro: safeStr(row?.Centro || row?.centro || row?.Plant || ""),
+  };
+}
+
+function buildGroupsFromRows(rows = []) {
+  const map = new Map();
+
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const Agr1 = normUpper(row?.Agr1 || row?.Agrupador1 || "");
+    const Agr2 = normUpper(row?.Agr2 || row?.Agrupador2 || "");
+
+    if (!Agr1 || !Agr2) continue;
+
+    const key = `${Agr1}:${Agr2}`;
+    const current =
+      map.get(key) ||
+      {
+        key,
+        Agr1,
+        Agr2,
+        Agrupador1: Agr1,
+        Agrupador2: Agr2,
+        label: makeAgrupadorLabel(Agr1, Agr2),
+        count: 0,
+      };
+
+    current.count += 1;
+    map.set(key, current);
+  }
+
+  return Array.from(map.values()).sort((a, b) =>
+    String(a.label || "").localeCompare(String(b.label || "")),
+  );
+}
+
+function buildLocalCatalogFromJson(coberturaTipo = "BASICA") {
+  const rows = getResultsFromPayload(consumiblesPrecargados);
+
+  const normalizedMap = new Map();
+
+  for (const row of Array.isArray(rows) ? rows : []) {
+    if (!rowCompatibleWithCoverage(row, coberturaTipo)) continue;
+
+    const normalized = normalizeMaterialFromJson(row, coberturaTipo);
+
+    if (!normalized.Material && !normalized.Description) continue;
+
+    const key = [
+      normalized.Agr1,
+      normalized.Agr2,
+      normalized.Material,
+      normalized.Description,
+      normalized.Unidad,
+    ].join(":");
+
+    normalizedMap.set(key, normalized);
+  }
+
+  const data = Array.from(normalizedMap.values());
+
+  return {
+    ok: data.length > 0,
+    cobertura: normalizeCoberturaTipo(coberturaTipo || "BASICA"),
+    updatedAt: Date.now(),
+    count: data.length,
+    cachedCount: data.length,
+    data,
+    groups: buildGroupsFromRows(data),
+    source: "json_local",
   };
 }
 
@@ -144,16 +415,34 @@ export default function ConsumiblesFinalizacion({
     try {
       if (!keepLoading) setLoadingCatalog(true);
 
-      const cached = await loadConsumiblesByCobertura(cobertura);
+      let cached = await loadConsumiblesByCobertura(cobertura);
+
+      let data = Array.isArray(cached?.data) ? cached.data : [];
+      let cachedGroups = Array.isArray(cached?.groups) ? cached.groups : [];
+      let updatedAt = cached?.updatedAt || null;
+
+      if (!data.length) {
+        const localCatalog = buildLocalCatalogFromJson(cobertura);
+
+        if (localCatalog.data.length) {
+          cached = localCatalog;
+          data = localCatalog.data;
+          cachedGroups = localCatalog.groups;
+          updatedAt = localCatalog.updatedAt;
+
+          console.log("[CONSUMIBLES UI] Catálogo cargado desde JSON local:", {
+            cobertura,
+            count: data.length,
+            groups: cachedGroups.length,
+          });
+        }
+      }
 
       if (!mountedRef.current) return;
 
-      const data = Array.isArray(cached?.data) ? cached.data : [];
-      const cachedGroups = Array.isArray(cached?.groups) ? cached.groups : [];
-
       setCatalog(data);
       setGroups(cachedGroups);
-      setCatalogUpdatedAt(cached?.updatedAt || null);
+      setCatalogUpdatedAt(updatedAt);
 
       const currentCategories = getConsumiblesCategories(data);
       const fallbackCategories = getAgrupadoresByCobertura(cobertura).map(
@@ -172,6 +461,17 @@ export default function ConsumiblesFinalizacion({
       }
     } catch (e) {
       console.log("[CONSUMIBLES UI] Error leyendo cache:", e?.message || e);
+
+      const localCatalog = buildLocalCatalogFromJson(cobertura);
+
+      if (mountedRef.current && localCatalog.data.length) {
+        setCatalog(localCatalog.data);
+        setGroups(localCatalog.groups);
+        setCatalogUpdatedAt(localCatalog.updatedAt);
+
+        const localCategories = getConsumiblesCategories(localCatalog.data);
+        if (localCategories.length) setSelectedCategory(localCategories[0]);
+      }
     } finally {
       if (mountedRef.current && !keepLoading) setLoadingCatalog(false);
     }
@@ -189,7 +489,7 @@ export default function ConsumiblesFinalizacion({
       const online = !!(net?.isConnected && net?.isInternetReachable !== false);
 
       if (!online) {
-        console.log("[CONSUMIBLES UI] Offline. Se usa cache.");
+        console.log("[CONSUMIBLES UI] Offline. Se usa cache o JSON local.");
         return;
       }
 
@@ -205,6 +505,8 @@ export default function ConsumiblesFinalizacion({
         "[CONSUMIBLES UI] Error actualizando en segundo plano:",
         e?.message || e,
       );
+
+      await loadCachedCatalog({ keepLoading: true });
     } finally {
       refreshingRef.current = false;
       if (mountedRef.current) setRefreshingCatalog(false);
@@ -222,7 +524,6 @@ export default function ConsumiblesFinalizacion({
 
     await loadCachedCatalog();
 
-    // No bloquea el modal. Actualiza por detrás.
     refreshCatalogInBackground();
   };
 
@@ -272,7 +573,10 @@ export default function ConsumiblesFinalizacion({
       Agr2: selectedMaterial?.Agr2 || selectedMaterial?.Agrupador2 || "",
       Material: selectedMaterial?.Material || selectedMaterial?.material || "",
       Description:
-        selectedMaterial?.Description || selectedMaterial?.description || "",
+        selectedMaterial?.Description ||
+        selectedMaterial?.description ||
+        selectedMaterial?.Descripcion ||
+        "",
       Cantidad: String(cantidad || "1").trim(),
       Unidad: unidad || selectedMaterial?.Unidad || "PZA",
       Centro: safeStr(plant || selectedMaterial?.Centro || ""),
@@ -300,7 +604,9 @@ export default function ConsumiblesFinalizacion({
   }, [cobertura]);
 
   useEffect(() => {
-    emitChange((Array.isArray(initialRows) ? initialRows : []).map(normalizeInitialRow));
+    emitChange(
+      (Array.isArray(initialRows) ? initialRows : []).map(normalizeInitialRow),
+    );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -309,7 +615,8 @@ export default function ConsumiblesFinalizacion({
     : "Sin precarga";
 
   const groupsWithData = groups.filter((g) => Number(g?.count || 0) > 0).length;
-  const groupsTotal = groups.length || getAgrupadoresByCobertura(cobertura).length;
+  const groupsTotal =
+    groups.length || getAgrupadoresByCobertura(cobertura).length;
 
   return (
     <View style={[localStyles.container, { borderColor: colors.border }]}>
@@ -320,8 +627,8 @@ export default function ConsumiblesFinalizacion({
           </Text>
 
           <Text style={[localStyles.subtitle, { color: colors.textMuted }]}>
-            Catálogo: {catalog.length} materiales · {groupsWithData}/{groupsTotal} grupos ·{" "}
-            {lastSyncLabel}
+            Catálogo: {catalog.length} materiales · {groupsWithData}/
+            {groupsTotal} grupos · {lastSyncLabel}
           </Text>
 
           <Text style={[localStyles.subtitle, { color: colors.textMuted }]}>
@@ -352,7 +659,10 @@ export default function ConsumiblesFinalizacion({
         <View
           style={[
             localStyles.emptyBox,
-            { backgroundColor: colors.surfaceAlt, borderColor: colors.borderSoft },
+            {
+              backgroundColor: colors.surfaceAlt,
+              borderColor: colors.borderSoft,
+            },
           ]}
         >
           <Text style={[localStyles.emptyText, { color: colors.textMuted }]}>
@@ -366,16 +676,21 @@ export default function ConsumiblesFinalizacion({
               key={row.id}
               style={[
                 localStyles.rowCard,
-                { borderColor: colors.borderSoft, backgroundColor: colors.surface },
+                {
+                  borderColor: colors.borderSoft,
+                  backgroundColor: colors.surface,
+                },
               ]}
             >
               <View style={{ flex: 1 }}>
                 <Text style={[localStyles.rowTitle, { color: colors.text }]}>
                   {row.Material || "Sin material"}
                 </Text>
+
                 <Text style={[localStyles.rowSub, { color: colors.textMuted }]}>
                   {row.Description || row.Categoria || "—"}
                 </Text>
+
                 <Text style={[localStyles.rowQty, { color: colors.text }]}>
                   Cantidad: {row.Cantidad} {row.Unidad}
                 </Text>
@@ -385,7 +700,10 @@ export default function ConsumiblesFinalizacion({
                 onPress={() => removeConsumible(row.id)}
                 style={[
                   localStyles.removeBtn,
-                  { backgroundColor: colors.surfaceAlt, borderColor: colors.borderSoft },
+                  {
+                    backgroundColor: colors.surfaceAlt,
+                    borderColor: colors.borderSoft,
+                  },
                 ]}
               >
                 <Ionicons name="trash-outline" size={18} color={colors.err} />
@@ -402,7 +720,12 @@ export default function ConsumiblesFinalizacion({
         onRequestClose={closeModal}
       >
         <View style={localStyles.backdrop}>
-          <View style={[localStyles.modalCard, { backgroundColor: colors.surface }]}>
+          <View
+            style={[
+              localStyles.modalCard,
+              { backgroundColor: colors.surface },
+            ]}
+          >
             <View style={localStyles.modalHeader}>
               <Text style={[localStyles.modalTitle, { color: colors.text }]}>
                 Agregar consumible
@@ -412,7 +735,10 @@ export default function ConsumiblesFinalizacion({
                 onPress={closeModal}
                 style={[
                   localStyles.closeBtn,
-                  { backgroundColor: colors.surfaceAlt, borderColor: colors.borderSoft },
+                  {
+                    backgroundColor: colors.surfaceAlt,
+                    borderColor: colors.borderSoft,
+                  },
                 ]}
               >
                 <Ionicons name="close" size={18} color={colors.text} />
@@ -426,14 +752,21 @@ export default function ConsumiblesFinalizacion({
             <TouchableOpacity
               style={[
                 localStyles.selectBox,
-                { backgroundColor: colors.surfaceAlt, borderColor: colors.border },
+                {
+                  backgroundColor: colors.surfaceAlt,
+                  borderColor: colors.border,
+                },
               ]}
               onPress={() => setCategoryOpen((v) => !v)}
               activeOpacity={0.88}
             >
-              <Text style={[localStyles.selectText, { color: colors.text }]} numberOfLines={1}>
+              <Text
+                style={[localStyles.selectText, { color: colors.text }]}
+                numberOfLines={1}
+              >
                 {selectedCategory || "Selecciona una categoría"}
               </Text>
+
               <Ionicons
                 name={categoryOpen ? "chevron-up" : "chevron-down"}
                 size={18}
@@ -442,7 +775,9 @@ export default function ConsumiblesFinalizacion({
             </TouchableOpacity>
 
             {categoryOpen ? (
-              <View style={[localStyles.dropdown, { borderColor: colors.border }]}>
+              <View
+                style={[localStyles.dropdown, { borderColor: colors.border }]}
+              >
                 {loadingCatalog ? (
                   <LoadingSmall colors={colors} text="Cargando categorías..." />
                 ) : categories.length ? (
@@ -455,7 +790,12 @@ export default function ConsumiblesFinalizacion({
                         style={localStyles.optionRow}
                         onPress={() => selectCategory(item)}
                       >
-                        <Text style={[localStyles.optionText, { color: colors.text }]}>
+                        <Text
+                          style={[
+                            localStyles.optionText,
+                            { color: colors.text },
+                          ]}
+                        >
                           {item}
                         </Text>
                       </TouchableOpacity>
@@ -477,17 +817,26 @@ export default function ConsumiblesFinalizacion({
             <TouchableOpacity
               style={[
                 localStyles.selectBox,
-                { backgroundColor: colors.surfaceAlt, borderColor: colors.border },
+                {
+                  backgroundColor: colors.surfaceAlt,
+                  borderColor: colors.border,
+                },
               ]}
               onPress={() => setMaterialOpen((v) => !v)}
               activeOpacity={0.88}
               disabled={!selectedCategory}
             >
-              <Text style={[localStyles.selectText, { color: colors.text }]} numberOfLines={1}>
+              <Text
+                style={[localStyles.selectText, { color: colors.text }]}
+                numberOfLines={1}
+              >
                 {selectedMaterial
-                  ? `${selectedMaterial.Material} ${selectedMaterial.Description || ""}`.trim()
+                  ? `${selectedMaterial.Material} ${
+                      selectedMaterial.Description || ""
+                    }`.trim()
                   : "Selecciona un material"}
               </Text>
+
               <Ionicons
                 name={materialOpen ? "chevron-up" : "chevron-down"}
                 size={18}
@@ -496,7 +845,9 @@ export default function ConsumiblesFinalizacion({
             </TouchableOpacity>
 
             {materialOpen ? (
-              <View style={[localStyles.dropdown, { borderColor: colors.border }]}>
+              <View
+                style={[localStyles.dropdown, { borderColor: colors.border }]}
+              >
                 <TextInput
                   value={materialSearch}
                   onChangeText={setMaterialSearch}
@@ -504,7 +855,10 @@ export default function ConsumiblesFinalizacion({
                   placeholderTextColor={colors.textMuted}
                   style={[
                     localStyles.searchInput,
-                    { borderColor: colors.borderSoft, color: colors.text },
+                    {
+                      borderColor: colors.borderSoft,
+                      color: colors.text,
+                    },
                   ]}
                 />
 
@@ -514,7 +868,9 @@ export default function ConsumiblesFinalizacion({
                   <FlatList
                     data={materialsByCategory}
                     keyExtractor={(item, idx) =>
-                      `${item?.Agr1 || ""}_${item?.Agr2 || ""}_${item?.Material || item?.Description || "mat"}_${idx}`
+                      `${item?.Agr1 || ""}_${item?.Agr2 || ""}_${
+                        item?.Material || item?.Description || "mat"
+                      }_${idx}`
                     }
                     style={{ maxHeight: 190 }}
                     keyboardShouldPersistTaps="handled"
@@ -524,33 +880,57 @@ export default function ConsumiblesFinalizacion({
                         onPress={() => selectMaterial(item)}
                       >
                         <Text
-                          style={[localStyles.materialTitle, { color: colors.text }]}
+                          style={[
+                            localStyles.materialTitle,
+                            { color: colors.text },
+                          ]}
                           numberOfLines={1}
                         >
                           {item?.Material || "Sin código"}
                         </Text>
+
                         <Text
-                          style={[localStyles.materialDesc, { color: colors.textMuted }]}
+                          style={[
+                            localStyles.materialDesc,
+                            { color: colors.textMuted },
+                          ]}
                           numberOfLines={2}
                         >
-                          {item?.Description || item?.description || "Sin descripción"}
+                          {item?.Description ||
+                            item?.description ||
+                            item?.Descripcion ||
+                            "Sin descripción"}
                         </Text>
                       </TouchableOpacity>
                     )}
                   />
                 ) : (
                   <View style={localStyles.emptyCatalogBox}>
-                    <Text style={[localStyles.emptyText, { color: colors.textMuted }]}>
+                    <Text
+                      style={[
+                        localStyles.emptyText,
+                        { color: colors.textMuted },
+                      ]}
+                    >
                       No hay materiales para este agrupador.
                     </Text>
+
                     <TouchableOpacity
                       onPress={refreshCatalogInBackground}
                       style={[
                         localStyles.retryBtn,
-                        { backgroundColor: colors.brandSoft, borderColor: colors.borderSoft },
+                        {
+                          backgroundColor: colors.brandSoft,
+                          borderColor: colors.borderSoft,
+                        },
                       ]}
                     >
-                      <Text style={[localStyles.retryText, { color: colors.brand }]}>
+                      <Text
+                        style={[
+                          localStyles.retryText,
+                          { color: colors.brand },
+                        ]}
+                      >
                         Actualizar catálogo
                       </Text>
                     </TouchableOpacity>
@@ -564,6 +944,7 @@ export default function ConsumiblesFinalizacion({
                 <Text style={[localStyles.label, { color: colors.text }]}>
                   Cantidad
                 </Text>
+
                 <TextInput
                   value={cantidad}
                   onChangeText={setCantidad}
@@ -579,6 +960,7 @@ export default function ConsumiblesFinalizacion({
                 <Text style={[localStyles.label, { color: colors.text }]}>
                   Unidad
                 </Text>
+
                 <TextInput
                   value={unidad}
                   onChangeText={setUnidad}
@@ -595,11 +977,16 @@ export default function ConsumiblesFinalizacion({
               <TouchableOpacity
                 style={[
                   localStyles.cancelBtn,
-                  { backgroundColor: colors.surfaceAlt, borderColor: colors.border },
+                  {
+                    backgroundColor: colors.surfaceAlt,
+                    borderColor: colors.border,
+                  },
                 ]}
                 onPress={closeModal}
               >
-                <Text style={[localStyles.cancelText, { color: colors.text }]}>
+                <Text
+                  style={[localStyles.cancelText, { color: colors.text }]}
+                >
                   Cancelar
                 </Text>
               </TouchableOpacity>
@@ -608,7 +995,9 @@ export default function ConsumiblesFinalizacion({
                 style={[
                   localStyles.saveBtn,
                   {
-                    backgroundColor: selectedMaterial ? colors.brand : "#AFCBEA",
+                    backgroundColor: selectedMaterial
+                      ? colors.brand
+                      : "#AFCBEA",
                   },
                 ]}
                 onPress={addConsumible}
@@ -628,6 +1017,7 @@ function LoadingSmall({ colors, text }) {
   return (
     <View style={localStyles.loadingSmall}>
       <ActivityIndicator size="small" color={colors.brand} />
+
       <Text style={[localStyles.loadingText, { color: colors.textMuted }]}>
         {text}
       </Text>
