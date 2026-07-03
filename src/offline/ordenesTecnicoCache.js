@@ -197,15 +197,22 @@ export function isOrderInWindow(order, window) {
  * una respuesta válida de SAP/backend termine guardando lista vacía solo por
  * diferencias de nombres de campos.
  */
-export function filterOrdenesByWindow(ordenes = [], start, end) {
+export function filterOrdenesByWindow(ordenes = [], start, end, options = {}) {
+  const { keepNoDate = false } = options || {};
+
   const s = start ? getUtcYmd(start) : null;
   const e = end ? getUtcYmd(end) : null;
 
   return (ordenes || []).filter((it) => {
     const d = getOrderDate(it);
 
+    /*
+      Corrección:
+      Antes, si una orden tenía ID pero no fecha, se conservaba siempre.
+      Eso puede meter órdenes que no pertenecen al día/rango actual.
+    */
     if (!d) {
-      return !!getOrderIdFromAny(it);
+      return keepNoDate && !!getOrderIdFromAny(it);
     }
 
     const ds = getUtcYmd(d);
@@ -216,7 +223,6 @@ export function filterOrdenesByWindow(ordenes = [], start, end) {
     return true;
   });
 }
-
 /**
  * Guarda lista offline.
  * La lista debe venir ya filtrada por ventana desde el prefetch.
@@ -269,7 +275,7 @@ function estimateBytes(str) {
   return (str?.length || 0) * 2; // aproximado UTF-16
 }
 
-const MAX_DETAIL_BYTES = 350_000; // ~350 KB por detalle
+const MAX_DETAIL_BYTES = 900_000; // ~900 KB por detalle
 
 function normalizeOrderId(detail) {
   return getOrderIdFromAny(detail);
@@ -285,18 +291,13 @@ function normalizeOperation(op = {}) {
   );
 
   return {
-    ...op,
+    id: op?.id ?? activity,
 
-    id: op?.id,
     Usr02: op?.Usr02 ?? op?.usr02 ?? null,
     usr02: op?.usr02 ?? op?.Usr02 ?? null,
 
     Activity: activity,
     activity,
-
-    // Cambio agregado por Miguel Ángel 04/06/2026:
-    // Se elimina SubActivity porque SAP ya no debe usar ese campo en la app.
-    // SubActivity: op?.SubActivity ?? op?.subactivity ?? op?.Uvorn,
 
     Description: description,
     description,
@@ -305,7 +306,9 @@ function normalizeOperation(op = {}) {
     standardTextKey,
 
     FieldUserStatus: op?.FieldUserStatus ?? op?.fieldUserStatus ?? null,
+
     estatus: op?.estatus ?? op?.status ?? "pendiente",
+    status: op?.status ?? op?.estatus ?? "pendiente",
 
     worked_ms: op?.worked_ms ?? 0,
     last_resume_at: op?.last_resume_at ?? null,
@@ -318,7 +321,6 @@ function normalizeOperation(op = {}) {
 
 function normalizePartner(p = {}) {
   return {
-    ...p,
     PartnRole: p?.PartnRole ?? null,
     PartnRoleOld: p?.PartnRoleOld ?? null,
     Partner: p?.Partner ?? null,
@@ -336,40 +338,41 @@ function normalizePartner(p = {}) {
 function normalizeComponent(c = {}) {
   const activity = safeTrim(c?.Activity ?? c?.activity ?? c?.Vornr ?? "");
 
+  const material =
+    c?.Material ?? c?.material ?? c?.Matnr ?? c?.matnr ?? null;
+
+  const description =
+    c?.Description ??
+    c?.description ??
+    c?.Maktx ??
+    c?.maktx ??
+    c?.TextoMaterial ??
+    null;
+
+  const quantity =
+    c?.Quantity ??
+    c?.quantity ??
+    c?.Cantidad ??
+    c?.cantidad ??
+    c?.RequirementQuantity ??
+    null;
+
+  const unit =
+    c?.Unit ?? c?.unit ?? c?.Unidad ?? c?.unidad ?? c?.BaseUnit ?? null;
+
   return {
-    ...c,
-    Material: c?.Material ?? c?.material ?? c?.Matnr ?? c?.matnr ?? null,
-    material: c?.material ?? c?.Material ?? c?.Matnr ?? c?.matnr ?? null,
-    Description:
-      c?.Description ??
-      c?.description ??
-      c?.Maktx ??
-      c?.maktx ??
-      c?.TextoMaterial ??
-      null,
-    description:
-      c?.description ??
-      c?.Description ??
-      c?.Maktx ??
-      c?.maktx ??
-      c?.TextoMaterial ??
-      null,
-    Quantity:
-      c?.Quantity ??
-      c?.quantity ??
-      c?.Cantidad ??
-      c?.cantidad ??
-      c?.RequirementQuantity ??
-      null,
-    quantity:
-      c?.quantity ??
-      c?.Quantity ??
-      c?.Cantidad ??
-      c?.cantidad ??
-      c?.RequirementQuantity ??
-      null,
-    Unit: c?.Unit ?? c?.unit ?? c?.Unidad ?? c?.unidad ?? c?.BaseUnit ?? null,
-    unit: c?.unit ?? c?.Unit ?? c?.Unidad ?? c?.unidad ?? c?.BaseUnit ?? null,
+    Material: material,
+    material,
+
+    Description: description,
+    description,
+
+    Quantity: quantity,
+    quantity,
+
+    Unit: unit,
+    unit,
+
     Plant: c?.Plant ?? c?.plant ?? c?.Centro ?? c?.centro ?? null,
     StorageLocation:
       c?.StorageLocation ??
@@ -377,6 +380,7 @@ function normalizeComponent(c = {}) {
       c?.Almacen ??
       c?.almacen ??
       null,
+
     Activity: activity || null,
     activity: activity || null,
   };

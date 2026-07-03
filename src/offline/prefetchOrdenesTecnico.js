@@ -744,24 +744,24 @@ export async function prefetchOrdenesTecnicoDetalles({
 
         const userstatusRaw = String(
           baseOrden?.Userstatus ??
-            baseOrden?.userstatus ??
-            baseOrden?.UserSt ??
-            baseOrden?.userSt ??
-            "",
+          baseOrden?.userstatus ??
+          baseOrden?.UserSt ??
+          baseOrden?.userSt ??
+          "",
         ).trim();
 
         const estatusCodeRaw = String(
           baseOrden?.estatus_code ??
-            baseOrden?.EstatusCode ??
-            baseOrden?.StatusCode ??
-            "",
+          baseOrden?.EstatusCode ??
+          baseOrden?.StatusCode ??
+          "",
         ).trim();
 
         const estatusLabelRaw = String(
           baseOrden?.estatus_label ??
-            baseOrden?.EstatusLabel ??
-            baseOrden?.StatusText ??
-            "",
+          baseOrden?.EstatusLabel ??
+          baseOrden?.StatusText ??
+          "",
         ).trim();
 
         const detail = {
@@ -878,10 +878,21 @@ export async function prefetchOrdenesTecnicoDetalles({
 // - La precarga fuerte se hace aquí para que Inicio Técnico y Órdenes usen cache.
 // ==========================================
 function formatLocalYmdPreload(d = new Date()) {
-  const x = new Date(d);
-  const yyyy = x.getFullYear();
-  const mm = String(x.getMonth() + 1).padStart(2, "0");
-  const dd = String(x.getDate()).padStart(2, "0");
+  /*
+    Corrección:
+    Usamos fecha de México para evitar que el celular/emulador consulte
+    el día siguiente por diferencia de zona horaria.
+  */
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Mexico_City",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(d);
+
+  const yyyy = parts.find((p) => p.type === "year")?.value;
+  const mm = parts.find((p) => p.type === "month")?.value;
+  const dd = parts.find((p) => p.type === "day")?.value;
 
   return `${yyyy}-${mm}-${dd}`;
 }
@@ -951,28 +962,38 @@ export async function prefetchOrdenesTecnicoDiaRapido(
           ? res.data.results
           : [];
 
-    const offlineWindow = buildOfflineWindow(new Date());
-    const cachedPrev = await loadOrdenesTecnicoList(userEmail);
+    const dayStart = new Date(`${todayStr}T00:00:00`);
+    const dayEnd = new Date(`${todayStr}T23:59:59`);
 
-    // Importante:
-    // No reemplazamos toda la lista por solo el día.
-    // Mezclamos lo del día con lo ya guardado para no perder órdenes anteriores
-    // ni información usada por Pendientes de firma.
-    const merged = mergeOrdenesById(cachedPrev?.data || [], data);
+    const todayWindow = {
+      start: dayStart,
+      end: dayEnd,
+      startStr: todayStr,
+      endStr: todayStr,
+    };
 
-    const windowData = filterOrdenesByWindow(
-      merged,
-      offlineWindow.start,
-      offlineWindow.end,
-    );
+    /*
+      Corrección:
+      La precarga diaria debe guardar solamente las órdenes reales del día.
+      No se mezcla con cache anterior porque eso mete órdenes viejas
+      o de otros rangos.
+    */
+    const dataDia = mergeOrdenesById([], data).filter((item) => {
+      const id = String(
+        item?.Orderid || item?.OrderId || item?.orderid || "",
+      ).trim();
 
-    await saveOrdenesTecnicoList(userEmail, windowData, offlineWindow);
+      return !!id;
+    });
 
-    const orderIdsDia = data
+    await saveOrdenesTecnicoList(userEmail, dataDia, todayWindow);
+
+    const orderIdsDia = dataDia
       .map((x) => x?.Orderid || x?.OrderId || x?.orderid)
       .filter(Boolean)
       .map((x) => String(x).trim());
 
+    console.log("[PREFETCH TECNICO][DIA] Órdenes reales del día:", orderIdsDia.length);
     console.log("[PREFETCH TECNICO][DIA] Órdenes del día:", orderIdsDia.length);
 
     const detalleResult = await prefetchOrdenesTecnicoDetalles({
@@ -998,8 +1019,8 @@ export async function prefetchOrdenesTecnicoDiaRapido(
       count: orderIdsDia.length,
       todayStr,
       window: {
-        startStr: offlineWindow.startStr,
-        endStr: offlineWindow.endStr,
+        startStr: todayWindow.startStr,
+        endStr: todayWindow.endStr,
       },
       detalleResult,
     };

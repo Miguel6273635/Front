@@ -628,21 +628,28 @@ function extractCodes(raw) {
 }
 
 function pickCurrentStatusCode(orden) {
-  const codes = extractCodes(orden?.userstatus ?? "");
-  const apiCode = normalizeCode(orden?.estatus_code ?? "");
-
-  const all = Array.from(
-    new Set([...(codes || []), ...(apiCode ? [apiCode] : [])]),
+  /*
+    Primero usamos estatus_code porque normalmente ya viene normalizado
+    desde backend/SAP y representa el estatus actual real.
+  */
+  const apiCode = normalizeCode(
+    orden?.estatus_code ||
+      orden?.StatusCode ||
+      orden?.status_code ||
+      "",
   );
 
-  // Prioridad de los únicos estatus válidos actuales.
-  if (all.includes("0600")) return "0600";
-  if (all.includes("0400")) return "0400";
-  if (all.includes("0300")) return "0300";
-  if (all.includes("0200")) return "0200";
-  if (all.includes("0100")) return "0100";
+  if (apiCode) return apiCode;
 
-  return apiCode || codes[0] || "";
+  const codes = extractCodes(orden?.userstatus ?? "");
+
+  if (codes.includes("0600")) return "0600";
+  if (codes.includes("0400")) return "0400";
+  if (codes.includes("0300")) return "0300";
+  if (codes.includes("0200")) return "0200";
+  if (codes.includes("0100")) return "0100";
+
+  return codes[0] || "";
 }
 
 function buildStatus0300Payload({ orderId, email, currentCode }) {
@@ -863,31 +870,12 @@ function hasUsefulCachedOrderDetail(cachedData) {
   const hasOps =
     Array.isArray(cachedData?.operaciones) && cachedData.operaciones.length > 0;
 
-  const hasComponents =
-    Array.isArray(cachedData?.componentes) && cachedData.componentes.length > 0;
-
-  const hasAddress = !!String(
-    cachedData?.direccion ||
-      cachedData?.partner_address ||
-      cachedData?.address ||
-      "",
-  ).trim();
-
-  const hasClient = !!String(
-    cachedData?.cliente ||
-      cachedData?.razon_social ||
-      cachedData?.partner_name ||
-      "",
-  ).trim();
-
-  const hasShortText = !!String(
-    cachedData?.ShortText ||
-      cachedData?.shortText ||
-      cachedData?.shorttext ||
-      "",
-  ).trim();
-
-  return hasOrderId && (hasOps || hasComponents || hasAddress || hasClient || hasShortText);
+  /*
+    Corrección:
+    Para el detalle de mantenimiento, la cache solo es útil si tiene operaciones.
+    Si tiene cliente/dirección pero no operaciones, debe consultar API/SAP.
+  */
+  return hasOrderId && hasOps;
 }
 
 // CAMBIOS agregasdos por miguel

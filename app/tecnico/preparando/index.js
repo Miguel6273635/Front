@@ -59,10 +59,21 @@ const PRELOAD_DONE_KEY = (userEmail) =>
   entrar a Inicio Técnico sin volver a consumir API/SAP.
 */
 function getTodayKey() {
-  const d = new Date();
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const dd = String(d.getDate()).padStart(2, "0");
+  /*
+    Corrección:
+    Usamos fecha de México para que la bandera de precarga diaria
+    no se adelante por zona horaria del emulador/celular.
+  */
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Mexico_City",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+
+  const yyyy = parts.find((p) => p.type === "year")?.value;
+  const mm = parts.find((p) => p.type === "month")?.value;
+  const dd = parts.find((p) => p.type === "day")?.value;
 
   return `${yyyy}-${mm}-${dd}`;
 }
@@ -377,7 +388,37 @@ export default function PreparandoTecnicoScreen() {
       setDone(false);
 
       const preloadInfoToday = await getPreloadDoneInfoToday();
-      const alreadyDoneToday = !!preloadInfoToday;
+
+      const cachedForSkip = await loadOrdenesTecnicoList(userEmail);
+      const cachedCountForSkip = Array.isArray(cachedForSkip?.data)
+        ? cachedForSkip.data.length
+        : 0;
+
+      /*
+        Corrección:
+        Antes, si existía la bandera "preloadDone" de hoy, la app saltaba
+        la precarga aunque la cache estuviera vacía. Eso dejaba la pantalla
+        en 0 órdenes.
+
+        Ahora solo saltamos la precarga si:
+        1) La bandera existe.
+        2) La cache tiene órdenes guardadas.
+      */
+      const alreadyDoneToday = !!preloadInfoToday && cachedCountForSkip > 0;
+
+      if (preloadInfoToday && cachedCountForSkip <= 0) {
+        console.log(
+          "[PRELOAD TECNICO] Bandera de precarga encontrada, pero cache vacía. Se borra bandera y se fuerza precarga.",
+          {
+            userEmail,
+            cachedCountForSkip,
+          },
+        );
+
+        try {
+          await AsyncStorage.removeItem(PRELOAD_DONE_KEY(userEmail));
+        } catch {}
+      }
 
       if (alreadyDoneToday && !retry) {
         setProgress({
@@ -389,7 +430,7 @@ export default function PreparandoTecnicoScreen() {
         });
 
         setMessage(
-          "La precarga de hoy ya se realizó. No se volverán a consumir datos hasta mañana.",
+          "La precarga de hoy ya se realizó. Se usará la información guardada.",
         );
 
         if (preloadInfoToday?.durationText) {
@@ -555,14 +596,17 @@ try {
 */
 const detalleFailCount = Number(detalleResult?.fail || 0);
 const componentFailCount = Number(detalleResult?.components?.fail || 0);
+const ordenesPrecargadas = Number(tecnicoPrefetch?.count || 0);
 
 preloadCompletedOk =
   result?.ok === true &&
+  ordenesPrecargadas > 0 &&
   detalleFailCount === 0 &&
   componentFailCount === 0;
 
 console.log("[PRELOAD TECNICO] Validación final de precarga:", {
   ok: result?.ok,
+  ordenesPrecargadas,
   detalleFailCount,
   componentFailCount,
   preloadCompletedOk,
