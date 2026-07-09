@@ -29,6 +29,31 @@ function getOpId(orderid, op, idx) {
   return key && key !== "-" ? key : `fallback__${idx}`;
 }
 
+function isOpChecked(orderid, op, idx, checkedMap = {}) {
+  const id = getOpId(orderid, op, idx);
+  const oid = safeStr(orderid);
+  const act = getActivity(op);
+  const sub = getSub(op);
+
+  const actPad = act ? act.padStart(4, "0") : "";
+  const subPad = sub ? sub.padStart(4, "0") : "";
+
+  const keys = [
+    id,
+    safeStr(op?.id),
+    act,
+    actPad,
+    oid && act ? `${oid}-${act}` : "",
+    oid && actPad ? `${oid}-${actPad}` : "",
+    oid && act && sub ? `${oid}-${act}-${sub}` : "",
+    oid && actPad && sub ? `${oid}-${actPad}-${sub}` : "",
+    oid && act && subPad ? `${oid}-${act}-${subPad}` : "",
+    oid && actPad && subPad ? `${oid}-${actPad}-${subPad}` : "",
+  ].filter(Boolean);
+
+  return keys.some((k) => !!checkedMap[k]);
+}
+
 function numericOrBig(v) {
   const s = safeStr(v);
   if (!s) return Number.MAX_SAFE_INTEGER;
@@ -101,8 +126,7 @@ export function renderOperacionesAgrupadasHtml({
 
       const renderedItems = ops
         .map((op, idx) => {
-          const id = getOpId(orderid, op, idx);
-          const checked = !!checkedMap[id];
+          const checked = isOpChecked(orderid, op, idx, checkedMap);
 
           const { code, desc } = buildOperacionLine(op);
           const stk = getSTK(op);

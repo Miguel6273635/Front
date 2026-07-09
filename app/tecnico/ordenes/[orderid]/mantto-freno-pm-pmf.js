@@ -1,353 +1,1704 @@
-// app/tecnico/ordenes/[orderid]/mantto-freno-pmf.js
-import React, { useEffect, useMemo, useState, useCallback, use } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, ScrollView, ActivityIndicator, Alert, Switch } from 'react-native';
-import { useLocalSearchParams, router } from 'expo-router';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import Header from '../../../../src/components/Header';
-import api from '../../../../src/services/api';
+// app/tecnico/ordenes/[orderid]/mantto-freno-pm-pmf.js
+// Diseño moderno tipo wizard para Mantenimiento Freno PM/PMF
+// Sin validaciones bloqueantes para poder visualizar el PDF.
 
-// —— UI utilitaria (mismo patrón que tu ejemplo) ——
-const Section = ({ children }) => <Text style={styles.section}>{children}</Text>;
-const Card    = ({ children, style }) => <View style={[styles.card, style]}>{children}</View>;
-const Label   = ({ children, style }) => <Text style={[styles.label, style]}>{children}</Text>;
-const Input   = (props) => <TextInput {...props} style={[styles.input, props.style]} />;
-const Readonly= ({ children }) => (<View style={styles.readonly}><Text style={styles.readonlyText}>{String(children ?? '—')}</Text></View>);
-const Row2    = ({ children }) => <View style={styles.row2}>{children}</View>;
-const Col     = ({ children, min = 220 }) => <View style={[styles.col, { minWidth: min }]}>{children}</View>;
-const Chips   = ({ options, value, onChange }) => (
-  <View style={styles.chipsWrap}>
-    {options.map(opt => {
-      const active = value === opt;
-      return (
-        <TouchableOpacity key={opt} style={[styles.chip, active && styles.chipOn]} onPress={() => onChange(opt)}>
-          <Text style={[styles.chipText, active && styles.chipTextOn]}>{opt}</Text>
-        </TouchableOpacity>
-      );
-    })}
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  View,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  StyleSheet,
+  ScrollView,
+  ActivityIndicator,
+  Alert,
+  Switch,
+  Modal,
+  Platform,
+} from "react-native";
+import { WebView } from "react-native-webview";
+import { useLocalSearchParams } from "expo-router";
+import * as Print from "expo-print";
+import * as Sharing from "expo-sharing";
+import * as FileSystem from "expo-file-system/legacy";
+
+import Header from "../../../../src/components/Header";
+import api from "../../../../src/services/api";
+import { useAuth } from "../../../../src/context/AuthContext";
+import { buildManttoFrenoPmPmfHtml } from "../../../../src/services/templates/mantto_freno_pm_pmf/buildManttoFrenoPmPmfHtml";
+
+const UI = {
+  bg: "#EEF3F8",
+  card: "#FFFFFF",
+  cardSoft: "#F8FAFC",
+  border: "#DDE6F0",
+  borderDark: "#CBD5E1",
+  text: "#0F172A",
+  muted: "#64748B",
+  muted2: "#94A3B8",
+  blue: "#0B2E6D",
+  blue2: "#2563EB",
+  blueSoft: "#EAF1FF",
+  green: "#16A34A",
+  greenSoft: "#DCFCE7",
+  yellow: "#F59E0B",
+  yellowSoft: "#FEF3C7",
+  red: "#DC2626",
+  redSoft: "#FEE2E2",
+};
+
+const STEPS = [
+  { key: "general", title: "General", short: "Orden" },
+  { key: "freno", title: "Freno", short: "Operación" },
+  { key: "componentes", title: "Componentes", short: "Tambor / tubos" },
+  { key: "switch", title: "Switch", short: "Micro switch" },
+  { key: "resultado", title: "Resultado", short: "Cierre" },
+];
+
+const safeStr = (v) => String(v ?? "").trim();
+
+function getUserName(user) {
+  return safeStr(
+    user?.nombre ||
+      user?.name ||
+      user?.fullName ||
+      user?.displayName ||
+      user?.username ||
+      user?.correo ||
+      user?.email ||
+      ""
+  );
+}
+
+function fmtDate(value) {
+  if (!value) return "";
+  if (typeof value === "string" && value.includes("/")) return value;
+
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return safeStr(value);
+
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const yyyy = d.getFullYear();
+
+  return `${dd}/${mm}/${yyyy}`;
+}
+
+function createDefaultForm(orderid = "") {
+  return {
+    orderid,
+    tipo_mt: "",
+    velocidad_nominal: "",
+    capacidad: "",
+    fecha: "",
+    hora_inicio: "",
+    hora_fin: "",
+
+    operacion_freno: {
+      tornillo_ajuste: "bien",
+      ruido_apertura_cierre: "bien",
+      balatas_izq: "bien",
+      balatas_der: "bien",
+    },
+
+    tambor: {
+      aceite_grasa: "bien",
+      oxido: "bien",
+    },
+
+    tubos_drenado: {
+      tubo_transparente: "bien",
+      tubo_negro: "bien",
+    },
+
+    micro_switch: {
+      condicion_fisica: "bien",
+      conexiones: "bien",
+    },
+
+    condicion_operacion: {
+      prueba_funcionamiento: "bien",
+    },
+
+    observaciones: "",
+
+    resultado_total: {
+      bien: true,
+      seguimiento: false,
+      detalle: "",
+    },
+  };
+}
+
+const Label = ({ children, style }) => (
+  <Text style={[styles.label, style]}>{children}</Text>
+);
+
+const Input = ({ style, ...props }) => (
+  <TextInput
+    {...props}
+    placeholderTextColor={UI.muted2}
+    style={[styles.input, style]}
+  />
+);
+
+const Toggle = ({ value, onValueChange }) => (
+  <Switch
+    value={!!value}
+    onValueChange={onValueChange}
+    trackColor={{ false: "#CBD5E1", true: "#93C5FD" }}
+    thumbColor={value ? UI.blue : "#FFFFFF"}
+  />
+);
+
+const Chip = ({ active, children, onPress, tone = "blue" }) => {
+  const activeStyle =
+    tone === "green"
+      ? styles.chipGreen
+      : tone === "yellow"
+      ? styles.chipYellow
+      : tone === "red"
+      ? styles.chipRed
+      : styles.chipBlue;
+
+  return (
+    <TouchableOpacity
+      activeOpacity={0.86}
+      onPress={onPress}
+      style={[styles.chip, active && activeStyle]}
+    >
+      <Text style={[styles.chipText, active && styles.chipTextActive]}>
+        {children}
+      </Text>
+    </TouchableOpacity>
+  );
+};
+
+const InfoItem = ({ label, value }) => (
+  <View style={styles.infoItem}>
+    <Text style={styles.infoLabel}>{label}</Text>
+    <Text numberOfLines={2} style={styles.infoValue}>
+      {String(value || "—")}
+    </Text>
   </View>
 );
-const YN  = ({ value, onChange }) => <Chips options={['Si','No']} value={value} onChange={onChange} />;
-const BM  = ({ value, onChange }) => <Chips options={['Bien','Mal']} value={value} onChange={onChange} />;
 
-// —— Formulario principal ——
-export default function ManttoFrenoPMFForm() {
+const StatBox = ({ label, value, tone = "blue" }) => {
+  const boxStyle =
+    tone === "green"
+      ? styles.statGreen
+      : tone === "yellow"
+      ? styles.statYellow
+      : tone === "red"
+      ? styles.statRed
+      : styles.statBlue;
+
+  return (
+    <View style={[styles.statBox, boxStyle]}>
+      <Text style={styles.statValue}>{value}</Text>
+      <Text style={styles.statLabel}>{label}</Text>
+    </View>
+  );
+};
+
+function FieldRow({ children }) {
+  return <View style={styles.fieldRow}>{children}</View>;
+}
+
+function Field({ children, small = false, wide = false }) {
+  return (
+    <View
+      style={[
+        styles.field,
+        small && styles.fieldSmall,
+        wide && styles.fieldWide,
+      ]}
+    >
+      {children}
+    </View>
+  );
+}
+
+function SectionBox({ title, subtitle, children }) {
+  return (
+    <View style={styles.sectionBox}>
+      <View style={styles.sectionTop}>
+        <Text style={styles.sectionTitle}>{title}</Text>
+        {!!subtitle && <Text style={styles.sectionSubtitle}>{subtitle}</Text>}
+      </View>
+
+      {children}
+    </View>
+  );
+}
+
+function BienMalField({ label, description, value, onChange }) {
+  const isMal = value === "mal";
+
+  return (
+    <View style={[styles.checkCard, isMal && styles.checkCardBad]}>
+      <View style={styles.checkTop}>
+        <View style={[styles.checkIcon, isMal && styles.checkIconBad]}>
+          <Text style={styles.checkIconText}>{isMal ? "!" : "✓"}</Text>
+        </View>
+
+        <View style={{ flex: 1 }}>
+          <Text style={styles.checkTitle}>{label}</Text>
+          {!!description && <Text style={styles.checkDesc}>{description}</Text>}
+        </View>
+
+        <View
+          style={[
+            styles.statusPill,
+            isMal ? styles.statusPillBad : styles.statusPillOk,
+          ]}
+        >
+          <Text
+            style={[
+              styles.statusPillText,
+              isMal ? styles.statusPillTextBad : styles.statusPillTextOk,
+            ]}
+          >
+            {isMal ? "Mal" : "Bien"}
+          </Text>
+        </View>
+      </View>
+
+      <View style={styles.chipsWrapMini}>
+        <Chip tone="green" active={value === "bien"} onPress={() => onChange("bien")}>
+          Bien
+        </Chip>
+
+        <Chip tone="red" active={value === "mal"} onPress={() => onChange("mal")}>
+          Mal
+        </Chip>
+      </View>
+    </View>
+  );
+}
+
+export default function ManttoFrenoPmPmfScreen() {
   const { orderid } = useLocalSearchParams();
+  const { user } = useAuth();
+
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving]  = useState(false);
-  const [auto, setAuto]      = useState(null); // datos auto-cargados (equipo, técnico, etc.)
+  const [orden, setOrden] = useState(null);
 
-  // ===== Encabezado del documento (según formato) =====
-  const [cliente, setCliente]           = useState('');
-  const [noEquipo, setNoEquipo]         = useState('');
-  const [tecnicoNombre, setTecnicoNombre]= useState('');
-  const [tecnicoNomina, setTecnicoNomina]= useState('');
-  const [fecha, setFecha]               = useState('');      // DD/MM/AAAA
-  const [horario, setHorario]           = useState('');      // 08:00–12:00
-  const [control, setControl]           = useState('');
-  const [tipoMT, setTipoMT]             = useState('');      // PM / PMF, etc.
-  const [velNominal, setVelNominal]     = useState('');      // [m/min]
-  const [capacidadKg, setCapacidadKg]   = useState('');      // [kg]
+  const [auto, setAuto] = useState({
+    orden: "",
+    cliente: "",
+    equipo: "",
+    tecnico_nombre: "",
+    start_date: "",
+  });
 
-  // ===== REPORTE (inspección visual) — se registra implícitamente en payload =====
+  const [form, setForm] = useState(() => createDefaultForm(""));
+  const [activeStep, setActiveStep] = useState(0);
 
-  // ===== CONDICIÓN DE OPERACIÓN DEL FRENO =====
-  const [tornillo_ajuste_torque, setTornilloAjusteTorque] = useState(null); // Bien/Mal
-  const [ruido_apertura_cierre, setRuidoAperturaCierre]   = useState(null); // Bien/Mal
-  const [balatas_izq, setBalatasIzq]                      = useState(null); // Bien/Mal (aceite o grasa en balatas)
-  const [balatas_der, setBalatasDer]                      = useState(null); // Bien/Mal
+  const [previewVisible, setPreviewVisible] = useState(false);
+  const [previewHtml, setPreviewHtml] = useState("");
+  const [pdfUri, setPdfUri] = useState(null);
+  const [generatingPdf, setGeneratingPdf] = useState(false);
 
-  // ===== CONDICIÓN DE TAMBOR =====
-  const [tambor_aceite_grasa, setTamborAceiteGrasa]       = useState(null); // Bien/Mal
-  const [tambor_oxido, setTamborOxido]                    = useState(null); // Bien/Mal
+  const patchForm = (patch) => {
+    setPdfUri(null);
+    setForm((s) => ({ ...s, ...patch }));
+  };
 
-  // ===== TUBOS DE DRENADO =====
-  const [tubo_transparente, setTuboTransparente]          = useState(null); // Bien/Mal
-  const [tubo_negro, setTuboNegro]                        = useState(null); // Bien/Mal
+  const patchSection = (section, patch) => {
+    setPdfUri(null);
+    setForm((s) => ({
+      ...s,
+      [section]: {
+        ...(s[section] || {}),
+        ...patch,
+      },
+    }));
+  };
 
-  // ===== MICRO SWITCH =====
-  const [ms_cond_fisica_izq, setMsCondFisicaIzq]          = useState(null); // Bien/Mal
-  const [ms_cond_fisica_der, setMsCondFisicaDer]          = useState(null); // Bien/Mal
-  const [ms_conexiones_izq, setMsConexionesIzq]           = useState(null); // Bien/Mal
-  const [ms_conexiones_der, setMsConexionesDer]           = useState(null); // Bien/Mal
+  const cargarOrden = useCallback(async () => {
+    const oid = safeStr(orderid);
 
-  // ===== CONDICIONES DE OPERACIÓN (prueba de funcionamiento) =====
-  const [prueba_funcionamiento, setPruebaFuncionamiento]  = useState(null); // Bien/Mal
+    if (!oid || oid === "[orderid]") {
+      setLoading(false);
+      Alert.alert("Error", "No se encontró el número de orden.");
+      return;
+    }
 
-  // ===== OBSERVACIONES / RESULTADO =====
-  const [observaciones, setObservaciones]                 = useState('');
-  const [resultado, setResultado]                         = useState('bien'); // 'bien' | 'seguimiento'
-  const [detalleSeguimiento, setDetalleSeguimiento]       = useState('');
-
-  // ===== Firmas (switch para marcar que se firmó) =====
-  const [firmaMecanico, setFirmaMecanico]   = useState(false);
-  const [firmaSupervisor, setFirmaSupervisor]= useState(false);
-
-  // ===== Prefill con fecha actual =====
-  useEffect(() => {
-    const d = new Date();
-    setFecha(`${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${d.getFullYear()}`);
-  }, []);
-
-  // ===== Carga inicial (opcional, como tu ejemplo) =====
-  const load = useCallback(async () => {
     try {
       setLoading(true);
-      const token = await AsyncStorage.getItem('token');
-      const res = await api.get(`/mantenimiento-freno-pm-pmf/datos/${orderid}`, {
-        headers: { Authorization: `Bearer ${token}` },
-        validateStatus: () => true
-      });
-      if (res.status >= 400) throw new Error(res.data?.error || 'No se pudo cargar');
 
-      const { auto: a, form } = res.data || {};
-      setAuto(a || {});
+      const resOrden = await api.get(`/api/ordenes/sap/${oid}`);
+      const dataOrden = resOrden?.data || {};
+      let clienteFromAddress = "";
 
-      // Prefill desde “auto” (ajusta a tus claves reales)
-      setCliente(a?.cliente || '');
-      setNoEquipo(a?.equipo || '');
-      setTecnicoNombre(a?.tecnico_nombre || '');
-      setTecnicoNomina(a?.nomina || '');
+      try {
+        const resAddr = await api.get(
+          `/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet('${oid}')/ToAddresses`
+        );
 
-      // Si ya existe un “form” guardado previamente, puedes hidratar aquí:
-      if (form) {
-        // (ejemplo) setResultado(form?.resultado?.tipo === 'seguimiento' ? 'seguimiento' : 'bien');
-        // Carga selectiva si te interesa re-editar; lo dejo simple para no alargar.
+        const results =
+          resAddr?.data?.d?.results || resAddr?.data?.results || [];
+
+        clienteFromAddress = safeStr(results?.[0]?.Name1);
+      } catch (addrError) {
+        console.log(
+          "[ManttoFrenoPmPmf] ToAddresses error:",
+          addrError?.response?.data || addrError?.message || addrError
+        );
       }
+
+      const data = {
+        ...dataOrden,
+        cliente:
+          clienteFromAddress || dataOrden?.cliente || dataOrden?.Name1 || "",
+      };
+
+      const autoData = {
+        orden: safeStr(data?.Orderid || data?.OrderId || oid),
+        cliente: safeStr(data?.cliente || ""),
+        equipo: safeStr(
+          data?.equipment || data?.Equipment || data?.equipo || data?.Equnr || ""
+        ),
+        tecnico_nombre: getUserName(user),
+        start_date: safeStr(
+          data?.start_date || data?.StartDate || data?.fecha || ""
+        ),
+      };
+
+      setOrden(data);
+      setAuto(autoData);
+
+      setForm((s) => ({
+        ...s,
+        orderid: autoData.orden || oid,
+        fecha: s.fecha || fmtDate(autoData.start_date),
+      }));
     } catch (e) {
-      console.error('[PMF load]', e);
-      Alert.alert('Error', e.message || 'Error al cargar');
+      console.log(
+        "[ManttoFrenoPmPmf] cargarOrden error:",
+        e?.response?.data || e
+      );
+
+      const oid = safeStr(orderid);
+
+      setOrden({ Orderid: oid });
+      setAuto({
+        orden: oid,
+        cliente: "",
+        equipo: "",
+        tecnico_nombre: getUserName(user),
+        start_date: "",
+      });
+
+      setForm((s) => ({ ...s, orderid: oid }));
+
+      Alert.alert(
+        "Aviso",
+        "No se pudieron cargar todos los datos de la orden. Puedes llenar el formulario y generar el PDF."
+      );
     } finally {
       setLoading(false);
     }
-  }, [orderid]);
+  }, [orderid, user]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    cargarOrden();
+  }, [cargarOrden]);
 
-  // ===== Guardar =====
-  const onGuardar = async () => {
+  const issueCount = useMemo(() => {
+    const values = [
+      form.operacion_freno.tornillo_ajuste,
+      form.operacion_freno.ruido_apertura_cierre,
+      form.operacion_freno.balatas_izq,
+      form.operacion_freno.balatas_der,
+      form.tambor.aceite_grasa,
+      form.tambor.oxido,
+      form.tubos_drenado.tubo_transparente,
+      form.tubos_drenado.tubo_negro,
+      form.micro_switch.condicion_fisica,
+      form.micro_switch.conexiones,
+      form.condicion_operacion.prueba_funcionamiento,
+    ];
+
+    return values.filter((v) => v === "mal").length;
+  }, [form]);
+
+  function buildHtmlActual() {
+    return buildManttoFrenoPmPmfHtml({
+      orden: {
+        ...(orden || {}),
+        Orderid: auto?.orden || form?.orderid,
+        cliente: auto?.cliente,
+        equipment: auto?.equipo,
+        tecnico_nombre: auto?.tecnico_nombre,
+        start_date: auto?.start_date || form?.fecha,
+      },
+      form,
+      user,
+    });
+  }
+
+  const abrirPreviewPdf = async () => {
     try {
-      setSaving(true);
-      const token = await AsyncStorage.getItem('token');
-
-      const payload = buildPayload();
-      const res = await api.post('/registro-mantto-freno/guardar', payload, {
-        headers: { Authorization: `Bearer ${token}` },
-        validateStatus: () => true
-      });
-      if (res.status >= 400) throw new Error(res.data?.error || 'No se pudo guardar');
-
-      Alert.alert('Listo', 'Formulario guardado', [{ text: 'OK', onPress: () => router.back() }]);
+      const html = buildHtmlActual();
+      setPreviewHtml(html);
+      setPreviewVisible(true);
     } catch (e) {
-      console.error(e);
-      Alert.alert('Error', e.message || 'No se pudo guardar');
-    } finally {
-      setSaving(false);
+      console.log("[ManttoFrenoPmPmf] preview error:", e);
+      Alert.alert("Error", "No se pudo generar la vista previa.");
     }
   };
 
-  const buildPayload = () => ({
-    orderid: String(orderid),
-    encabezado: {
-      cliente: txt(cliente),
-      no_equipo: txt(noEquipo),
-      tecnico: { nombre: txt(tecnicoNombre), nomina: txt(tecnicoNomina) },
-      fecha: txt(fecha),
-      horario: txt(horario),
-      control: txt(control),
-      tipo_mt: txt(tipoMT),                    // PM / PMF
-      velocidad_mmin: num(velNominal),         // [m/min]
-      capacidad_kg: num(capacidadKg),          // [kg]
-      reporte: 'inspeccion_visual_freno'       // según el layout del formato
-    },
-    condiciones_operacion_freno: {
-      tornillo_ajuste_torque: bm(tornillo_ajuste_torque), // 1
-      ruido_apertura_cierre: bm(ruido_apertura_cierre),   // 2
-      balatas: {
-        izquierdo: bm(balatas_izq),                        // 3 IZQ
-        derecho:   bm(balatas_der)                         // 3 DER
-      }
-    },
-    condicion_tambor: {
-      aceite_o_grasa: bm(tambor_aceite_grasa),
-      oxido:          bm(tambor_oxido)
-    },
-    tubos_drenado: {
-      transparente: bm(tubo_transparente),
-      negro:        bm(tubo_negro)
-    },
-    micro_switch: {
-      condicion_fisica: { izquierdo: bm(ms_cond_fisica_izq), derecho: bm(ms_cond_fisica_der) },
-      conexiones:      { izquierdo: bm(ms_conexiones_izq),   derecho: bm(ms_conexiones_der)   }
-    },
-    prueba_funcionamiento: bm(prueba_funcionamiento),
-    observaciones: txt(observaciones),
-    resultado: {
-      tipo: (resultado === 'seguimiento' ? 'seguimiento' : 'bien'),
-      detalle: txt(detalleSeguimiento)
-    },
-    firmas: {
-      mecanico_firma_y_fecha: !!firmaMecanico,
-      supervisor_firma_y_fecha: !!firmaSupervisor
+  const generarPdf = async () => {
+    try {
+      setGeneratingPdf(true);
+
+      const html = buildHtmlActual();
+
+      const result = await Print.printToFileAsync({
+        html,
+        base64: false,
+      });
+
+      const cleanOrder = safeStr(auto?.orden || form?.orderid || "orden").replace(
+        /[^a-zA-Z0-9_-]/g,
+        "_"
+      );
+
+      const fileName = `mantto_freno_pm_pmf_${cleanOrder}.pdf`;
+      const targetUri = `${FileSystem.documentDirectory}${fileName}`;
+
+      await FileSystem.copyAsync({
+        from: result.uri,
+        to: targetUri,
+      });
+
+      setPdfUri(targetUri);
+      return targetUri;
+    } finally {
+      setGeneratingPdf(false);
     }
-  });
+  };
+
+  const compartirPdf = async () => {
+    try {
+      const uri = pdfUri || (await generarPdf());
+      const canShare = await Sharing.isAvailableAsync();
+
+      if (!canShare) {
+        Alert.alert(
+          "PDF generado",
+          "El PDF se generó, pero este dispositivo no permite compartir archivos."
+        );
+        return;
+      }
+
+      await Sharing.shareAsync(uri, {
+        mimeType: "application/pdf",
+        dialogTitle: "Compartir mantenimiento de freno PM/PMF",
+      });
+    } catch (e) {
+      console.log("[ManttoFrenoPmPmf] compartir error:", e);
+      Alert.alert("Error", "No se pudo generar o compartir el PDF.");
+    }
+  };
+
+  const goNext = () => {
+    setActiveStep((s) => Math.min(s + 1, STEPS.length - 1));
+  };
+
+  const goBack = () => {
+    setActiveStep((s) => Math.max(s - 1, 0));
+  };
+
+  const renderProgress = () => (
+    <View style={styles.progressCard}>
+      <Text style={styles.progressTitle}>Avance del formulario</Text>
+
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.stepsScroll}
+      >
+        {STEPS.map((step, index) => {
+          const active = index === activeStep;
+          const done = index < activeStep;
+
+          return (
+            <TouchableOpacity
+              key={step.key}
+              activeOpacity={0.86}
+              onPress={() => setActiveStep(index)}
+              style={[
+                styles.stepItem,
+                active && styles.stepItemActive,
+                done && styles.stepItemDone,
+              ]}
+            >
+              <View
+                style={[
+                  styles.stepNumber,
+                  active && styles.stepNumberActive,
+                  done && styles.stepNumberDone,
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.stepNumberText,
+                    (active || done) && styles.stepNumberTextActive,
+                  ]}
+                >
+                  {index + 1}
+                </Text>
+              </View>
+
+              <View>
+                <Text
+                  style={[
+                    styles.stepName,
+                    active && styles.stepNameActive,
+                    done && styles.stepNameDone,
+                  ]}
+                >
+                  {step.title}
+                </Text>
+
+                <Text style={styles.stepShort}>{step.short}</Text>
+              </View>
+            </TouchableOpacity>
+          );
+        })}
+      </ScrollView>
+    </View>
+  );
+
+  const renderGeneral = () => (
+    <>
+      <SectionBox
+        title="Resumen de la orden"
+        subtitle="Datos automáticos que se enviarán al PDF."
+      >
+        <View style={styles.infoGrid}>
+          <InfoItem label="Orden / Control" value={auto.orden || form.orderid} />
+          <InfoItem label="Cliente" value={auto.cliente} />
+          <InfoItem label="No. equipo" value={auto.equipo} />
+          <InfoItem label="Técnico" value={auto.tecnico_nombre} />
+        </View>
+      </SectionBox>
+
+      <SectionBox
+        title="Datos generales"
+        subtitle="Información base del mantenimiento."
+      >
+        <FieldRow>
+          <Field>
+            <Label>Fecha</Label>
+            <Input
+              value={form.fecha}
+              onChangeText={(t) => patchForm({ fecha: t })}
+              placeholder="DD/MM/AAAA"
+            />
+          </Field>
+
+          <Field small>
+            <Label>Hora inicio</Label>
+            <Input
+              value={form.hora_inicio}
+              onChangeText={(t) => patchForm({ hora_inicio: t })}
+              placeholder="08:00"
+            />
+          </Field>
+
+          <Field small>
+            <Label>Hora fin</Label>
+            <Input
+              value={form.hora_fin}
+              onChangeText={(t) => patchForm({ hora_fin: t })}
+              placeholder="10:30"
+            />
+          </Field>
+        </FieldRow>
+
+        <FieldRow>
+          <Field>
+            <Label>Tipo de MT</Label>
+            <Input
+              value={form.tipo_mt}
+              onChangeText={(t) => patchForm({ tipo_mt: t })}
+              placeholder="Ej. Preventivo"
+            />
+          </Field>
+
+          <Field small>
+            <Label>Velocidad nominal</Label>
+            <Input
+              keyboardType="numeric"
+              value={form.velocidad_nominal}
+              onChangeText={(t) => patchForm({ velocidad_nominal: t })}
+              placeholder="m/min"
+            />
+          </Field>
+
+          <Field small>
+            <Label>Capacidad</Label>
+            <Input
+              keyboardType="numeric"
+              value={form.capacidad}
+              onChangeText={(t) => patchForm({ capacidad: t })}
+              placeholder="kg"
+            />
+          </Field>
+        </FieldRow>
+      </SectionBox>
+    </>
+  );
+
+  const renderFreno = () => (
+    <SectionBox
+      title="Condición de operación de freno"
+      subtitle="Revisión principal del freno PM/PMF."
+    >
+      <BienMalField
+        label="Revisión de tornillo de ajuste de torque"
+        description="Verifica que el tornillo se encuentre en condiciones correctas."
+        value={form.operacion_freno.tornillo_ajuste}
+        onChange={(v) =>
+          patchSection("operacion_freno", { tornillo_ajuste: v })
+        }
+      />
+
+      <BienMalField
+        label="Ruido a la apertura y cierre"
+        description="Detecta ruidos anormales durante la operación."
+        value={form.operacion_freno.ruido_apertura_cierre}
+        onChange={(v) =>
+          patchSection("operacion_freno", {
+            ruido_apertura_cierre: v,
+          })
+        }
+      />
+
+      <BienMalField
+        label="Aceite o grasa en balatas - lado izquierdo"
+        description="Revisión visual del lado izquierdo."
+        value={form.operacion_freno.balatas_izq}
+        onChange={(v) =>
+          patchSection("operacion_freno", { balatas_izq: v })
+        }
+      />
+
+      <BienMalField
+        label="Aceite o grasa en balatas - lado derecho"
+        description="Revisión visual del lado derecho."
+        value={form.operacion_freno.balatas_der}
+        onChange={(v) =>
+          patchSection("operacion_freno", { balatas_der: v })
+        }
+      />
+    </SectionBox>
+  );
+
+  const renderComponentes = () => (
+    <>
+      <SectionBox
+        title="Condiciones de tambor"
+        subtitle="Revisión visual del tambor de freno."
+      >
+        <BienMalField
+          label="Hay existencia de aceite o grasa"
+          description="Marca mal si se detecta contaminación por aceite o grasa."
+          value={form.tambor.aceite_grasa}
+          onChange={(v) => patchSection("tambor", { aceite_grasa: v })}
+        />
+
+        <BienMalField
+          label="Óxido"
+          description="Marca mal si se detecta óxido visible."
+          value={form.tambor.oxido}
+          onChange={(v) => patchSection("tambor", { oxido: v })}
+        />
+      </SectionBox>
+
+      <SectionBox
+        title="Tubos de drenado"
+        subtitle="Estado de tubo transparente y tubo negro."
+      >
+        <BienMalField
+          label="Tubo transparente"
+          description="Condición física y funcionamiento del tubo."
+          value={form.tubos_drenado.tubo_transparente}
+          onChange={(v) =>
+            patchSection("tubos_drenado", { tubo_transparente: v })
+          }
+        />
+
+        <BienMalField
+          label="Tubo negro"
+          description="Condición física y funcionamiento del tubo."
+          value={form.tubos_drenado.tubo_negro}
+          onChange={(v) =>
+            patchSection("tubos_drenado", { tubo_negro: v })
+          }
+        />
+      </SectionBox>
+    </>
+  );
+
+  const renderSwitch = () => (
+    <>
+      <SectionBox
+        title="Micro switch"
+        subtitle="Revisión física y conexiones."
+      >
+        <BienMalField
+          label="Condición física"
+          description="Verifica daños, desgaste o componentes flojos."
+          value={form.micro_switch.condicion_fisica}
+          onChange={(v) =>
+            patchSection("micro_switch", { condicion_fisica: v })
+          }
+        />
+
+        <BienMalField
+          label="Conexiones"
+          description="Revisa que las conexiones estén firmes y correctas."
+          value={form.micro_switch.conexiones}
+          onChange={(v) => patchSection("micro_switch", { conexiones: v })}
+        />
+      </SectionBox>
+
+      <SectionBox
+        title="Condiciones de operación"
+        subtitle="Prueba final de funcionamiento del freno."
+      >
+        <BienMalField
+          label="Prueba de funcionamiento"
+          description="Marca el resultado de la prueba operativa."
+          value={form.condicion_operacion.prueba_funcionamiento}
+          onChange={(v) =>
+            patchSection("condicion_operacion", {
+              prueba_funcionamiento: v,
+            })
+          }
+        />
+      </SectionBox>
+    </>
+  );
+
+  const renderResultado = () => (
+    <SectionBox
+      title="Observaciones y resultado"
+      subtitle="Cierre del mantenimiento y detalle final."
+    >
+      <Label>Observaciones</Label>
+      <Input
+        multiline
+        style={styles.textArea}
+        value={form.observaciones}
+        onChangeText={(t) => patchForm({ observaciones: t })}
+        placeholder="Observaciones generales"
+      />
+
+      <Label>Resultado total</Label>
+
+      <View style={styles.resultCard}>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.resultTitle}>Dictamen general</Text>
+          <Text style={styles.resultHint}>
+            Puedes seleccionar uno o ambos estados según el resultado.
+          </Text>
+        </View>
+
+        <View style={styles.resultChips}>
+          <Chip
+            tone="green"
+            active={form.resultado_total.bien}
+            onPress={() =>
+              patchSection("resultado_total", {
+                bien: !form.resultado_total.bien,
+              })
+            }
+          >
+            Bien
+          </Chip>
+
+          <Chip
+            tone="yellow"
+            active={form.resultado_total.seguimiento}
+            onPress={() =>
+              patchSection("resultado_total", {
+                seguimiento: !form.resultado_total.seguimiento,
+              })
+            }
+          >
+            Seguimiento
+          </Chip>
+        </View>
+      </View>
+
+      <Label>Detalle</Label>
+      <Input
+        multiline
+        style={styles.textArea}
+        value={form.resultado_total.detalle}
+        onChangeText={(t) =>
+          patchSection("resultado_total", { detalle: t })
+        }
+        placeholder="Detalle del resultado"
+      />
+    </SectionBox>
+  );
+
+  const renderStepContent = () => {
+    if (activeStep === 0) return renderGeneral();
+    if (activeStep === 1) return renderFreno();
+    if (activeStep === 2) return renderComponentes();
+    if (activeStep === 3) return renderSwitch();
+    return renderResultado();
+  };
 
   if (loading) {
     return (
-      <View style={{flex:1,justifyContent:'center',alignItems:'center'}}>
-        <ActivityIndicator size="large"/><Text style={{marginTop:8}}>Cargando…</Text>
+      <View style={styles.loadingScreen}>
+        <ActivityIndicator size="large" color={UI.blue} />
+        <Text style={styles.loadingTitle}>Cargando formulario</Text>
+        <Text style={styles.loadingText}>Preparando datos de la orden…</Text>
       </View>
     );
   }
 
   return (
-    <View style={{ flex:1, backgroundColor:'#F5F7FB' }}>
-      <Header title="Registro de mantenimiento de freno (PM/PMF)" />
-      <ScrollView contentContainerStyle={{ padding:16, paddingBottom:180 }}>
-        {/* ENCABEZADO */}
-        <Section>Datos del documento</Section>
-        <Card>
-          <Row2>
-            <Col><Label>CLIENTE</Label><Input value="Liverpool" onChangeText={setCliente} placeholder="Cliente / Razón social" /></Col>
-            <Col><Label>No. EQUIPO</Label><Input value="MX19EM829-A2" onChangeText={setNoEquipo} placeholder={auto?.equipo || '—'} /></Col>
-          </Row2>
-          <Row2>
-            <Col>
-              <Label>NOMBRE DEL TÉCNICO</Label>
-              <Input value="Juan Chávez" onChangeText={setTecnicoNombre} placeholder={auto?.tecnico_nombre || '—'} />
-            </Col>
-            <Col>
-              <Label>No. NÓMINA</Label>
-              <Input value="3289" onChangeText={setTecnicoNomina} placeholder={auto?.nomina || '—'}  />
-            </Col>
-          </Row2>
-          <Row2>
-            <Col><Label>FECHA</Label><Input value={fecha} onChangeText={setFecha} placeholder="DD/MM/AAAA" /></Col>
-            <Col><Label>HORARIO</Label><Input value={horario} onChangeText={setHorario} placeholder="08:00–12:00" /></Col>
-          </Row2>
-          <Row2>
-            <Col><Label>CONTROL</Label><Input value={control} onChangeText={setControl} /></Col>
-            <Col><Label>TIPO DE MT</Label><Input value={tipoMT} onChangeText={setTipoMT} placeholder="PM / PMF" /></Col>
-          </Row2>
-          <Row2>
-            <Col><Label>VELOCIDAD NOMINAL [m/min]</Label><Input keyboardType="numeric" value={velNominal} onChangeText={setVelNominal} /></Col>
-            <Col><Label>CAPACIDAD [kg]</Label><Input keyboardType="numeric" value={capacidadKg} onChangeText={setCapacidadKg} /></Col>
-          </Row2>
-        </Card>
+    <View style={styles.container}>
+      <Header title="Mantenimiento freno PM/PMF" />
 
-        {/* CONDICIÓN DE OPERACIÓN DEL FRENO */}
-        <Section>Condición de operación del freno</Section>
-        <Card>
-          <Row2>
-            <Col><Label>1) Revisión de tornillo de ajuste de torque</Label><BM value={tornillo_ajuste_torque} onChange={setTornilloAjusteTorque}/></Col>
-            <Col><Label>2) Ruido a la apertura y cierre</Label><BM value={ruido_apertura_cierre} onChange={setRuidoAperturaCierre}/></Col>
-          </Row2>
-          <Row2>
-            <Col><Label>3) Aceite o grasa en balatas (IZQ.)</Label><BM value={balatas_izq} onChange={setBalatasIzq}/></Col>
-            <Col><Label>3) Aceite o grasa en balatas (DER.)</Label><BM value={balatas_der} onChange={setBalatasDer}/></Col>
-          </Row2>
-        </Card>
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+        contentContainerStyle={styles.content}
+      >
+        <View style={styles.hero}>
+          <View style={styles.heroTop}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.heroKicker}>Formato técnico</Text>
+              <Text style={styles.heroTitle}>Mantenimiento de freno PM/PMF</Text>
+              <Text style={styles.heroText}>
+                Captura inspección visual, operación, componentes y resultado.
+                Puedes previsualizar el PDF aunque falten campos.
+              </Text>
+            </View>
 
-        {/* CONDICIÓN DE TAMBOR */}
-        <Section>Condición de tambor</Section>
-        <Card>
-          <Row2>
-            <Col><Label>¿Hay existencia de aceite o grasa?</Label><BM value={tambor_aceite_grasa} onChange={setTamborAceiteGrasa}/></Col>
-            <Col><Label>Óxido</Label><BM value={tambor_oxido} onChange={setTamborOxido}/></Col>
-          </Row2>
-        </Card>
+            <View style={styles.heroBadge}>
+              <Text style={styles.heroBadgeText}>PDF libre</Text>
+            </View>
+          </View>
 
-        {/* TUBOS DE DRENADO */}
-        <Section>Tubos de drenado</Section>
-        <Card>
-          <Row2>
-            <Col><Label>Tubo transparente</Label><BM value={tubo_transparente} onChange={setTuboTransparente}/></Col>
-            <Col><Label>Tubo negro</Label><BM value={tubo_negro} onChange={setTuboNegro}/></Col>
-          </Row2>
-        </Card>
+          <View style={styles.statsRow}>
+            <StatBox label="Hallazgos" value={issueCount} tone={issueCount > 0 ? "yellow" : "green"} />
+            <StatBox label="Paso" value={`${activeStep + 1}/${STEPS.length}`} />
+            <StatBox label="Orden" value={auto.orden ? "OK" : "—"} tone="red" />
+          </View>
+        </View>
 
-        {/* MICRO SWITCH */}
-        <Section>Micro switch</Section>
-        <Card>
-          <Row2>
-            <Col><Label>Condición física (IZQ.)</Label><BM value={ms_cond_fisica_izq} onChange={setMsCondFisicaIzq}/></Col>
-            <Col><Label>Condición física (DER.)</Label><BM value={ms_cond_fisica_der} onChange={setMsCondFisicaDer}/></Col>
-          </Row2>
-          <Row2>
-            <Col><Label>Conexiones (IZQ.)</Label><BM value={ms_conexiones_izq} onChange={setMsConexionesIzq}/></Col>
-            <Col><Label>Conexiones (DER.)</Label><BM value={ms_conexiones_der} onChange={setMsConexionesDer}/></Col>
-          </Row2>
-        </Card>
+        {renderProgress()}
 
-        {/* PRUEBA DE FUNCIONAMIENTO */}
-        <Section>Condiciones de operación del freno</Section>
-        <Card>
-          <Row2>
-            <Col><Label>Prueba de funcionamiento</Label><BM value={prueba_funcionamiento} onChange={setPruebaFuncionamiento}/></Col>
-          </Row2>
-        </Card>
+        <View style={styles.activeStepHeader}>
+          <Text style={styles.activeStepSmall}>
+            Paso {activeStep + 1} de {STEPS.length}
+          </Text>
+          <Text style={styles.activeStepTitle}>{STEPS[activeStep].title}</Text>
+        </View>
 
-        {/* OBSERVACIONES */}
-        <Section>Observaciones</Section>
-        <Card>
-          <Input value={observaciones} onChangeText={setObservaciones} placeholder="Escribe las observaciones..." multiline />
-        </Card>
+        {renderStepContent()}
 
-        {/* RESULTADO */}
-        <Section>Resultado total del trabajo</Section>
-        <Card>
-          <Label>Selecciona</Label>
-          <Chips options={['bien','seguimiento']} value={resultado} onChange={setResultado}/>
-          <Label style={{marginTop:10}}>Detalle (si requiere seguimiento)</Label>
-          <Input value={detalleSeguimiento} onChangeText={setDetalleSeguimiento} placeholder="[DETALLE]" multiline />
-        </Card>
+        <View style={styles.navRow}>
+          <TouchableOpacity
+            style={[styles.navBtn, activeStep === 0 && styles.navBtnDisabled]}
+            onPress={goBack}
+            disabled={activeStep === 0}
+            activeOpacity={0.86}
+          >
+            <Text
+              style={[
+                styles.navBtnText,
+                activeStep === 0 && styles.navBtnTextDisabled,
+              ]}
+            >
+              Anterior
+            </Text>
+          </TouchableOpacity>
 
-        {/* FIRMAS */}
-        <Section>Firmas</Section>
-        <Card>
-          <Row2>
-            <Col>
-              <Label>Personal de mantenimiento que elaboró — Firma y fecha</Label>
-              <Switch value={!!firmaMecanico} onValueChange={setFirmaMecanico}/>
-            </Col>
-            <Col>
-              <Label>Aprobación del supervisor de mantenimiento — Firma y fecha</Label>
-              <Switch value={!!firmaSupervisor} onValueChange={setFirmaSupervisor}/>
-            </Col>
-          </Row2>
-        </Card>
-
-        {/* ACCIÓN */}
-        <TouchableOpacity onPress={onGuardar} style={[styles.btn, styles.btnPrimary]}>
-          <Text style={[styles.btnText, { color: '#fff' }]}>{saving ? 'Guardando…' : 'Guardar'}</Text>
-        </TouchableOpacity>
+          <TouchableOpacity
+            style={[
+              styles.navBtnPrimary,
+              activeStep === STEPS.length - 1 && styles.navBtnDisabled,
+            ]}
+            onPress={goNext}
+            disabled={activeStep === STEPS.length - 1}
+            activeOpacity={0.86}
+          >
+            <Text
+              style={[
+                styles.navBtnPrimaryText,
+                activeStep === STEPS.length - 1 && styles.navBtnTextDisabled,
+              ]}
+            >
+              Siguiente
+            </Text>
+          </TouchableOpacity>
+        </View>
       </ScrollView>
+
+      <View style={styles.bottomBar}>
+        <TouchableOpacity
+          style={styles.previewBtn}
+          onPress={abrirPreviewPdf}
+          disabled={generatingPdf}
+          activeOpacity={0.9}
+        >
+          <Text style={styles.previewBtnText}>Vista previa</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.shareBtn}
+          onPress={compartirPdf}
+          disabled={generatingPdf}
+          activeOpacity={0.9}
+        >
+          {generatingPdf ? (
+            <ActivityIndicator color="#FFFFFF" />
+          ) : (
+            <Text style={styles.shareBtnText}>Compartir PDF</Text>
+          )}
+        </TouchableOpacity>
+      </View>
+
+      <Modal
+        visible={previewVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setPreviewVisible(false)}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.previewCard}>
+            <View style={styles.previewHeader}>
+              <View>
+                <Text style={styles.previewKicker}>Documento</Text>
+                <Text style={styles.previewTitle}>Vista previa PDF</Text>
+              </View>
+
+              <TouchableOpacity
+                style={styles.previewClose}
+                onPress={() => setPreviewVisible(false)}
+              >
+                <Text style={styles.previewCloseText}>Cerrar</Text>
+              </TouchableOpacity>
+            </View>
+
+            <WebView
+              originWhitelist={["*"]}
+              source={{ html: previewHtml }}
+              style={styles.webview}
+            />
+
+            <View style={styles.previewFooter}>
+              <TouchableOpacity
+                style={styles.shareBtn}
+                onPress={compartirPdf}
+                disabled={generatingPdf}
+                activeOpacity={0.9}
+              >
+                {generatingPdf ? (
+                  <ActivityIndicator color="#FFFFFF" />
+                ) : (
+                  <Text style={styles.shareBtnText}>Compartir PDF</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
 
-// —— helpers ——
-const num = (v) => {
-  if (v == null || v === '') return null;
-  const n = Number(String(v).replace(',','.')); return Number.isFinite(n) ? n : null;
-};
-const txt = (v) => (v == null || v === '' ? null : String(v));
-const bm  = (v) => v == null ? null : (v==='Bien' ? 'bien' : (v==='Mal' ? 'mal':null));
-
 const styles = StyleSheet.create({
-  section:{ marginTop:18, fontSize:18, fontWeight:'800', color:'#1f2937' },
-  card:{ backgroundColor:'#fff', borderRadius:14, padding:16, marginTop:10, borderWidth:1, borderColor:'#e5e7eb', shadowColor:'#000', shadowOpacity:0.03, shadowRadius:6, elevation:1 },
-  label:{ fontSize:12, color:'#6b7280', marginBottom:6 },
-  input:{ borderWidth:1, borderColor:'#d1d5db', borderRadius:12, paddingVertical:12, paddingHorizontal:14, backgroundColor:'#fff', fontSize:16, color:'#111827' },
-  readonly:{ borderWidth:1, borderColor:'#e5e7eb', borderRadius:12, paddingVertical:12, paddingHorizontal:14, backgroundColor:'#f9fafb' },
-  readonlyText:{ fontSize:16, color:'#111827' },
-  row2:{ flexDirection:'row', gap:12, flexWrap:'wrap' },
-  col:{ flexGrow:1, flexBasis:0, minWidth:220 },
-  chipsWrap:{ flexDirection:'row', flexWrap:'wrap', gap:10 },
-  chip:{ borderWidth:1, borderColor:'#c7cdd6', paddingVertical:10, paddingHorizontal:14, borderRadius:999, backgroundColor:'#fff' },
-  chipOn:{ backgroundColor:'#111827', borderColor:'#111827' },
-  chipText:{ color:'#111827', fontWeight:'700' },
-  chipTextOn:{ color:'#fff' },
-  btn:{ marginTop:20, padding:16, borderRadius:14, alignItems:'center' },
-  btnPrimary:{ backgroundColor:'#2563eb' },
-  btnText:{ fontWeight:'900', fontSize:16 },
+  container: {
+    flex: 1,
+    backgroundColor: UI.bg,
+  },
+
+  loadingScreen: {
+    flex: 1,
+    backgroundColor: UI.bg,
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 24,
+  },
+
+  loadingTitle: {
+    marginTop: 14,
+    color: UI.text,
+    fontSize: 18,
+    fontWeight: "900",
+  },
+
+  loadingText: {
+    marginTop: 4,
+    color: UI.muted,
+    fontSize: 13,
+    fontWeight: "700",
+  },
+
+  content: {
+    padding: 16,
+    paddingBottom: 120,
+  },
+
+  hero: {
+    backgroundColor: UI.blue,
+    borderRadius: 28,
+    padding: 18,
+    shadowColor: "#000",
+    shadowOpacity: 0.1,
+    shadowRadius: 12,
+    elevation: 3,
+  },
+
+  heroTop: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 12,
+  },
+
+  heroKicker: {
+    color: "#BFDBFE",
+    fontSize: 11,
+    fontWeight: "900",
+    textTransform: "uppercase",
+    letterSpacing: 0.9,
+    marginBottom: 4,
+  },
+
+  heroTitle: {
+    color: "#FFFFFF",
+    fontSize: 24,
+    fontWeight: "900",
+    lineHeight: 30,
+  },
+
+  heroText: {
+    color: "#DBEAFE",
+    fontSize: 13,
+    fontWeight: "700",
+    lineHeight: 19,
+    marginTop: 8,
+  },
+
+  heroBadge: {
+    backgroundColor: "rgba(255,255,255,0.15)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.22)",
+    borderRadius: 999,
+    paddingHorizontal: 11,
+    paddingVertical: 8,
+  },
+
+  heroBadgeText: {
+    color: "#FFFFFF",
+    fontSize: 11,
+    fontWeight: "900",
+  },
+
+  statsRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 10,
+    marginTop: 16,
+  },
+
+  statBox: {
+    flexGrow: 1,
+    minWidth: 82,
+    borderRadius: 18,
+    paddingVertical: 11,
+    paddingHorizontal: 10,
+    alignItems: "center",
+  },
+
+  statBlue: {
+    backgroundColor: "rgba(255,255,255,0.13)",
+  },
+
+  statGreen: {
+    backgroundColor: "rgba(22,163,74,0.28)",
+  },
+
+  statYellow: {
+    backgroundColor: "rgba(245,158,11,0.28)",
+  },
+
+  statRed: {
+    backgroundColor: "rgba(220,38,38,0.26)",
+  },
+
+  statValue: {
+    color: "#FFFFFF",
+    fontSize: 19,
+    fontWeight: "900",
+  },
+
+  statLabel: {
+    color: "#DBEAFE",
+    fontSize: 11,
+    fontWeight: "800",
+    marginTop: 2,
+  },
+
+  progressCard: {
+    backgroundColor: UI.card,
+    borderWidth: 1,
+    borderColor: UI.border,
+    borderRadius: 22,
+    padding: 14,
+    marginTop: 14,
+  },
+
+  progressTitle: {
+    color: UI.text,
+    fontSize: 14,
+    fontWeight: "900",
+    marginBottom: 10,
+  },
+
+  stepsScroll: {
+    gap: 10,
+    paddingRight: 10,
+  },
+
+  stepItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
+    minWidth: 130,
+    backgroundColor: UI.cardSoft,
+    borderWidth: 1,
+    borderColor: UI.border,
+    borderRadius: 18,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+
+  stepItemActive: {
+    backgroundColor: UI.blueSoft,
+    borderColor: "#93C5FD",
+  },
+
+  stepItemDone: {
+    backgroundColor: UI.greenSoft,
+    borderColor: "#86EFAC",
+  },
+
+  stepNumber: {
+    width: 30,
+    height: 30,
+    borderRadius: 11,
+    backgroundColor: "#E2E8F0",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  stepNumberActive: {
+    backgroundColor: UI.blue,
+  },
+
+  stepNumberDone: {
+    backgroundColor: UI.green,
+  },
+
+  stepNumberText: {
+    color: UI.muted,
+    fontSize: 12,
+    fontWeight: "900",
+  },
+
+  stepNumberTextActive: {
+    color: "#FFFFFF",
+  },
+
+  stepName: {
+    color: UI.text,
+    fontSize: 12,
+    fontWeight: "900",
+  },
+
+  stepNameActive: {
+    color: UI.blue,
+  },
+
+  stepNameDone: {
+    color: UI.green,
+  },
+
+  stepShort: {
+    color: UI.muted,
+    fontSize: 10,
+    fontWeight: "800",
+    marginTop: 1,
+  },
+
+  activeStepHeader: {
+    marginTop: 16,
+    marginBottom: 8,
+  },
+
+  activeStepSmall: {
+    color: UI.blue2,
+    fontSize: 11,
+    fontWeight: "900",
+    textTransform: "uppercase",
+    letterSpacing: 0.8,
+  },
+
+  activeStepTitle: {
+    color: UI.text,
+    fontSize: 21,
+    fontWeight: "900",
+    marginTop: 2,
+  },
+
+  sectionBox: {
+    backgroundColor: UI.card,
+    borderWidth: 1,
+    borderColor: UI.border,
+    borderRadius: 24,
+    padding: 15,
+    marginTop: 10,
+    shadowColor: "#0F172A",
+    shadowOpacity: 0.04,
+    shadowRadius: 10,
+    elevation: 1,
+  },
+
+  sectionTop: {
+    marginBottom: 14,
+  },
+
+  sectionTitle: {
+    color: UI.text,
+    fontSize: 17,
+    fontWeight: "900",
+  },
+
+  sectionSubtitle: {
+    color: UI.muted,
+    fontSize: 12,
+    fontWeight: "700",
+    lineHeight: 17,
+    marginTop: 3,
+  },
+
+  infoGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 10,
+  },
+
+  infoItem: {
+    flexGrow: 1,
+    flexBasis: "46%",
+    minWidth: 150,
+    backgroundColor: UI.cardSoft,
+    borderRadius: 16,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: UI.border,
+  },
+
+  infoLabel: {
+    color: UI.muted,
+    fontSize: 10,
+    fontWeight: "900",
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+    marginBottom: 5,
+  },
+
+  infoValue: {
+    color: UI.text,
+    fontSize: 14,
+    fontWeight: "900",
+    lineHeight: 18,
+  },
+
+  label: {
+    color: UI.muted,
+    fontSize: 11,
+    fontWeight: "900",
+    textTransform: "uppercase",
+    letterSpacing: 0.4,
+    marginBottom: 6,
+  },
+
+  input: {
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1,
+    borderColor: UI.borderDark,
+    borderRadius: 15,
+    paddingHorizontal: 13,
+    paddingVertical: Platform.OS === "ios" ? 12 : 9,
+    minHeight: 45,
+    color: UI.text,
+    fontSize: 14,
+    fontWeight: "800",
+    marginBottom: 10,
+  },
+
+  textArea: {
+    minHeight: 125,
+    paddingTop: 12,
+    textAlignVertical: "top",
+  },
+
+  fieldRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 11,
+    marginTop: 10,
+  },
+
+  field: {
+    flexGrow: 1,
+    flexBasis: 0,
+    minWidth: 170,
+  },
+
+  fieldSmall: {
+    minWidth: 112,
+  },
+
+  fieldWide: {
+    minWidth: 230,
+  },
+
+  chipsWrap: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 9,
+    marginBottom: 12,
+  },
+
+  chipsWrapMini: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 9,
+    marginTop: 12,
+  },
+
+  chip: {
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1,
+    borderColor: UI.borderDark,
+    borderRadius: 999,
+    paddingVertical: 9,
+    paddingHorizontal: 13,
+  },
+
+  chipBlue: {
+    backgroundColor: UI.blue,
+    borderColor: UI.blue,
+  },
+
+  chipGreen: {
+    backgroundColor: UI.green,
+    borderColor: UI.green,
+  },
+
+  chipYellow: {
+    backgroundColor: UI.yellow,
+    borderColor: UI.yellow,
+  },
+
+  chipRed: {
+    backgroundColor: UI.red,
+    borderColor: UI.red,
+  },
+
+  chipText: {
+    color: UI.text,
+    fontSize: 12,
+    fontWeight: "900",
+  },
+
+  chipTextActive: {
+    color: "#FFFFFF",
+  },
+
+  checkCard: {
+    backgroundColor: UI.cardSoft,
+    borderWidth: 1,
+    borderColor: UI.border,
+    borderRadius: 20,
+    padding: 13,
+    marginBottom: 11,
+  },
+
+  checkCardBad: {
+    backgroundColor: "#FFF7ED",
+    borderColor: "#FDBA74",
+  },
+
+  checkTop: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 11,
+  },
+
+  checkIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 14,
+    backgroundColor: UI.green,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  checkIconBad: {
+    backgroundColor: UI.red,
+  },
+
+  checkIconText: {
+    color: "#FFFFFF",
+    fontSize: 16,
+    fontWeight: "900",
+  },
+
+  checkTitle: {
+    color: UI.text,
+    fontSize: 14,
+    fontWeight: "900",
+  },
+
+  checkDesc: {
+    color: UI.muted,
+    fontSize: 11,
+    fontWeight: "700",
+    marginTop: 2,
+    lineHeight: 16,
+  },
+
+  statusPill: {
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 999,
+  },
+
+  statusPillOk: {
+    backgroundColor: UI.greenSoft,
+  },
+
+  statusPillBad: {
+    backgroundColor: UI.redSoft,
+  },
+
+  statusPillText: {
+    fontSize: 11,
+    fontWeight: "900",
+  },
+
+  statusPillTextOk: {
+    color: UI.green,
+  },
+
+  statusPillTextBad: {
+    color: UI.red,
+  },
+
+  resultCard: {
+    backgroundColor: UI.cardSoft,
+    borderWidth: 1,
+    borderColor: UI.border,
+    borderRadius: 20,
+    padding: 13,
+    marginBottom: 14,
+    flexDirection: "row",
+    gap: 12,
+    alignItems: "center",
+  },
+
+  resultTitle: {
+    color: UI.text,
+    fontSize: 14,
+    fontWeight: "900",
+  },
+
+  resultHint: {
+    color: UI.muted,
+    fontSize: 11,
+    fontWeight: "700",
+    marginTop: 2,
+    lineHeight: 16,
+  },
+
+  resultChips: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    justifyContent: "flex-end",
+  },
+
+  navRow: {
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 16,
+    marginBottom: 4,
+  },
+
+  navBtn: {
+    flex: 1,
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1,
+    borderColor: UI.blue,
+    borderRadius: 16,
+    alignItems: "center",
+    paddingVertical: 14,
+  },
+
+  navBtnPrimary: {
+    flex: 1,
+    backgroundColor: UI.blue,
+    borderWidth: 1,
+    borderColor: UI.blue,
+    borderRadius: 16,
+    alignItems: "center",
+    paddingVertical: 14,
+  },
+
+  navBtnDisabled: {
+    opacity: 0.45,
+  },
+
+  navBtnText: {
+    color: UI.blue,
+    fontSize: 14,
+    fontWeight: "900",
+  },
+
+  navBtnPrimaryText: {
+    color: "#FFFFFF",
+    fontSize: 14,
+    fontWeight: "900",
+  },
+
+  navBtnTextDisabled: {
+    color: UI.muted,
+  },
+
+  bottomBar: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    bottom: 0,
+    flexDirection: "row",
+    gap: 10,
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: Platform.OS === "ios" ? 26 : 14,
+    backgroundColor: "rgba(238,243,248,0.97)",
+    borderTopWidth: 1,
+    borderTopColor: UI.border,
+  },
+
+  previewBtn: {
+    flex: 1,
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1,
+    borderColor: UI.blue,
+    borderRadius: 17,
+    alignItems: "center",
+    justifyContent: "center",
+    minHeight: 52,
+  },
+
+  previewBtnText: {
+    color: UI.blue,
+    fontSize: 14,
+    fontWeight: "900",
+  },
+
+  shareBtn: {
+    flex: 1,
+    backgroundColor: UI.blue,
+    borderRadius: 17,
+    alignItems: "center",
+    justifyContent: "center",
+    minHeight: 52,
+  },
+
+  shareBtnText: {
+    color: "#FFFFFF",
+    fontSize: 14,
+    fontWeight: "900",
+  },
+
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(15,23,42,0.58)",
+    padding: 12,
+    justifyContent: "center",
+  },
+
+  previewCard: {
+    flex: 1,
+    backgroundColor: "#FFFFFF",
+    borderRadius: 24,
+    overflow: "hidden",
+  },
+
+  previewHeader: {
+    backgroundColor: UI.blue,
+    padding: 14,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+
+  previewKicker: {
+    color: "#BFDBFE",
+    fontSize: 11,
+    fontWeight: "900",
+    textTransform: "uppercase",
+    letterSpacing: 0.8,
+  },
+
+  previewTitle: {
+    color: "#FFFFFF",
+    fontSize: 17,
+    fontWeight: "900",
+    marginTop: 1,
+  },
+
+  previewClose: {
+    backgroundColor: "rgba(255,255,255,0.15)",
+    paddingVertical: 9,
+    paddingHorizontal: 13,
+    borderRadius: 999,
+  },
+
+  previewCloseText: {
+    color: "#FFFFFF",
+    fontSize: 12,
+    fontWeight: "900",
+  },
+
+  webview: {
+    flex: 1,
+    backgroundColor: "#FFFFFF",
+  },
+
+  previewFooter: {
+    padding: 12,
+    borderTopWidth: 1,
+    borderTopColor: UI.border,
+  },
 });

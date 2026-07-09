@@ -1,23 +1,7 @@
-import React, {
-  useEffect,
-  useMemo,
-  useState,
-  useCallback,
-  useRef,
-} from "react";
+import React, { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import {
-  View,
-  Text,
-  FlatList,
-  TouchableOpacity,
-  StyleSheet,
-  ActivityIndicator,
-  TextInput,
-  Platform,
-  Alert,
-  Pressable,
-  Modal,
-  ScrollView,
+  View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator,
+  TextInput, Platform, Alert, Pressable, Modal, ScrollView
 } from "react-native";
 import NetInfo from "@react-native-community/netinfo";
 import DateTimePicker from "@react-native-community/datetimepicker";
@@ -28,30 +12,22 @@ import { router } from "expo-router";
 import { useAuth } from "../../../src/context/AuthContext";
 import { Ionicons } from "@expo/vector-icons";
 import Signature from "react-native-signature-canvas";
-
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Print from "expo-print";
 import * as FileSystem from "expo-file-system/legacy";
+import * as Sharing from "expo-sharing";
+import * as Device from "expo-device";
 
 import {
-  loadOrdenTecnicoDetail,
-  loadOrdenesTecnicoList,
-  saveOrdenesTecnicoList,
-  buildOfflineWindow,
-  filterOrdenesByWindow,
+  loadOrdenTecnicoDetail, loadOrdenesTecnicoList, saveOrdenesTecnicoList,
+  buildOfflineWindow, filterOrdenesByWindow,
 } from "../../../src/offline/ordenesTecnicoCache";
-
 import {
-  getLocalStatusPatch,
-  setLocalStatusPatch,
-  applyStatusPatchToOrdenes,
+  getLocalStatusPatch, setLocalStatusPatch, applyStatusPatchToOrdenes,
 } from "../../../src/offline/ordenesTecnicoLocalPatch";
-
-import {
-  upsertSapQueueItem,
-  processSapQueue,
-} from "../../../src/offline/sapQueue";
+import { upsertSapQueueItem, processSapQueue } from "../../../src/offline/sapQueue";
 import { buildMantenimientoHtml } from "../../../src/services/templates/buildMantenimientoHtml";
+import { addPageNumbersToPdfBase64 } from "../../../src/services/pdf/addPageNumbersToPdf";
 
 const FIORI = {
   pageBg: "#F7F7F7",
@@ -67,58 +43,40 @@ const FIORI = {
   warn: "#2D9CDB",
   danger: "#EB5757",
   ok: "#2FBF71",
+  successDark: "#0B8457",
 };
 
 const MONTHS = [
-  "Enero",
-  "Febrero",
-  "Marzo",
-  "Abril",
-  "Mayo",
-  "Junio",
-  "Julio",
-  "Agosto",
-  "Septiembre",
-  "Octubre",
-  "Noviembre",
-  "Diciembre",
+  "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
+  "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre",
 ];
 
 const safeStr = (v) => (v == null ? "" : String(v));
+const safeTrim = (v) => String(v ?? "").trim();
+const PENDING_SIGN_KEY = (orderId) => `pendingSign:${orderId}`;
+const DEFAULT_RECOVERY_ELAPSED_MS = 2.5 * 60 * 60 * 1000;
+const PENDING_PDFS_DIR = `${FileSystem.documentDirectory}pdfs_no_enviados/`;
+const PENDING_PDFS_INDEX_KEY = "pendingFailedSignaturePdfs:index";
+const SENT_PDFS_DIR = `${FileSystem.documentDirectory}pdfs_enviados/`;
+const SENT_PDFS_INDEX_KEY = "sentSignaturePdfs:index";
 
-const atStartOfDay = (d) => {
-  const x = new Date(d);
-  x.setHours(0, 0, 0, 0);
-  return x;
-};
-
-const atEndOfDay = (d) => {
-  const x = new Date(d);
-  x.setHours(23, 59, 59, 999);
-  return x;
-};
-
-const startOfMonth = (d) =>
-  new Date(d.getFullYear(), d.getMonth(), 1, 0, 0, 0, 0);
-const endOfMonth = (d) =>
-  new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59, 999);
+const atStartOfDay = (d) => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; };
+const atEndOfDay = (d) => { const x = new Date(d); x.setHours(23, 59, 59, 999); return x; };
+const startOfMonth = (d) => new Date(d.getFullYear(), d.getMonth(), 1, 0, 0, 0, 0);
+const endOfMonth = (d) => new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59, 999);
 const startOfYear = (y) => new Date(y, 0, 1, 0, 0, 0, 0);
 const endOfYear = (y) => new Date(y, 11, 31, 23, 59, 59, 999);
 
 const formatLocalYmd = (d) => {
   if (!d) return null;
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const dd = String(d.getDate()).padStart(2, "0");
-  return `${yyyy}-${mm}-${dd}`;
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 };
 
 const parseSapDate = (value) => {
   if (!value) return null;
   if (typeof value === "string" && value.startsWith("/Date(")) {
     const ms = parseInt(value.replace("/Date(", "").replace(")/", ""), 10);
-    if (!Number.isNaN(ms)) return new Date(ms);
-    return null;
+    return Number.isNaN(ms) ? null : new Date(ms);
   }
   const d = new Date(value);
   return isNaN(d.getTime()) ? null : d;
@@ -126,10 +84,7 @@ const parseSapDate = (value) => {
 
 const getUtcYmd = (d) => {
   if (!d) return null;
-  const yyyy = d.getUTCFullYear();
-  const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
-  const dd = String(d.getUTCDate()).padStart(2, "0");
-  return `${yyyy}-${mm}-${dd}`;
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
 };
 
 const isWithin = (date, start, end) => {
@@ -145,236 +100,407 @@ const isWithin = (date, start, end) => {
 const formatDateDMY = (value) => {
   const d = parseSapDate(value);
   if (!d) return "—";
-  const dd = String(d.getUTCDate()).padStart(2, "0");
-  const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
-  const yyyy = d.getUTCFullYear();
-  return `${dd}/${mm}/${yyyy}`;
+  return `${String(d.getUTCDate()).padStart(2, "0")}/${String(d.getUTCMonth() + 1).padStart(2, "0")}/${d.getUTCFullYear()}`;
 };
+
+function capitalizeFirst(value) {
+  const s = String(value || "").trim();
+  if (!s) return "";
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+function getOrderId(item) {
+  return String(item?.Orderid || item?.OrderId || "").trim();
+}
+
+function getClienteName(item) {
+  const name1 = safeTrim(
+    item?.Name1 ||
+    item?.NAME1 ||
+    item?.name1
+  );
+
+  if (name1) return name1;
+
+  return safeTrim(
+    item?.cliente ||
+    item?.partner_name ||
+    "Cliente no disponible"
+  );
+}
+
+function getEquipoNumber(item) {
+  return safeTrim(
+    item?.equipment ||
+    item?.Equipment ||
+    item?.EQUIPMENT ||
+    "—"
+  );
+}
+
+function getTipoOrden(item) {
+  return safeTrim(item?.order_type || item?.OrderType || "Mantenimiento");
+}
+
+function formatLongDate(value) {
+  const d = parseSapDate(value);
+  if (!d) return "Fecha no disponible";
+
+  const safeDate = new Date(Date.UTC(
+    d.getUTCFullYear(),
+    d.getUTCMonth(),
+    d.getUTCDate()
+  ));
+
+  return capitalizeFirst(
+    safeDate.toLocaleDateString("es-MX", {
+      timeZone: "UTC",
+      weekday: "long",
+      day: "numeric",
+      month: "long",
+      year: "numeric",
+    })
+  );
+}
+
+function getMonthKey(item) {
+  const d = parseSapDate(item?.start_date) || parseSapDate(item?.finish_date);
+  if (!d) return "sin-fecha";
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+function getMonthTitle(item) {
+  const d = parseSapDate(item?.start_date) || parseSapDate(item?.finish_date);
+  if (!d) return "SIN FECHA";
+
+  const monthName = MONTHS[d.getUTCMonth()] || "";
+  return `${monthName.toUpperCase()} ${d.getUTCFullYear()}`;
+}
+
+function normalizeGroupText(value) {
+  return safeTrim(value)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toUpperCase();
+}
+
+function buildGroupedRows(orders = []) {
+  const sorted = [...(orders || [])].sort((a, b) => {
+    const da = parseSapDate(a?.start_date)?.getTime() || 0;
+    const db = parseSapDate(b?.start_date)?.getTime() || 0;
+
+    if (da !== db) return da - db;
+
+    const ca = normalizeGroupText(getClienteName(a));
+    const cb = normalizeGroupText(getClienteName(b));
+
+    if (ca !== cb) return ca.localeCompare(cb);
+
+    return getEquipoNumber(a).localeCompare(getEquipoNumber(b));
+  });
+
+  const clientCountMap = sorted.reduce((acc, item) => {
+    const monthKey = getMonthKey(item);
+    const clientKey = normalizeGroupText(getClienteName(item)) || "CLIENTE NO DISPONIBLE";
+    const key = `${monthKey}::${clientKey}`;
+    acc[key] = (acc[key] || 0) + 1;
+    return acc;
+  }, {});
+
+  const output = [];
+  let currentMonth = "";
+  let currentClient = "";
+
+  for (const item of sorted) {
+    const orderId = getOrderId(item);
+    const monthKey = getMonthKey(item);
+    const monthTitle = getMonthTitle(item);
+    const clientName = getClienteName(item);
+    const clientKey = normalizeGroupText(clientName) || "CLIENTE NO DISPONIBLE";
+    const fullClientKey = `${monthKey}::${clientKey}`;
+
+    if (monthKey !== currentMonth) {
+      output.push({
+        type: "monthHeader",
+        key: `month-${monthKey}`,
+        title: monthTitle,
+      });
+
+      currentMonth = monthKey;
+      currentClient = "";
+    }
+
+    if (fullClientKey !== currentClient) {
+      const count = clientCountMap[fullClientKey] || 0;
+
+      output.push({
+        type: "clientHeader",
+        key: `client-${fullClientKey}`,
+        title: clientName || "Cliente no disponible",
+        count,
+      });
+
+      currentClient = fullClientKey;
+    }
+
+    output.push({
+      type: "order",
+      key: `order-${orderId || Math.random()}`,
+      item,
+    });
+  }
+
+  return output;
+}
 
 function normalizeCode(code) {
   if (code === null || code === undefined) return "";
   const s = String(code).trim();
   if (!s) return "";
   const n = parseInt(s, 10);
-  if (Number.isNaN(n)) return s;
-  return String(n).padStart(4, "0");
+  return Number.isNaN(n) ? s : String(n).padStart(4, "0");
 }
 
 function extractCodes(raw) {
   if (!raw) return [];
   const s = String(raw).trim();
-  if (!s) return [];
   const matches = s.match(/\d{1,4}/g) || [];
-  const codes = matches
-    .map((x) => normalizeCode(x))
-    .filter((x) => /^\d{4}$/.test(x));
-  return Array.from(new Set(codes));
+  return Array.from(new Set(matches.map(normalizeCode).filter((x) => /^\d{4}$/.test(x))));
 }
 
 function isPending0400(item) {
   const rawStatusText = [
-    item?.userstatus,
-    item?.Userstatus,
-    item?.estatus_label,
-    item?.status_text,
-    item?.user_status,
-    item?.system_status,
-  ]
-    .filter(Boolean)
-    .join(" | ")
-    .toLowerCase();
-
+    item?.userstatus, item?.Userstatus, item?.estatus_label,
+    item?.status_text, item?.user_status, item?.system_status,
+  ].filter(Boolean).join(" | ").toLowerCase();
   const codes = new Set([
-    ...extractCodes(item?.userstatus),
-    ...extractCodes(item?.Userstatus),
-    ...extractCodes(item?.estatus_code),
-    ...extractCodes(item?.estatusCode),
+    ...extractCodes(item?.userstatus), ...extractCodes(item?.Userstatus),
+    ...extractCodes(item?.estatus_code), ...extractCodes(item?.estatusCode),
     ...extractCodes(item?.status_code),
   ]);
-
-  return (
-    codes.has("0400") ||
-    rawStatusText.includes("pendiente de firma") ||
-    rawStatusText.includes("pendiente firma")
-  );
+  return codes.has("0400") || rawStatusText.includes("pendiente de firma") || rawStatusText.includes("pendiente firma");
 }
 
 const matchesQuery = (item, q) => {
   if (!q) return true;
   const needle = q.toLowerCase().trim();
   const fields = [
-    item?.Orderid?.toString?.() ?? "",
-    item?.order_type ?? "",
-    item?.equipment ?? "",
-    item?.partner_name ?? "",
-    item?.partner_address ?? "",
-    item?.userstatus ?? "",
-    item?.estatus_label ?? "",
-    item?.estatus_code ?? "",
-  ]
-    .filter(Boolean)
-    .join(" ")
-    .toLowerCase();
-
+    item?.Orderid,
+    item?.OrderId,
+    item?.order_type,
+    item?.equipment,
+    item?.Equipment,
+    item?.Name1,
+    item?.NAME1,
+    item?.name1,
+    item?.partner_name,
+    item?.partner_address,
+    item?.cliente,
+    item?.direccion,
+    item?.userstatus,
+    item?.estatus_label,
+    item?.estatus_code,
+  ].filter(Boolean).join(" ").toLowerCase();
   return fields.includes(needle);
 };
 
 function CheckBox({ checked, disabled, onPress }) {
   return (
-    <Pressable
-      onPress={disabled ? null : onPress}
-      style={[
-        styles.cbBox,
-        checked && styles.cbBoxChecked,
-        disabled && { opacity: 0.5 },
-      ]}
-      hitSlop={10}
-    >
+    <Pressable onPress={disabled ? null : onPress} style={[styles.cbBox, checked && styles.cbBoxChecked, disabled && { opacity: 0.5 }]} hitSlop={10}>
       {checked ? <Ionicons name="checkmark" size={16} color="#fff" /> : null}
     </Pressable>
   );
 }
 
-const PENDING_SIGN_KEY = (orderId) => `pendingSign:${orderId}`;
-
 async function loadPendingSign(orderId) {
   try {
     const raw = await AsyncStorage.getItem(PENDING_SIGN_KEY(orderId));
     return raw ? JSON.parse(raw) : null;
-  } catch {
-    return null;
+  } catch { return null; }
+}
+
+async function savePendingSign(orderId, value) {
+  const id = String(orderId || "").trim();
+  if (!id) return null;
+  const payload = { ...(value || {}), orderId: id, updatedAt: new Date().toISOString() };
+  await AsyncStorage.setItem(PENDING_SIGN_KEY(id), JSON.stringify(payload));
+  return payload;
+}
+
+function parseSapTimeToParts(value) {
+  const raw = String(value || "").trim();
+  const match = raw.match(/^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$/i);
+  if (!match) return null;
+  return { hours: Number(match[1] || 0), minutes: Number(match[2] || 0), seconds: Number(match[3] || 0) };
+}
+
+function isValidSapClock(value) {
+  const t = parseSapTimeToParts(value);
+  return !!t && (t.hours > 0 || t.minutes > 0 || t.seconds > 0);
+}
+
+function sapDateAndTimeToMs(dateValue, timeValue) {
+  const date = parseSapDate(dateValue);
+  const time = parseSapTimeToParts(timeValue);
+  if (!date || !time) return null;
+  return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), time.hours, time.minutes, time.seconds, 0);
+}
+
+function getRecoveredTimeFromSapHeader(header) {
+  const startCandidates = [
+    { date: header?.ActualStartDate, time: header?.ActualStartTime },
+    { date: header?.ProductionStartDate, time: header?.ProductionStartTime },
+    { date: header?.StartDate, time: header?.ActualStartTime },
+    { date: header?.StartDate, time: header?.ProductionStartTime },
+  ];
+  const finishCandidates = [
+    { date: header?.ActualFinishDate, time: header?.ActualFinishTime },
+    { date: header?.ProductionFinishDate, time: header?.ProductionFinishTime },
+    { date: header?.FinishDate, time: header?.ActualFinishTime },
+    { date: header?.FinishDate, time: header?.ProductionFinishTime },
+  ];
+  let startMs = null; let finishMs = null;
+  for (const item of startCandidates) {
+    if (!isValidSapClock(item.time)) continue;
+    const ms = sapDateAndTimeToMs(item.date, item.time);
+    if (ms) { startMs = ms; break; }
   }
+  for (const item of finishCandidates) {
+    if (!isValidSapClock(item.time)) continue;
+    const ms = sapDateAndTimeToMs(item.date, item.time);
+    if (ms) { finishMs = ms; break; }
+  }
+  if (startMs && finishMs && finishMs < startMs) finishMs += 24 * 60 * 60 * 1000;
+  const elapsedMs = startMs && finishMs ? Math.max(0, finishMs - startMs) : 0;
+  return { startMs, finishMs, elapsedMs };
+}
+
+function isFinishedSapOperation(op) {
+  const status = String(op?.FieldUserStatus || "").trim().toUpperCase();
+  return status === "FINA" || status.includes("FINA");
+}
+
+function buildCheckedMapFromOperations(ops = [], { allowAllIfNoFinished = false } = {}) {
+  const list = Array.isArray(ops) ? ops : [];
+  let sourceOps = list.filter(isFinishedSapOperation);
+  if (!sourceOps.length && allowAllIfNoFinished) sourceOps = list;
+  const checkedMap = {};
+  for (const op of sourceOps) {
+    const activity = String(op?.Activity || op?.activity || op?.Vornr || "").trim();
+    if (!activity) continue;
+    checkedMap[activity] = true;
+  }
+  return checkedMap;
+}
+
+function checkedCountFromMap(checkedMap) {
+  return Object.keys(checkedMap || {}).filter((k) => !!checkedMap[k]).length;
+}
+
+function pendingNeedsRecovery(pending) {
+  if (!pending) return true;
+  if (!checkedCountFromMap(pending?.checkedMap)) return true;
+  if (!pending?.orderStartedAtMs || !pending?.orderFinishedAtMs) return true;
+  const elapsedMs = pending?.orderElapsedMs ?? Math.max(0, pending.orderFinishedAtMs - pending.orderStartedAtMs);
+  return !elapsedMs || elapsedMs <= 0;
+}
+
+async function fetchSapHeaderForRecovery({ apiClient, token, orderId }) {
+  const headers = token ? { Authorization: `Bearer ${token}` } : undefined;
+  const res = await apiClient.get(`/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet('${orderId}')`, {
+    headers, params: { $format: "json", "sap-client": "400", "sap-language": "ES" },
+  });
+  return res?.data?.d || res?.data || {};
+}
+
+async function fetchSapOperationsForRecovery({ apiClient, token, orderId }) {
+  const headers = token ? { Authorization: `Bearer ${token}` } : undefined;
+  const res = await apiClient.get(`/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet('${orderId}')/ToOperations`, {
+    headers, params: { $format: "json", "sap-client": "400", "sap-language": "ES" },
+  });
+  const data = res?.data?.d?.results || res?.data?.results || res?.data?.operaciones || res?.data || [];
+  return normalizeOpsForPdf(Array.isArray(data) ? data : []);
+}
+
+async function rebuildPendingSignFromSap({ apiClient, token, orderId, previousPending }) {
+  const header = await fetchSapHeaderForRecovery({ apiClient, token, orderId });
+  const operacionesSap = await fetchSapOperationsForRecovery({ apiClient, token, orderId });
+  const finishedOps = operacionesSap.filter(isFinishedSapOperation);
+  const checkedMap = buildCheckedMapFromOperations(operacionesSap, { allowAllIfNoFinished: true });
+  if (!checkedCountFromMap(checkedMap)) throw new Error("No se pudieron reconstruir operaciones desde SAP.");
+  let { startMs, finishMs, elapsedMs } = getRecoveredTimeFromSapHeader(header);
+  let usedDefaultTime = false;
+  if (!startMs || !finishMs || !elapsedMs) {
+    const baseDate = parseSapDate(header?.ActualStartDate) || parseSapDate(header?.StartDate) || parseSapDate(header?.ProductionStartDate) || new Date();
+    startMs = baseDate.getTime();
+    finishMs = startMs + DEFAULT_RECOVERY_ELAPSED_MS;
+    elapsedMs = DEFAULT_RECOVERY_ELAPSED_MS;
+    usedDefaultTime = true;
+  }
+  return savePendingSign(orderId, {
+    ...(previousPending || {}), checkedMap,
+    consumibles: Array.isArray(previousPending?.consumibles) ? previousPending.consumibles : [],
+    notaTecnico: String(previousPending?.notaTecnico || "").trim(),
+    orderStartedAtMs: startMs, orderFinishedAtMs: finishMs, orderElapsedMs: elapsedMs,
+    __recoveredFromSap: true, __recoveredAt: new Date().toISOString(),
+    __recoveredUsedAllOperations: !finishedOps.length, __recoveredUsedDefaultTime: usedDefaultTime,
+  });
+}
+
+async function getPendingSignForOrder({ apiClient, token, orderId }) {
+  const pending = await loadPendingSign(orderId);
+  if (!pendingNeedsRecovery(pending)) return pending;
+  return rebuildPendingSignFromSap({ apiClient, token, orderId, previousPending: pending });
 }
 
 async function loadPending0400FromOffline(userEmail) {
   try {
     const cached = await loadOrdenesTecnicoList(userEmail);
     let data = Array.isArray(cached?.data) ? cached.data : [];
-
     const patchMap = await getLocalStatusPatch(userEmail);
-
     data = applyStatusPatchToOrdenes(data, patchMap);
-
     return data.filter((it) => {
       const orderId = String(it?.Orderid || it?.OrderId || "").trim();
-
-      const localCode = normalizeCode(
-        patchMap?.[orderId]?.code ||
-          patchMap?.[orderId]?.estatus_code ||
-          patchMap?.[orderId]?.status_code ||
-          patchMap?.[orderId],
-      );
-
-      // Si localmente ya está finalizada, ya NO debe aparecer en pendiente de firma
-      if (localCode === "0300") {
-        return false;
-      }
-
+      const localCode = normalizeCode(patchMap?.[orderId]?.code || patchMap?.[orderId]?.estatus_code || patchMap?.[orderId]?.status_code || patchMap?.[orderId]);
+      if (localCode === "0300") return false;
       return isPending0400(it);
     });
-  } catch (e) {
-    console.warn(
-      "[PENDIENTE FIRMA] loadPending0400FromOffline ERROR:",
-      e?.message || e,
-    );
-    return [];
-  }
+  } catch { return []; }
 }
-
-const safeTrim = (v) => String(v ?? "").trim();
 
 function detectTipoMantenimiento(orden) {
   const raw = [
-    orden?.tipo_equipo,
-    orden?.EquipmentType,
-    orden?.equipment_type,
-    orden?.equipo_tipo,
-    orden?.tipo,
-    orden?.Type,
-    orden?.DescripcionEquipo,
-    orden?.description,
-  ]
-    .map((x) => safeTrim(x))
-    .filter(Boolean)
-    .join(" | ")
-    .toLowerCase();
-
-  if (raw.includes("escal")) return "escalera";
-  return "elevador";
+    orden?.tipo_equipo, orden?.EquipmentType, orden?.equipment_type, orden?.equipo_tipo,
+    orden?.tipo, orden?.Type, orden?.DescripcionEquipo, orden?.description,
+  ].map(safeTrim).filter(Boolean).join(" | ").toLowerCase();
+  return raw.includes("escal") ? "escalera" : "elevador";
 }
-//cambios agregados para la eliminacion del campo de SubActivity 04/06/2026Miguel Angel
-/*
+
+function detectCoberturaFromShortText(shortText) {
+  const s = String(shortText || "").toUpperCase();
+  if (s.includes("COBERTURA BASICA") || s.includes("COBERTURA BÁSICA")) return "BASICA";
+  if (s.includes("COBERTURA MEDIA")) return "MEDIA";
+  if (s.includes("COBERTURA SEMI")) return "SEMI";
+  return "SIN COBERTURA";
+}
+
 function normalizeOpsForPdf(ops = []) {
   if (!Array.isArray(ops)) return [];
   return ops.map((op) => {
     const Activity = op.Activity || op.activity || op.Vornr || "";
-    const SubActivity = op.SubActivity || op.subactivity || op.Uvorn || "";
     const Description = op.Description || op.description || op.Ltxa1 || "";
     const StandardTextKey = op.StandardTextKey || op.standardTextKey || "";
-
-    return {
-      ...op,
-      activity: String(Activity || ""),
-      subactivity: String(SubActivity || ""),
-      description: String(Description || ""),
-      Activity: String(Activity || ""),
-      SubActivity: String(SubActivity || ""),
-      Description: String(Description || ""),
-      StandardTextKey: String(StandardTextKey || ""),
-      standardTextKey: String(StandardTextKey || ""),
-    };
-  });
-}
-  */
-
-function normalizeOpsForPdf(ops = []) {
-  if (!Array.isArray(ops)) return [];
-
-  return ops.map((op) => {
-    const Activity = op.Activity || op.activity || op.Vornr || "";
-    const Description = op.Description || op.description || op.Ltxa1 || "";
-    const StandardTextKey = op.StandardTextKey || op.standardTextKey || "";
-
-    return {
-      ...op,
-      activity: String(Activity || ""),
-      description: String(Description || ""),
-      Activity: String(Activity || ""),
-      Description: String(Description || ""),
-      StandardTextKey: String(StandardTextKey || ""),
-      standardTextKey: String(StandardTextKey || ""),
-    };
+    return { ...op, activity: String(Activity), description: String(Description), Activity: String(Activity), Description: String(Description), StandardTextKey: String(StandardTextKey), standardTextKey: String(StandardTextKey) };
   });
 }
 
 function mapDireccionLikeBackend(addr) {
   if (!addr) return { cliente: "", direccion: "" };
-
-  const Name1 = addr.Name1 ?? "";
-  const Name2 = addr.Name2 ?? "";
-  const Street = addr.Street ?? addr.StreetName ?? "";
-  const HouseNum1 = addr.HouseNum1 ?? "";
-  const StrSuppl3 = addr.StrSuppl3 ?? "";
-  const Location = addr.Location ?? "";
-  const City1 = addr.City1 ?? "";
-  const Region = addr.Region ?? "";
-  const PostCode1 = addr.PostCode1 ?? "";
-  const Country = addr.Country ?? "";
-
-  const cliente = [Name1, Name2].filter(Boolean).join(" ").trim();
-
+  const cliente = [addr.Name1 ?? "", addr.Name2 ?? ""].filter(Boolean).join(" ").trim();
   const direccion = [
-    `${Street} ${HouseNum1}`.trim(),
-    StrSuppl3,
-    Location,
-    City1,
-    Region,
-    PostCode1,
-    Country,
-  ]
-    .filter((x) => x && String(x).trim().length > 0)
-    .join(", ");
-
+    `${addr.Street ?? addr.StreetName ?? ""} ${addr.HouseNum1 ?? ""}`.trim(),
+    addr.StrSuppl3 ?? "", addr.Location ?? "", addr.City1 ?? "", addr.Region ?? "", addr.PostCode1 ?? "", addr.Country ?? "",
+  ].filter((x) => x && String(x).trim().length > 0).join(", ");
   return { cliente, direccion };
 }
 
@@ -383,2298 +509,1388 @@ function pickSecondAddress(results = []) {
   return results.length >= 2 ? results[1] : results[0];
 }
 
+async function enrichOrdersWithToAddressesCliente({ orders, apiClient, token }) {
+  const list = Array.isArray(orders) ? orders : [];
+
+  const enriched = await Promise.all(
+    list.map(async (item) => {
+      const orderId = String(item?.Orderid || item?.OrderId || "").trim();
+
+      const currentName1 = safeTrim(
+        item?.Name1 ||
+        item?.NAME1 ||
+        item?.name1
+      );
+
+      if (currentName1 || !orderId) {
+        return {
+          ...item,
+          Name1: currentName1 || item?.Name1 || "",
+          cliente: currentName1 || item?.cliente || item?.partner_name || "",
+        };
+      }
+
+      const clienteName = await fetchClienteNameFromToAddresses({
+        apiClient,
+        token,
+        orderId,
+      });
+
+      return {
+        ...item,
+        Name1: clienteName,
+        cliente: clienteName || item?.cliente || item?.partner_name || "",
+      };
+    })
+  );
+
+  return enriched;
+}
+
+async function fetchClienteNameFromToAddresses({ apiClient, token, orderId }) {
+  try {
+    const id = String(orderId || "").trim();
+    if (!id) return "";
+
+    const headers = token ? { Authorization: `Bearer ${token}` } : undefined;
+
+    const res = await apiClient.get(
+      `/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet('${id}')/ToAddresses`,
+      {
+        headers,
+        params: {
+          $format: "json",
+          "sap-client": "400",
+          "sap-language": "ES",
+        },
+      }
+    );
+
+    const results =
+      res?.data?.d?.results ||
+      res?.data?.results ||
+      [];
+
+    const firstNode = Array.isArray(results) ? results[0] : null;
+
+    const name1 = safeTrim(
+      firstNode?.Name1 ||
+      firstNode?.NAME1 ||
+      firstNode?.name1
+    );
+
+    return name1;
+  } catch (error) {
+    console.log("[PENDIENTE_FIRMA][ToAddresses cliente error]", {
+      orderId,
+      error: error?.response?.data || error?.message || error,
+    });
+
+    return "";
+  }
+}
+
 async function fetchOrdenFullForPdf({ apiClient, token, orderId }) {
   try {
     const cached = await loadOrdenTecnicoDetail(orderId);
-    if (cached?.data?.Orderid) {
+    if (cached?.data?.Orderid || cached?.data?.OrderId) {
       const ops = normalizeOpsForPdf(cached?.data?.operaciones || []);
-      return { ...cached.data, operaciones: ops };
+      const shortTextCached = cached?.data?.ShortText || cached?.data?.shorttext || cached?.data?.Shorttext || cached?.data?.shortText || "";
+      const coberturaCached = cached?.data?.cobertura_tipo || cached?.data?.coberturaTipo || detectCoberturaFromShortText(shortTextCached);
+      return { ...cached.data, ShortText: shortTextCached, cobertura_tipo: coberturaCached || "SIN COBERTURA", operaciones: ops };
     }
   } catch {}
-
   const headers = token ? { Authorization: `Bearer ${token}` } : undefined;
-
-  const resOrden = await apiClient.get(`/api/ordenes/sap/${orderId}`, {
-    headers,
-  });
+  const resOrden = await apiClient.get(`/api/ordenes/sap/${orderId}`, { headers }).catch(() => ({ data: {} }));
   const baseOrden = resOrden?.data || {};
-
+  let shortTextHeader = "";
+  try {
+    const resHeader = await apiClient.get(`/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet('${orderId}')`, { headers });
+    shortTextHeader = resHeader?.data?.d?.ShortText || resHeader?.data?.d?.shorttext || "";
+  } catch {}
+  const shortTextForCoverage = shortTextHeader || baseOrden?.ShortText || baseOrden?.shorttext || baseOrden?.Shorttext || baseOrden?.shortText || "";
+  const coberturaDetectada = detectCoberturaFromShortText(shortTextForCoverage);
   let ops = [];
   try {
-    const resOps = await apiClient.get(`/api/operaciones/sap/${orderId}`, {
-      headers,
-    });
-    const rawOps =
-      resOps?.data?.d?.results ||
-      resOps?.data?.results ||
-      resOps?.data?.operaciones ||
-      resOps?.data ||
-      [];
-    ops = Array.isArray(rawOps) ? rawOps : [];
+    const resOps = await apiClient.get(`/api/operaciones/sap/${orderId}`, { headers });
+    ops = Array.isArray(resOps?.data?.d?.results || resOps?.data?.results || resOps?.data?.operaciones || resOps?.data) ? (resOps?.data?.d?.results || resOps?.data?.results || resOps?.data?.operaciones || resOps?.data) : [];
   } catch {
     ops = Array.isArray(baseOrden?.operaciones) ? baseOrden.operaciones : [];
   }
-
   ops = normalizeOpsForPdf(ops);
-
-  let direccionSap = "";
-  let clienteSap = "";
+  let direccionSap = ""; let clienteSap = "";
   try {
-    const resAddr = await apiClient.get(
-      `/api/ordenes/sap/${orderId}/addresses`,
-      { headers },
-    );
+    const resAddr = await apiClient.get(`/api/ordenes/sap/${orderId}/addresses`, { headers });
     const results = resAddr?.data?.results || resAddr?.data?.d?.results || [];
-    const chosen = pickSecondAddress(results);
-    const mapped = mapDireccionLikeBackend(chosen);
-    direccionSap = mapped.direccion || "";
-    clienteSap = mapped.cliente || "";
+    const mapped = mapDireccionLikeBackend(pickSecondAddress(results));
+    direccionSap = mapped.direccion || ""; clienteSap = mapped.cliente || "";
   } catch {}
-
   return {
-    ...baseOrden,
-    cliente:
-      clienteSap ||
-      baseOrden?.cliente ||
-      baseOrden?.partner_name ||
-      `${baseOrden?.Name1 ?? ""} ${baseOrden?.Name2 ?? ""}`.trim(),
-    direccion:
-      direccionSap ||
-      baseOrden?.direccion ||
-      baseOrden?.address ||
-      baseOrden?.partner_address ||
-      "",
+    ...baseOrden, ShortText: shortTextForCoverage || baseOrden?.ShortText || "",
+    cobertura_tipo: coberturaDetectada || baseOrden?.cobertura_tipo || baseOrden?.coberturaTipo || "SIN COBERTURA",
+    cliente: clienteSap || baseOrden?.cliente || baseOrden?.partner_name || `${baseOrden?.Name1 ?? ""} ${baseOrden?.Name2 ?? ""}`.trim(),
+    direccion: direccionSap || baseOrden?.direccion || baseOrden?.address || baseOrden?.partner_address || "",
     operaciones: ops,
   };
 }
 
 function maskBase64Deep(value) {
-  if (Array.isArray(value)) {
-    return value.map(maskBase64Deep);
-  }
-
+  if (Array.isArray(value)) return value.map(maskBase64Deep);
   if (value && typeof value === "object") {
     const next = {};
-
     for (const key of Object.keys(value)) {
-      if (key === "Base64") {
-        next[key] =
-          `<<base64 omitted: ${String(value[key] || "").length} chars>>`;
-      } else {
-        next[key] = maskBase64Deep(value[key]);
-      }
+      next[key] = key === "Base64" ? `<<base64 omitted: ${String(value[key] || "").length} chars>>` : maskBase64Deep(value[key]);
     }
-
     return next;
   }
-
   return value;
 }
 
 function logSapPayload(label, payload, { stripBase64 = false } = {}) {
-  try {
-    console.log(label);
-
-    if (!payload) {
-      console.log(payload);
-      return;
-    }
-
-    const output = stripBase64 ? maskBase64Deep(payload) : payload;
-
-    console.log(JSON.stringify(output, null, 2));
-  } catch (e) {
-    console.log(label, payload);
-    console.log("[LOG SAP PAYLOAD ERROR]", e?.message || e);
-  }
+  try { console.log(label); if (payload) { console.log(JSON.stringify(stripBase64 ? maskBase64Deep(payload) : payload, null, 2)); } } catch {}
 }
 
-function isValidEmail(email) {
-  const s = String(email || "")
+function isValidEmail(email) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || "").trim().toLowerCase()); }
+
+function getSapErrorDetail(error, fallback = "No se pudo enviar a SAP.") {
+  const data = error?.response?.data;
+  const raw = data?.error?.message?.value || data?.message?.value || data?.detail || data?.error_description || data?.message || (typeof data?.error === "string" ? data.error : "") || error?.message || fallback;
+  const status = error?.response?.status;
+  return [status ? `HTTP ${status}${error?.response?.statusText ? ` ${error?.response?.statusText}` : ""}` : "", String(raw || fallback)].filter(Boolean).join(" - ");
+}
+
+function sanitizeFileName(value) { return String(value || "").replace(/[^\w.-]/g, "_").replace(/_+/g, "_"); }
+
+function sanitizeBulkPart(value) {
+  return String(value || "")
     .trim()
-    .toLowerCase();
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^\w.-]/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function getDeviceModelForBulkId() {
+  const rawModel =
+    Device.modelName ||
+    Device.productName ||
+    Device.manufacturer ||
+    Device.brand ||
+    Platform.OS ||
+    "DISPOSITIVO";
+
+  return sanitizeBulkPart(rawModel).slice(0, 24) || "DISPOSITIVO";
+}
+
+function buildBulkId({ firstOrderId }) {
+  const cleanOrderId = sanitizeBulkPart(firstOrderId || "SIN_ORDEN");
+  const cleanDeviceModel = getDeviceModelForBulkId();
+
+  return `PAQUETE_${cleanOrderId}_${cleanDeviceModel}`;
+}
+
+function buildShortPdfFileName({ tipo, orderId }) {
+  const cleanOrderId = sanitizeFileName(String(orderId || "").trim());
+  const prefix = String(tipo || "").toLowerCase() === "escalera" ? "mantenimiento_esca" : "mantenimiento_elev";
+  return `${prefix}_${cleanOrderId}.pdf`;
+}
+
+async function ensureDir(dir) {
+  const info = await FileSystem.getInfoAsync(dir);
+  if (!info.exists) await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
+}
+
+async function readJsonIndex(key) { try { const raw = await AsyncStorage.getItem(key); return raw ? JSON.parse(raw) : []; } catch { return []; } }
+async function writeJsonIndex(key, items) { await AsyncStorage.setItem(key, JSON.stringify(items || [])); }
+async function readFailedPdfsIndex() { return readJsonIndex(PENDING_PDFS_INDEX_KEY); }
+async function writeFailedPdfsIndex(items) { return writeJsonIndex(PENDING_PDFS_INDEX_KEY, items); }
+async function readSentPdfsIndex() { return readJsonIndex(SENT_PDFS_INDEX_KEY); }
+async function writeSentPdfsIndex(items) { return writeJsonIndex(SENT_PDFS_INDEX_KEY, items); }
+
+async function savePdfCopy({ targetDir, indexKey, orderId, tempUri, fileName, clienteEmail, clienteNombre, clienteCargo, comentarioCliente, reason = "" }) {
+  await ensureDir(targetDir);
+  const finalFileName = `${sanitizeFileName(orderId)}_${Date.now()}_${sanitizeFileName(fileName || `MANT_${orderId}.pdf`)}`;
+  const finalUri = `${targetDir}${finalFileName}`;
+  await FileSystem.copyAsync({ from: tempUri, to: finalUri });
+  const prev = await readJsonIndex(indexKey);
+  const item = { id: `${orderId}_${Date.now()}`, orderId: String(orderId), fileName: finalFileName, uri: finalUri, clienteEmail: String(clienteEmail || ""), clienteNombre: String(clienteNombre || ""), clienteCargo: String(clienteCargo || ""), comentarioCliente: String(comentarioCliente || ""), reason: String(reason || ""), createdAt: new Date().toISOString() };
+  await writeJsonIndex(indexKey, [item, ...prev]);
+  return item;
+}
+
+async function saveFailedSignaturePdf(args) { return savePdfCopy({ ...args, targetDir: PENDING_PDFS_DIR, indexKey: PENDING_PDFS_INDEX_KEY, reason: args?.reason || "No se pudo enviar a SAP" }); }
+async function saveSentSignaturePdf(args) { return savePdfCopy({ ...args, targetDir: SENT_PDFS_DIR, indexKey: SENT_PDFS_INDEX_KEY }); }
+
+async function deletePdfItem(item, indexKey) {
+  try {
+    if (!item?.uri) return;
+    const prev = await readJsonIndex(indexKey);
+    await writeJsonIndex(indexKey, prev.filter((x) => x.uri !== item.uri));
+    await FileSystem.deleteAsync(item.uri, { idempotent: true }).catch(() => {});
+  } catch {}
+}
+
+function isTodayIso(value) {
+  if (!value) return false;
+  const d = new Date(value); const today = new Date();
+  return d.getFullYear() === today.getFullYear() && d.getMonth() === today.getMonth() && d.getDate() === today.getDate();
+}
+
+async function cleanupOldPdfItems(indexKey) {
+  const items = await readJsonIndex(indexKey);
+  const keep = [];
+  for (const item of items) {
+    if (isTodayIso(item?.createdAt)) keep.push(item);
+    else if (item?.uri) await FileSystem.deleteAsync(item.uri, { idempotent: true }).catch(() => {});
+  }
+  await writeJsonIndex(indexKey, keep);
+  return keep;
+}
+
+async function sharePdfItem(item) {
+  try {
+    if (!item?.uri) { Alert.alert("PDF no disponible", "No se encontró la ruta del archivo."); return; }
+    const info = await FileSystem.getInfoAsync(item.uri);
+    if (!info.exists) { Alert.alert("PDF no encontrado", "El archivo ya no existe en el dispositivo."); return; }
+    if (!(await Sharing.isAvailableAsync())) { Alert.alert("Compartir no disponible", "Este dispositivo no permite compartir archivos desde la app."); return; }
+    await Sharing.shareAsync(item.uri, { mimeType: "application/pdf", dialogTitle: `Compartir PDF orden ${item.orderId}`, UTI: "com.adobe.pdf" });
+  } catch (e) { Alert.alert("Error al compartir", e?.message || "No se pudo compartir el PDF."); }
+}
+
+async function generateMaintenancePdfFile({ html }) {
+  const result = await Print.printToFileAsync({ html: String(html || ""), base64: true });
+  if (!result?.base64) throw new Error("El PDF se generó vacío. Intenta generar nuevamente la orden.");
+  const pdfBase64Final = await addPageNumbersToPdfBase64(result.base64);
+  if (!pdfBase64Final) throw new Error("No se pudo corregir el PDF final.");
+  await FileSystem.writeAsStringAsync(result.uri, pdfBase64Final, { encoding: FileSystem.EncodingType.Base64 });
+  return { uri: result.uri, base64: pdfBase64Final };
 }
 
 export default function PendienteFirmaIndex() {
   const { user, ensureValidToken, token } = useAuth();
-
-  const userEmail = safeStr(
-    user?.correo || user?.email || user?.upn || user?.username,
-  ).trim();
-
+  const userEmail = safeStr(user?.correo || user?.email || user?.upn || user?.username).trim();
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [isOnline, setIsOnline] = useState(true);
-
   const [allOrdenes, setAllOrdenes] = useState([]);
   const [rows, setRows] = useState([]);
   const [query, setQuery] = useState("");
-
   const [dateMode, setDateMode] = useState("all");
-
   const [dayRef, setDayRef] = useState(new Date());
   const [showDayPicker, setShowDayPicker] = useState(false);
-
   const [weekStart, setWeekStart] = useState(null);
   const [weekEnd, setWeekEnd] = useState(null);
   const [showWeekStartPicker, setShowWeekStartPicker] = useState(false);
   const [showWeekEndPicker, setShowWeekEndPicker] = useState(false);
-
   const now = new Date();
-  const [monthYear, setMonthYear] = useState({
-    month: now.getMonth(),
-    year: now.getFullYear(),
-  });
+  const [monthYear, setMonthYear] = useState({ month: now.getMonth(), year: now.getFullYear() });
   const [showMonthModal, setShowMonthModal] = useState(false);
-
   const [yearOnly, setYearOnly] = useState(now.getFullYear());
   const [showYearModal, setShowYearModal] = useState(false);
-
   const [selectMode, setSelectMode] = useState(false);
   const [selectedMap, setSelectedMap] = useState({});
-
+  const [validatingOrders, setValidatingOrders] = useState(false);
+  const [showValidationModal, setShowValidationModal] = useState(false);
+  const [validationResults, setValidationResults] = useState([]);
+  const [validatedOrderIds, setValidatedOrderIds] = useState([]);
+  
+  const [showPreviewModal, setShowPreviewModal] = useState(false); 
   const [showFirmaModal, setShowFirmaModal] = useState(false);
-  const [showPreviewModal, setShowPreviewModal] = useState(false);
+  const [showTempPreviewsModal, setShowTempPreviewsModal] = useState(false); 
+  const [tempPreviews, setTempPreviews] = useState([]); 
+
   const [firmaDataUrl, setFirmaDataUrl] = useState(null);
   const [firmaForOrderIds, setFirmaForOrderIds] = useState([]);
-
   const [clienteEmail, setClienteEmail] = useState("");
   const [clienteNombre, setClienteNombre] = useState("");
   const [clienteCargo, setClienteCargo] = useState("");
   const [comentarioCliente, setComentarioCliente] = useState("");
-
   const [sending, setSending] = useState(false);
-  const [sendProgress, setSendProgress] = useState({
-    done: 0,
-    total: 0,
-    current: "",
-  });
+  const [previewing, setPreviewing] = useState(false);
+  const [sendProgress, setSendProgress] = useState({ done: 0, total: 0, current: "" });
   const [sendResults, setSendResults] = useState([]);
-
+  const [showSendSummaryModal, setShowSendSummaryModal] = useState(false);
+  const [lastSendSummary, setLastSendSummary] = useState([]);
+  const [showFailedPdfsModal, setShowFailedPdfsModal] = useState(false);
+  const [failedPdfs, setFailedPdfs] = useState([]);
+  const [showSentPdfsModal, setShowSentPdfsModal] = useState(false);
+  const [sentPdfs, setSentPdfs] = useState([]);
   const signatureRef = useRef(null);
   const queueProcessingRef = useRef(false);
-  const selectedIds = useMemo(
-    () => Object.keys(selectedMap).filter((k) => !!selectedMap[k]),
-    [selectedMap],
-  );
+
+  const selectedIds = useMemo(() => Object.keys(selectedMap).filter((k) => !!selectedMap[k]), [selectedMap]);
+  const selectedCount = selectedIds.length;
+  const selectedAllReady = selectedCount > 0 && validatedOrderIds.length === selectedCount && selectedIds.every((id) => validatedOrderIds.includes(String(id)));
+  const canSend = selectedCount > 0 && firmaDataUrl && isValidEmail(clienteEmail) && clienteNombre.trim() && clienteCargo.trim() && comentarioCliente.trim() && !sending;
 
   const { start, end } = useMemo(() => {
-    if (dateMode === "day") {
-      const s = atStartOfDay(dayRef);
-      return { start: s, end: s };
-    }
-
-    if (dateMode === "weekRange") {
-      return {
-        start: weekStart ? atStartOfDay(weekStart) : atStartOfDay(new Date()),
-        end: weekEnd ? atEndOfDay(weekEnd) : atEndOfDay(new Date()),
-      };
-    }
-
-    if (dateMode === "month") {
-      const ref = new Date(monthYear.year, monthYear.month, 1);
-      return { start: startOfMonth(ref), end: endOfMonth(ref) };
-    }
-
-    if (dateMode === "year") {
-      return { start: startOfYear(yearOnly), end: endOfYear(yearOnly) };
-    }
-
-    const e = atEndOfDay(new Date());
-    const s = new Date();
-    s.setDate(s.getDate() - 365);
-    return { start: atStartOfDay(s), end: e };
+    if (dateMode === "day") return { start: atStartOfDay(dayRef), end: atStartOfDay(dayRef) };
+    if (dateMode === "weekRange") return { start: weekStart ? atStartOfDay(weekStart) : atStartOfDay(new Date()), end: weekEnd ? atEndOfDay(weekEnd) : atEndOfDay(new Date()) };
+    if (dateMode === "month") { const ref = new Date(monthYear.year, monthYear.month, 1); return { start: startOfMonth(ref), end: endOfMonth(ref) }; }
+    if (dateMode === "year") return { start: startOfYear(yearOnly), end: endOfYear(yearOnly) };
+    const s = new Date(); s.setDate(s.getDate() - 365); return { start: atStartOfDay(s), end: atEndOfDay(new Date()) };
   }, [dateMode, dayRef, weekStart, weekEnd, monthYear, yearOnly]);
 
   const getSapRequestRange = useCallback(() => {
-    if (dateMode === "all") {
-      const e = atEndOfDay(new Date());
-      const s = new Date();
-      s.setDate(s.getDate() - 365);
-      const ss = atStartOfDay(s);
-      return {
-        startDate: ss,
-        endDate: e,
-        startStr: formatLocalYmd(ss),
-        endStr: formatLocalYmd(e),
-      };
-    }
-
-    if (dateMode === "day") {
-      const s = atStartOfDay(dayRef);
-      const e = atEndOfDay(dayRef);
-      return {
-        startDate: s,
-        endDate: e,
-        startStr: formatLocalYmd(s),
-        endStr: formatLocalYmd(e),
-      };
-    }
-
-    if (
-      dateMode === "weekRange" ||
-      dateMode === "month" ||
-      dateMode === "year"
-    ) {
-      const s = atStartOfDay(start);
-      const e = atEndOfDay(end);
-      return {
-        startDate: s,
-        endDate: e,
-        startStr: formatLocalYmd(s),
-        endStr: formatLocalYmd(e),
-      };
-    }
-
-    const e = atEndOfDay(new Date());
-    const s = new Date();
-    s.setDate(s.getDate() - 365);
-    const ss = atStartOfDay(s);
-    return {
-      startDate: ss,
-      endDate: e,
-      startStr: formatLocalYmd(ss),
-      endStr: formatLocalYmd(e),
-    };
+    if (dateMode === "all") { const e = atEndOfDay(new Date()); const s = new Date(); s.setDate(s.getDate() - 365); const ss = atStartOfDay(s); return { startDate: ss, endDate: e, startStr: formatLocalYmd(ss), endStr: formatLocalYmd(e) }; }
+    if (dateMode === "day") { const s = atStartOfDay(dayRef); const e = atEndOfDay(dayRef); return { startDate: s, endDate: e, startStr: formatLocalYmd(s), endStr: formatLocalYmd(e) }; }
+    if (["weekRange", "month", "year"].includes(dateMode)) { const s = atStartOfDay(start); const e = atEndOfDay(end); return { startDate: s, endDate: e, startStr: formatLocalYmd(s), endStr: formatLocalYmd(e) }; }
+    const e = atEndOfDay(new Date()); const s = new Date(); s.setDate(s.getDate() - 365); const ss = atStartOfDay(s); return { startDate: ss, endDate: e, startStr: formatLocalYmd(ss), endStr: formatLocalYmd(e) };
   }, [dateMode, dayRef, start, end]);
 
-  const fetchOrdenes0400 = useCallback(
-    async ({ isRefresh = false } = {}) => {
-      try {
-        if (isRefresh) setRefreshing(true);
-        else setLoading(true);
-
-        if (!userEmail) {
-          Alert.alert(
-            "Sin usuario",
-            "No se detectó el correo/usuario del técnico.",
-          );
-          setAllOrdenes([]);
-          return;
-        }
-
-        if (!isRefresh) {
-          const offlineRows = await loadPending0400FromOffline(userEmail);
-          if (offlineRows.length) {
-            setAllOrdenes(offlineRows);
-            setLoading(false);
-          }
-        }
-
-        const net = await NetInfo.fetch();
-        const online = !!(
-          net?.isConnected && net?.isInternetReachable !== false
-        );
-        setIsOnline(online);
-
-        if (!online) {
-          const offlineRows = await loadPending0400FromOffline(userEmail);
-          if (!offlineRows.length) {
-            Alert.alert(
-              "Sin conexión",
-              "No hay internet y no se encontró una lista offline de órdenes pendientes de firma.",
-            );
-          } else {
-            setAllOrdenes(offlineRows);
-          }
-          return;
-        }
-
-        const ok = await ensureValidToken();
-        if (!ok) return;
-
-        const req = getSapRequestRange();
-
-        console.log("[PENDIENTE FIRMA] Request SAP range:", {
-          dateMode,
-          start: req.startStr,
-          end: req.endStr,
-          user: userEmail,
-        });
-
-        const params = new URLSearchParams({
-          start: req.startStr,
-          end: req.endStr,
-          mode: "range",
-          user: userEmail,
-        });
-
-        const res = await api.get(`/api/ordenes/sap/list?${params.toString()}`);
-        const data = Array.isArray(res.data) ? res.data : [];
-
-        const offlineWin = buildOfflineWindow(new Date());
-        const offlineOnly = filterOrdenesByWindow(
-          data,
-          offlineWin.start,
-          offlineWin.end,
-        );
-        await saveOrdenesTecnicoList(userEmail, offlineOnly, offlineWin);
-
-        const only0400 = data.filter((it) => isPending0400(it));
-        setAllOrdenes(only0400);
-
-        setSelectedMap((prev) => {
-          const valid = new Set(only0400.map((x) => String(x?.Orderid)));
-          const next = {};
-          for (const k of Object.keys(prev)) {
-            if (valid.has(k) && prev[k]) next[k] = true;
-          }
-          return next;
-        });
-      } catch (e) {
-        console.error(
-          "fetchOrdenes0400 ERROR:",
-          e?.response?.data || e?.message || e,
-        );
-
+  const fetchOrdenes0400 = useCallback(async ({ isRefresh = false } = {}) => {
+    try {
+      if (isRefresh) setRefreshing(true); else setLoading(true);
+      if (!userEmail) { Alert.alert("Sin usuario", "No se detectó el correo/usuario del técnico."); setAllOrdenes([]); return; }
+      if (!isRefresh) { const offlineRows = await loadPending0400FromOffline(userEmail); if (offlineRows.length) { setAllOrdenes(offlineRows); setLoading(false); } }
+      const net = await NetInfo.fetch();
+      const online = !!(net?.isConnected && net?.isInternetReachable !== false);
+      setIsOnline(online);
+      if (!online) {
         const offlineRows = await loadPending0400FromOffline(userEmail);
-        if (offlineRows.length) {
-          setAllOrdenes(offlineRows);
-          Alert.alert(
-            "Modo offline",
-            "No se pudo actualizar desde SAP, se muestran las órdenes guardadas localmente.",
-          );
-        } else {
-          const serverMsg =
-            e?.response?.data?.detail ||
-            e?.response?.data?.error ||
-            "No se pudieron cargar las órdenes pendientes de firma.";
-          Alert.alert("Error", serverMsg);
-          setAllOrdenes([]);
-        }
-      } finally {
-        setLoading(false);
-        setRefreshing(false);
-      }
-    },
-    [
-      ensureValidToken,
-      userEmail,
-      dateMode,
-      dayRef,
-      start,
-      end,
-      getSapRequestRange,
-    ],
-  );
-  const processPendingQueue = useCallback(
-    async (source = "unknown") => {
-      if (queueProcessingRef.current) {
-        console.log(
-          "[PENDIENTE FIRMA] Cola ya se está procesando, se omite:",
-          source,
-        );
+        if (!offlineRows.length) Alert.alert("Sin conexión", "No hay internet y no se encontró una lista offline.");
+        else setAllOrdenes(offlineRows);
         return;
       }
+      if (!(await ensureValidToken())) return;
+      const req = getSapRequestRange();
+      const params = new URLSearchParams({ start: req.startStr, end: req.endStr, mode: "range", user: userEmail });
+      const res = await api.get(`/api/ordenes/sap/list?${params.toString()}`);
+      const data = Array.isArray(res.data) ? res.data : [];
+      const only0400 = data.filter((it) => isPending0400(it));
 
-      try {
-        queueProcessingRef.current = true;
-
-        console.log("[PENDIENTE FIRMA] Intentando procesar cola SAP:", {
-          source,
-          userEmail,
-        });
-
-        const net = await NetInfo.fetch();
-        const online = !!(
-          net?.isConnected && net?.isInternetReachable !== false
-        );
-
-        setIsOnline(online);
-
-        if (!online) {
-          console.log("[PENDIENTE FIRMA] Sin internet, no se procesa cola");
-          return;
-        }
-
-        const ok = await ensureValidToken();
-
-        if (!ok) {
-          console.log("[PENDIENTE FIRMA] Token no válido, no se procesa cola");
-          return;
-        }
-
-        console.log(
-          "[PENDIENTE FIRMA] Internet disponible. Procesando cola...",
-        );
-
-        const queueResult = await processSapQueue({
-          ensureValidToken,
-          apiInstance: api,
-        });
-
-        console.log(
-          "[PENDIENTE FIRMA] Resultado processSapQueue:",
-          queueResult,
-        );
-
-        console.log("[PENDIENTE FIRMA] Cola SAP procesada OK");
-
-        await fetchOrdenes0400({ isRefresh: true });
-      } catch (e) {
-        console.warn(
-          "[PENDIENTE FIRMA] Error procesando cola SAP:",
-          e?.response?.data || e?.message || e,
-        );
-      } finally {
-        queueProcessingRef.current = false;
-      }
-    },
-    [ensureValidToken, token, userEmail, fetchOrdenes0400],
-  );
-  useEffect(() => {
-    const unsubscribe = NetInfo.addEventListener((state) => {
-      const online = !!(
-        state?.isConnected && state?.isInternetReachable !== false
-      );
-
-      setIsOnline(online);
-
-      console.log("[PENDIENTE FIRMA] Cambio de red:", {
-        online,
-        isConnected: state?.isConnected,
-        isInternetReachable: state?.isInternetReachable,
+      const only0400WithCliente = await enrichOrdersWithToAddressesCliente({
+        orders: only0400,
+        apiClient: api,
+        token,
       });
 
-      if (online) {
-        processPendingQueue("netinfo-online");
-      }
-    });
+      const offlineWin = buildOfflineWindow(new Date());
 
-    NetInfo.fetch().then((state) => {
-      const online = !!(
-        state?.isConnected && state?.isInternetReachable !== false
+      await saveOrdenesTecnicoList(
+        userEmail,
+        filterOrdenesByWindow(
+          only0400WithCliente,
+          offlineWin.start,
+          offlineWin.end
+        ),
+        offlineWin
       );
 
+      setAllOrdenes(only0400WithCliente);
+      setSelectedMap((prev) => {
+        const valid = new Set(only0400WithCliente.map((x) => getOrderId(x)));
+        const next = {};
+        for (const k of Object.keys(prev)) { if (valid.has(k) && prev[k]) next[k] = true; }
+        return next;
+      });
+    } catch (e) {
+      const offlineRows = await loadPending0400FromOffline(userEmail);
+      if (offlineRows.length) { setAllOrdenes(offlineRows); Alert.alert("Modo offline", "Mostrando órdenes guardadas localmente."); }
+      else { Alert.alert("Error", e?.response?.data?.detail || e?.response?.data?.error || "Error cargando órdenes."); setAllOrdenes([]); }
+    } finally { setLoading(false); setRefreshing(false); }
+  }, [ensureValidToken, userEmail, getSapRequestRange]);
+
+  const processPendingQueue = useCallback(async () => {
+    if (queueProcessingRef.current) return;
+    try {
+      queueProcessingRef.current = true;
+      const net = await NetInfo.fetch();
+      const online = !!(net?.isConnected && net?.isInternetReachable !== false);
       setIsOnline(online);
+      if (!online || !(await ensureValidToken())) return;
+      await processSapQueue({ ensureValidToken, apiInstance: api });
+      await fetchOrdenes0400({ isRefresh: true });
+    } catch (e) { console.warn("Error procesando cola SAP:", e); }
+    finally { queueProcessingRef.current = false; }
+  }, [ensureValidToken, fetchOrdenes0400]);
 
-      if (online) {
-        processPendingQueue("initial-check");
-      }
+  const loadFailedPdfs = useCallback(async () => {
+    const items = await cleanupOldPdfItems(PENDING_PDFS_INDEX_KEY);
+    const validItems = [];
+    for (const item of items) {
+      try { const info = await FileSystem.getInfoAsync(item.uri); if (info.exists && isTodayIso(item.createdAt)) validItems.push(item); } catch {}
+    }
+    if (validItems.length !== items.length) await writeFailedPdfsIndex(validItems);
+    setFailedPdfs(validItems);
+  }, []);
+
+  const loadSentPdfs = useCallback(async () => {
+    const items = await cleanupOldPdfItems(SENT_PDFS_INDEX_KEY);
+    const validItems = [];
+    for (const item of items) {
+      try { const info = await FileSystem.getInfoAsync(item.uri); if (info.exists && isTodayIso(item.createdAt)) validItems.push(item); } catch {}
+    }
+    if (validItems.length !== items.length) await writeSentPdfsIndex(validItems);
+    setSentPdfs(validItems);
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = NetInfo.addEventListener((state) => {
+      const online = !!(state?.isConnected && state?.isInternetReachable !== false);
+      setIsOnline(online);
+      if (online) processPendingQueue();
     });
-
+    NetInfo.fetch().then((state) => {
+      const online = !!(state?.isConnected && state?.isInternetReachable !== false);
+      setIsOnline(online);
+      if (online) processPendingQueue();
+    });
     return () => unsubscribe();
   }, [processPendingQueue]);
 
-  useEffect(() => {
-    fetchOrdenes0400();
-  }, [fetchOrdenes0400]);
-
-  useFocusEffect(
-    useCallback(() => {
-      fetchOrdenes0400({ isRefresh: true });
-    }, [fetchOrdenes0400]),
-  );
+  useEffect(() => { fetchOrdenes0400(); }, [fetchOrdenes0400]);
+  useEffect(() => { loadFailedPdfs(); loadSentPdfs(); }, [loadFailedPdfs, loadSentPdfs]);
+  useFocusEffect(useCallback(() => { fetchOrdenes0400({ isRefresh: true }); loadFailedPdfs(); loadSentPdfs(); }, [fetchOrdenes0400, loadFailedPdfs, loadSentPdfs]));
 
   useEffect(() => {
-    const filtered = (allOrdenes || []).filter((item) => {
-      const okQuery = matchesQuery(item, query);
-      if (!okQuery) return false;
-
+    setRows((allOrdenes || []).filter((item) => {
+      if (!matchesQuery(item, query)) return false;
       const sd = parseSapDate(item?.start_date);
-      if (!sd) return false;
-
-      return isWithin(sd, start, end);
-    });
-
-    setRows(filtered);
+      return sd ? isWithin(sd, start, end) : false;
+    }));
   }, [allOrdenes, query, start, end]);
 
-  const openDetalle = (orderId) => {
-    const id = String(orderId);
-    router.push(`/tecnico/ordenes/${id}`);
+  useEffect(() => {
+    setValidatedOrderIds((prev) => prev.filter((id) => selectedIds.includes(String(id))));
+    setValidationResults((prev) => prev.filter((r) => selectedIds.includes(String(r.orderId))));
+  }, [selectedIds.join("|")]);
+
+  const groupedRows = useMemo(() => {
+    return buildGroupedRows(rows);
+  }, [rows]);
+
+  const activeRangeText = useMemo(() => {
+    if (dateMode === "all") return "Últimos 365 días";
+    if (dateMode === "day") return `Día: ${atStartOfDay(dayRef).toLocaleDateString()}`;
+    if (dateMode === "weekRange") return `Semana: ${weekStart ? atStartOfDay(weekStart).toLocaleDateString() : "—"} → ${weekEnd ? atEndOfDay(weekEnd).toLocaleDateString() : "—"}`;
+    if (dateMode === "month") return `Mes: ${MONTHS[monthYear.month]} ${monthYear.year}`;
+    if (dateMode === "year") return `Año: ${yearOnly}`;
+    return "";
+  }, [dateMode, dayRef, weekStart, weekEnd, monthYear, yearOnly]);
+
+  const openDetalle = (orderId) => { const id = String(orderId || "").trim(); if (id) router.push(`/tecnico/ordenes/${id}`); };
+  const toggleSelect = (orderId) => { const id = String(orderId || "").trim(); if (id) setSelectedMap((prev) => ({ ...prev, [id]: !prev[id] })); };
+  const clearSelection = () => { setSelectedMap({}); setValidatedOrderIds([]); setValidationResults([]); };
+  const resetFirmaFields = () => { setFirmaDataUrl(null); setFirmaForOrderIds([]); setClienteEmail(""); setClienteNombre(""); setClienteCargo(""); setComentarioCliente(""); };
+  const clearFilters = () => { setQuery(""); setDateMode("all"); setDayRef(new Date()); setWeekStart(null); setWeekEnd(null); setMonthYear({ month: now.getMonth(), year: now.getFullYear() }); setYearOnly(now.getFullYear()); };
+
+  const validateSelectedOrdersBeforeSign = async () => {
+    if (!selectedIds.length) { Alert.alert("Selecciona órdenes", "Selecciona al menos una orden para validar."); return; }
+    try {
+      setValidatingOrders(true); setValidationResults([]); setValidatedOrderIds([]);
+      const results = [];
+      for (const orderIdRaw of selectedIds) {
+        const orderId = String(orderIdRaw || "").trim();
+        try {
+          const pending = await getPendingSignForOrder({ apiClient: api, token, orderId });
+          const checkedCount = checkedCountFromMap(pending?.checkedMap);
+          if (!checkedCount) throw new Error("No tiene operaciones marcadas.");
+          if (!pending?.orderStartedAtMs || !pending?.orderFinishedAtMs) throw new Error("Falta hora de inicio/fin guardada.");
+          const elapsedMs = pending?.orderElapsedMs ?? Math.max(0, pending.orderFinishedAtMs - pending.orderStartedAtMs);
+          if (!elapsedMs || elapsedMs <= 0) throw new Error("Tiempo total inválido.");
+          const ordenFull = await fetchOrdenFullForPdf({ apiClient: api, token, orderId });
+          if (!(Array.isArray(ordenFull?.operaciones) ? ordenFull.operaciones : []).length) throw new Error("Sin operaciones de SAP.");
+          results.push({ orderId, ok: true, msg: "Orden lista para firma.", tipo: detectTipoMantenimiento(ordenFull), cobertura: String(ordenFull?.cobertura_tipo || ordenFull?.coberturaTipo || detectCoberturaFromShortText(ordenFull?.ShortText || "") || "SIN COBERTURA").trim(), operaciones: checkedCount, consumibles: Array.isArray(pending?.consumibles) ? pending.consumibles.length : 0 });
+        } catch (err) {
+          results.push({ orderId, ok: false, msg: getSapErrorDetail(err, "No se pudo validar.") });
+        }
+      }
+      setValidationResults(results);
+      setValidatedOrderIds(results.filter((r) => r.ok).map((r) => String(r.orderId)));
+      setShowValidationModal(true);
+    } catch (err) { Alert.alert("Error validando", err?.message || "Error general al validar."); } finally { setValidatingOrders(false); }
   };
 
-  const toggleSelect = (orderId) => {
-    const id = String(orderId);
-    setSelectedMap((prev) => ({ ...prev, [id]: !prev[id] }));
+  const continueToSignatureAfterValidation = () => {
+    if (validationResults.filter((r) => !r.ok).length > 0) { Alert.alert("Revisar errores", "Desmarca órdenes con error."); return; }
+    const okIds = validationResults.filter((r) => r.ok).map((r) => String(r.orderId));
+    if (!okIds.length) { Alert.alert("Sin órdenes", "No hay órdenes válidas."); return; }
+    resetFirmaFields(); setFirmaForOrderIds(okIds); 
+    
+    // Se usa un retraso ligero para que el modal se cierre antes de abrir el otro
+    setShowValidationModal(false); 
+    setTimeout(() => {
+        setShowPreviewModal(true);
+    }, 150);
   };
 
-  const clearSelection = () => setSelectedMap({});
-
-  const selectAllVisible = () => {
-    const next = {};
-    for (const it of rows) {
-      const id = String(it?.Orderid);
-      if (id) next[id] = true;
-    }
-    setSelectedMap(next);
+  const onSignatureOK = (sig) => { 
+      setFirmaDataUrl(sig); 
+      setShowFirmaModal(false); 
+      Alert.alert("Firma capturada", `Lista para ${firmaForOrderIds.length} orden(es).`); 
   };
+  
+  const onSignatureEmpty = () => { Alert.alert("Firma vacía", "El cliente no firmó."); };
 
-  const resetFirmaFields = () => {
-    setFirmaDataUrl(null);
-    setFirmaForOrderIds([]);
-    setClienteEmail("");
-    setClienteNombre("");
-    setClienteCargo("");
-    setComentarioCliente("");
-  };
-
-  const clearFilters = () => {
-    setQuery("");
-    setDateMode("all");
-    setDayRef(new Date());
-    setWeekStart(null);
-    setWeekEnd(null);
-    setMonthYear({ month: now.getMonth(), year: now.getFullYear() });
-    setYearOnly(now.getFullYear());
-  };
-
-  const startFirmaFlow = () => {
-    if (selectedIds.length === 0) {
-      Alert.alert(
-        "Selecciona órdenes",
-        "Selecciona al menos una orden para firmar.",
-      );
-      return;
-    }
-
-    setFirmaDataUrl(null);
-    setFirmaForOrderIds(selectedIds);
-    setClienteEmail("");
-    setClienteNombre("");
-    setClienteCargo("");
-    setComentarioCliente("");
-
-    // Primero mostrar las órdenes seleccionadas
-    setShowPreviewModal(true);
-  };
-  const confirmarOrdenesYFirmar = () => {
-    setShowPreviewModal(false);
-    setShowFirmaModal(true);
-  };
-  const onSignatureOK = (sig) => {
-    setFirmaDataUrl(sig);
-    setShowFirmaModal(false);
-
-    Alert.alert(
-      "Firma capturada ✅",
-      `Firma lista para ${firmaForOrderIds.length} orden(es).\n\nAhora puedes presionar "Enviar órdenes".`,
-    );
-  };
-
-  const onSignatureEmpty = () => {
-    Alert.alert("Firma vacía", "El cliente no firmó. Intenta de nuevo.");
-  };
-
-  const sendSelectedOrders = async () => {
-    if (!firmaDataUrl) {
-      Alert.alert("Falta firma", "Primero captura la firma del cliente.");
-      return;
-    }
-
+  const previewSelectedPdfs = async () => {
     const email = String(clienteEmail || "").trim();
     const nombre = String(clienteNombre || "").trim();
     const cargo = String(clienteCargo || "").trim();
     const comentario = String(comentarioCliente || "").trim();
 
-    if (!email) {
-      Alert.alert("Falta correo", "Primero captura el correo del cliente.");
+    if (!selectedIds.length) return;
+    if (!selectedAllReady) { Alert.alert("Valida primero", "Primero valida las órdenes."); return; }
+    if (!email || !isValidEmail(email) || !nombre || !cargo || !comentario || !firmaDataUrl) {
+      Alert.alert("Faltan datos", "Llena correo, nombre, cargo, comentario y captura la firma para generar la vista previa.");
       return;
     }
 
-    if (!isValidEmail(email)) {
-      Alert.alert(
-        "Correo inválido",
-        "Escribe un correo válido (ej: nombre@dominio.com).",
-      );
-      return;
-    }
+    try {
+      setPreviewing(true);
+      const generatedPreviews = []; 
 
-    if (!nombre) {
-      Alert.alert("Falta nombre", "Escribe el nombre del cliente.");
-      return;
-    }
+      for (const orderIdRaw of selectedIds) {
+        const orderId = String(orderIdRaw || "").trim();
+        const pending = await getPendingSignForOrder({ apiClient: api, token, orderId });
+        const ordenFull = await fetchOrdenFullForPdf({ apiClient: api, token, orderId });
+        const tipo = detectTipoMantenimiento(ordenFull);
+        const tecnicoNombreFinal = String(user?.nombre || user?.name || user?.fullName || user?.displayName || user?.username || "").trim();
 
-    if (!cargo) {
-      Alert.alert("Falta cargo", "Escribe el cargo del cliente.");
-      return;
-    }
+        const html = await buildMantenimientoHtml({
+          tipo, orden: ordenFull,
+          operaciones: Array.isArray(ordenFull?.operaciones) ? ordenFull.operaciones : [],
+          checkedMap: pending.checkedMap, signatureData: firmaDataUrl,
+          clienteEmail: email, clienteNombre: nombre, clienteCargo: cargo, avisoCliente: comentario,
+          notaTecnico: String(pending?.notaTecnico || "").trim(), tecnicoNombre: tecnicoNombreFinal,
+          coberturaTipo: String(ordenFull?.cobertura_tipo || ordenFull?.coberturaTipo || detectCoberturaFromShortText(ordenFull?.ShortText || "") || "SIN COBERTURA").trim(),
+          consumibles: Array.isArray(pending?.consumibles) ? pending.consumibles : [],
+          startMs: pending?.orderStartedAtMs, finishMs: pending?.orderFinishedAtMs,
+          elapsedMs: pending?.orderElapsedMs ?? Math.max(0, pending?.orderFinishedAtMs - pending?.orderStartedAtMs),
+        });
 
-    if (!comentario) {
-      Alert.alert("Falta comentario", "Escribe el comentario del cliente.");
-      return;
-    }
+        const pdfResult = await generateMaintenancePdfFile({ html });
 
-    if (!selectedIds.length) {
-      Alert.alert("Sin selección", "Selecciona al menos una orden.");
-      return;
+        generatedPreviews.push({
+          id: `preview_${orderId}_${Date.now()}`,
+          orderId,
+          fileName: `VISTA_PREVIA_${buildShortPdfFileName({ tipo, orderId })}`,
+          uri: pdfResult.uri,
+          clienteNombre: nombre,
+        });
+      }
+
+      setTempPreviews(generatedPreviews);
+      setShowTempPreviewsModal(true); 
+    } catch (err) {
+      Alert.alert("Error de Vista Previa", getSapErrorDetail(err, "No se pudo generar la vista previa."));
+    } finally {
+      setPreviewing(false);
     }
+  };
+
+  const sendSelectedOrders = async () => {
+    const email = String(clienteEmail || "").trim();
+    const nombre = String(clienteNombre || "").trim();
+    const cargo = String(clienteCargo || "").trim();
+    const comentario = String(comentarioCliente || "").trim();
+
+    if (!selectedIds.length) return;
+    if (!selectedAllReady) { Alert.alert("Valida primero", "Valida antes de enviar."); return; }
+    if (!email || !isValidEmail(email)) { setShowPreviewModal(true); Alert.alert("Error", "Correo inválido."); return; }
+    if (!nombre) { setShowPreviewModal(true); Alert.alert("Error", "Falta nombre."); return; }
+    if (!cargo) { setShowPreviewModal(true); Alert.alert("Error", "Falta cargo."); return; }
+    if (!comentario) { setShowPreviewModal(true); Alert.alert("Error", "Falta comentario."); return; }
+    if (!firmaDataUrl) { setShowFirmaModal(true); Alert.alert("Error", "Falta firma."); return; }
 
     const net = await NetInfo.fetch();
     const online = !!(net?.isConnected && net?.isInternetReachable !== false);
-
-    if (online) {
-      const ok = await ensureValidToken();
-      if (!ok) return;
-    }
+    if (online && !(await ensureValidToken())) return;
 
     Alert.alert(
       "Confirmar envío",
-      online
-        ? `Se enviará un paquete con ${selectedIds.length} orden(es) a SAP:\n- PDFs de mantenimiento\n- Cambio de estatus a FINALIZADA\n\n¿Deseas continuar?`
-        : `No hay internet.\n\nSe guardará un paquete con ${selectedIds.length} orden(es) localmente con:\n- PDFs de mantenimiento\n- Cambio de estatus a FINALIZADA\n\nY se enviará automáticamente cuando vuelva la red.\n\n¿Deseas continuar?`,
+      online ? `Se enviará a SAP (${selectedIds.length} orden/es).\n\n¿Continuar?` : `No hay internet. Se guardará localmente (${selectedIds.length} orden/es) y se enviará luego.`,
       [
         { text: "Cancelar", style: "cancel" },
         {
-          text: "Sí, continuar",
-          style: "default",
+          text: "Sí, enviar", style: "default",
           onPress: async () => {
-            setSending(true);
-            setSendResults([]);
-            setSendProgress({
-              done: 0,
-              total: selectedIds.length,
-              current: "",
-            });
-
-            const results = [];
-            const toWorkOrders = [];
-
+            setSending(true); setSendResults([]);
+            setSendProgress({ done: 0, total: selectedIds.length, current: "Iniciando..." });
+            const results = []; const toWorkOrders = []; const tempPdfsByOrder = {};
+            
             try {
               for (let i = 0; i < selectedIds.length; i++) {
-                const orderId = String(selectedIds[i]).trim();
-
-                setSendProgress({
-                  done: i,
-                  total: selectedIds.length,
-                  current: orderId,
-                });
-
+                const orderId = String(selectedIds[i] || "").trim();
+                setSendProgress((p) => ({ ...p, current: `PDF #${orderId}` }));
+                await new Promise((r) => setTimeout(r, 10));
+                
                 try {
-                  console.log("==============================================");
-                  console.log(
-                    "[BULK][ORDEN] Iniciando preparación de orden:",
-                    orderId,
-                  );
-                  console.log(
-                    "[BULK][ORDEN] Posición:",
-                    `${i + 1}/${selectedIds.length}`,
-                  );
-
-                  const pending = await loadPendingSign(orderId);
-                  const checkedMap = pending?.checkedMap || null;
-
-                  console.log("[BULK][PENDING SIGN]", {
-                    orderId,
-                    existePending: !!pending,
-                    checkedMapKeys: checkedMap
-                      ? Object.keys(checkedMap).length
-                      : 0,
-                    consumibles: Array.isArray(pending?.consumibles)
-                      ? pending.consumibles.length
-                      : 0,
-                    notaTecnico: String(pending?.notaTecnico || "").trim(),
-                    orderStartedAtMs: pending?.orderStartedAtMs,
-                    orderFinishedAtMs: pending?.orderFinishedAtMs,
-                    orderElapsedMs: pending?.orderElapsedMs,
-                  });
-
-                  if (!checkedMap || !Object.keys(checkedMap).length) {
-                    throw new Error(
-                      "No hay operaciones guardadas (pendingSign) para esta orden. Entra al detalle y marca/guarda primero.",
-                    );
-                  }
-
-                  const ordenFull = await fetchOrdenFullForPdf({
-                    apiClient: api,
-                    token,
-                    orderId,
-                  });
-
+                  const pending = await getPendingSignForOrder({ apiClient: api, token, orderId });
+                  const ordenFull = await fetchOrdenFullForPdf({ apiClient: api, token, orderId });
                   const tipo = detectTipoMantenimiento(ordenFull);
-
-                  const consumibles = Array.isArray(pending?.consumibles)
-                    ? pending.consumibles
-                    : [];
-
-                  const notaTecnico = String(pending?.notaTecnico || "").trim();
-
-                  const startedMs = Number.isFinite(pending?.orderStartedAtMs)
-                    ? pending.orderStartedAtMs
-                    : null;
-
-                  const finishedMs = Number.isFinite(pending?.orderFinishedAtMs)
-                    ? pending.orderFinishedAtMs
-                    : null;
-
-                  const elapsedMs = Number.isFinite(pending?.orderElapsedMs)
-                    ? pending.orderElapsedMs
-                    : Number.isFinite(startedMs) && Number.isFinite(finishedMs)
-                      ? Math.max(0, finishedMs - startedMs)
-                      : null;
-
-                  const tecnicoNombreFinal = String(
-                    user?.nombre ||
-                      user?.name ||
-                      user?.fullName ||
-                      user?.displayName ||
-                      user?.username ||
-                      "",
-                  ).trim();
-
-                  const coberturaTipoFinal = String(
-                    ordenFull?.cobertura_tipo || ordenFull?.coberturaTipo || "",
-                  ).trim();
+                  const tecnicoNombreFinal = String(user?.nombre || user?.name || user?.fullName || user?.displayName || user?.username || "").trim();
 
                   const html = await buildMantenimientoHtml({
-                    tipo,
-                    orden: ordenFull,
-                    operaciones: Array.isArray(ordenFull?.operaciones)
-                      ? ordenFull.operaciones
-                      : [],
-                    checkedMap,
-                    signatureData: firmaDataUrl,
-
-                    clienteEmail: email,
-                    clienteNombre: nombre,
-                    clienteCargo: cargo,
-
-                    avisoCliente: comentario,
-                    notaTecnico,
-
-                    tecnicoNombre: tecnicoNombreFinal,
-
-                    coberturaTipo: coberturaTipoFinal,
-                    consumibles,
-
-                    startMs: startedMs,
-                    finishMs: finishedMs,
-                    elapsedMs,
+                    tipo, orden: ordenFull, operaciones: Array.isArray(ordenFull?.operaciones) ? ordenFull.operaciones : [],
+                    checkedMap: pending.checkedMap, signatureData: firmaDataUrl,
+                    clienteEmail: email, clienteNombre: nombre, clienteCargo: cargo, avisoCliente: comentario,
+                    notaTecnico: String(pending?.notaTecnico || "").trim(), tecnicoNombre: tecnicoNombreFinal,
+                    coberturaTipo: String(ordenFull?.cobertura_tipo || ordenFull?.coberturaTipo || "SIN COBERTURA").trim(),
+                    consumibles: Array.isArray(pending?.consumibles) ? pending.consumibles : [],
+                    startMs: pending?.orderStartedAtMs, finishMs: pending?.orderFinishedAtMs,
+                    elapsedMs: pending?.orderElapsedMs ?? Math.max(0, pending?.orderFinishedAtMs - pending?.orderStartedAtMs),
                   });
 
-                  const { uri } = await Print.printToFileAsync({ html });
+                  const pdfResult = await generateMaintenancePdfFile({ html });
+                  const fileName = buildShortPdfFileName({ tipo, orderId });
 
-                  const pdfBase64 = await FileSystem.readAsStringAsync(uri, {
-                    encoding: FileSystem.EncodingType.Base64,
+                  tempPdfsByOrder[orderId] = { orderId, tempUri: pdfResult.uri, fileName, clienteEmail: email, clienteNombre: nombre, clienteCargo: cargo, comentarioCliente: comentario };
+                  if (!pdfResult.base64) throw new Error("El PDF se generó vacío.");
+
+                  toWorkOrders.push({
+                    OrderId: orderId, WorkOrderHeader: { Orderid: orderId, MaterialLong: email },
+                    WorkOrderUserStatusSet: [{ UserStText: "0300", Langu: "ES", Inactive: "" }, { UserStText: "0400", Langu: "ES", Inactive: "X" }],
+                    Attachments: [{ DocId: orderId, FileName: fileName, MimeType: "application/pdf", Base64: pdfResult.base64 }],
                   });
-
-                  const fileName =
-                    tipo === "escalera"
-                      ? `mantenimiento_escaleras_${i + 1}.pdf`
-                      : `mantenimiento_elevadores_${i + 1}.pdf`;
-
-                  const workOrderItem = {
-                    OrderId: orderId,
-                    WorkOrderHeader: {
-                      Orderid: orderId,
-                      MaterialLong: email,
-                    },
-                    WorkOrderUserStatusSet: [
-                      {
-                        UserStText: "0300",
-                        Langu: "ES",
-                        Inactive: "",
-                      },
-                      {
-                        UserStText: "0400",
-                        Langu: "ES",
-                        Inactive: "X",
-                      },
-                    ],
-                    Attachments: [
-                      {
-                        DocId: orderId,
-                        FileName: fileName,
-                        MimeType: "pdf",
-                        Base64: pdfBase64,
-                      },
-                    ],
-                  };
-
-                  console.log("[BULK][ORDEN ARMADA]", {
-                    orderId,
-                    correoCliente: email,
-                    nombreCliente: nombre,
-                    cargoCliente: cargo,
-                    comentarioCliente: comentario,
-                    tipo,
-                    fileName,
-                    pdfBase64Length: String(pdfBase64 || "").length,
-                    operacionesTotal: Array.isArray(ordenFull?.operaciones)
-                      ? ordenFull.operaciones.length
-                      : 0,
-                    operacionesSeleccionadas: checkedMap
-                      ? Object.keys(checkedMap).length
-                      : 0,
-                    consumiblesTotal: consumibles.length,
-                    estatus: workOrderItem.WorkOrderUserStatusSet,
-                  });
-
-                  logSapPayload(
-                    "[BULK][JSON ORDEN INDIVIDUAL]",
-                    workOrderItem,
-                    {
-                      stripBase64: true,
-                    },
-                  );
-
-                  toWorkOrders.push(workOrderItem);
+                  setSendProgress((p) => ({ ...p, done: p.done + 1, current: `PDF listo #${orderId}` }));
                 } catch (err) {
-                  console.log("[BULK][ERROR DETALLE]", {
-                    orderId,
-                    message: err?.message,
-                    responseStatus: err?.response?.status,
-                    responseData: err?.response?.data,
-                  });
-
-                  const msg =
-                    err?.response?.data?.detail ||
-                    err?.response?.data?.error ||
-                    err?.message ||
-                    "Error desconocido";
-
-                  console.warn(
-                    `[BUILD BULK ${orderId}]`,
-                    err?.response?.data || err,
-                  );
-
-                  results.push({
-                    orderId,
-                    ok: false,
-                    msg,
-                  });
+                  results.push({ orderId, ok: false, msg: getSapErrorDetail(err, "Fallo armando orden."), fileName: "", uri: "" });
+                  setSendProgress((p) => ({ ...p, done: p.done + 1 }));
                 }
-
-                setSendResults([...results]);
-                setSendProgress({
-                  done: i + 1,
-                  total: selectedIds.length,
-                  current: orderId,
-                });
               }
 
               if (!toWorkOrders.length) {
-                Alert.alert(
-                  "Sin órdenes para enviar",
-                  "No se pudo preparar ninguna orden para el envío.",
-                );
+                setSendResults(results);
+                setLastSendSummary(results);
+                setShowSendSummaryModal(true);
                 return;
               }
 
+              const firstOrderId = String(
+                toWorkOrders?.[0]?.OrderId || selectedIds?.[0] || "SIN_ORDEN"
+              ).trim();
+
               const bulkPayload = {
-                BulkId: `PAQUETE_${Date.now()}`,
+                BulkId: buildBulkId({ firstOrderId }),
                 WorkOrderSet: toWorkOrders,
               };
 
               const workOrderBulkEndpoint =
                 "/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderBulkSet";
 
-              console.log("==============================================");
-              console.log("[BULK][RESUMEN ANTES DE ENVIAR]", {
-                endpoint: workOrderBulkEndpoint,
-                bulkId: bulkPayload.BulkId,
-                totalOrdenes: bulkPayload.WorkOrderSet.length,
-                ordenes: bulkPayload.WorkOrderSet.map((x) => ({
-                  OrderId: x.OrderId,
-                  correo: x?.WorkOrderHeader?.MaterialLong,
-                  fileName: x?.Attachments?.[0]?.FileName,
-                  pdfBase64Length: String(x?.Attachments?.[0]?.Base64 || "")
-                    .length,
-                  status: x?.WorkOrderUserStatusSet,
-                })),
-              });
-
-              logSapPayload(
-                "=== SAP PAYLOAD BULK COMPLETO A ENVIAR ===",
-                bulkPayload,
-                {
-                  stripBase64: true,
-                },
-              );
+              console.log("[PENDIENTE_FIRMA][BULK_ID]", {
+                BulkId: bulkPayload.BulkId,
+                firstOrderId,
+                deviceModel: getDeviceModelForBulkId(),
+                totalOrders: toWorkOrders.length,
+});
 
               if (!online) {
-                await upsertSapQueueItem({
-                  type: "PENDIENTE_FIRMA_BULK_0300",
-                  orderId: bulkPayload.BulkId,
-                  endpoint: workOrderBulkEndpoint,
-                  method: "POST",
-                  dedupeKey: `PENDIENTE_FIRMA_BULK_0300:${bulkPayload.BulkId}`,
-                  payload: bulkPayload,
-                });
-
+                await upsertSapQueueItem({ type: "PENDIENTE_FIRMA_BULK_0300", orderId: bulkPayload.BulkId, endpoint: workOrderBulkEndpoint, method: "POST", dedupeKey: `PENDIENTE_FIRMA_BULK_0300:${bulkPayload.BulkId}`, payload: bulkPayload });
                 for (const item of toWorkOrders) {
                   const orderId = String(item?.OrderId || "").trim();
-
                   await setLocalStatusPatch(userEmail, orderId, "0300");
-
-                  results.push({
-                    orderId,
-                    ok: true,
-                    msg: "Guardado offline dentro del paquete bulk. Estatus local cambiado a 0300.",
-                  });
+                  const tempPdf = tempPdfsByOrder[orderId];
+                  let offlinePdfItem = null;
+                  if (tempPdf?.tempUri) { offlinePdfItem = await saveSentSignaturePdf(tempPdf); await FileSystem.deleteAsync(tempPdf.tempUri, { idempotent: true }).catch(() => {}); }
+                  results.push({ orderId, ok: true, msg: "Guardado offline.", fileName: offlinePdfItem?.fileName || tempPdf?.fileName || "", uri: offlinePdfItem?.uri || "" });
                 }
+                await loadSentPdfs();
               } else {
-                console.log("[BULK][POST SAP] Enviando paquete a SAP...", {
-                  endpoint: workOrderBulkEndpoint,
-                  bulkId: bulkPayload.BulkId,
-                  totalOrdenes: bulkPayload.WorkOrderSet.length,
-                });
-
-                console.time(`[BULK][POST SAP TIME] ${bulkPayload.BulkId}`);
-
-                const sapResponse = await api.post(
-                  workOrderBulkEndpoint,
-                  bulkPayload,
-                  {
-                    headers: token
-                      ? { Authorization: `Bearer ${token}` }
-                      : undefined,
-                  },
-                );
-
-                console.timeEnd(`[BULK][POST SAP TIME] ${bulkPayload.BulkId}`);
-
-                console.log("[BULK][POST SAP RESPONSE]", {
-                  status: sapResponse?.status,
-                  statusText: sapResponse?.statusText,
-                  data: sapResponse?.data,
-                });
-
-                for (const item of toWorkOrders) {
-                  const orderId = String(item?.OrderId || "").trim();
-
-                  results.push({
-                    orderId,
-                    ok: true,
-                    msg: "Enviado OK dentro del paquete bulk.",
-                  });
+                try {
+                  await api.post(workOrderBulkEndpoint, bulkPayload, { headers: token ? { Authorization: `Bearer ${token}` } : undefined });
+                  for (const item of toWorkOrders) {
+                    const orderId = String(item?.OrderId || "").trim();
+                    const tempPdf = tempPdfsByOrder[orderId];
+                    let sentPdfItem = null;
+                    if (tempPdf?.tempUri) { sentPdfItem = await saveSentSignaturePdf(tempPdf); await FileSystem.deleteAsync(tempPdf.tempUri, { idempotent: true }).catch(() => {}); }
+                    results.push({ orderId, ok: true, msg: "Enviado a SAP.", fileName: sentPdfItem?.fileName || tempPdf?.fileName || "", uri: sentPdfItem?.uri || "" });
+                  }
+                  await loadSentPdfs();
+                } catch (sendErr) {
+                  const msg = getSapErrorDetail(sendErr, "No se pudo enviar el paquete a SAP.");
+                  for (const item of toWorkOrders) {
+                    const orderId = String(item?.OrderId || "").trim();
+                    const tempPdf = tempPdfsByOrder[orderId];
+                    let failedPdfItem = null;
+                    if (tempPdf?.tempUri) { failedPdfItem = await saveFailedSignaturePdf({ ...tempPdf, reason: msg }); await FileSystem.deleteAsync(tempPdf.tempUri, { idempotent: true }).catch(() => {}); }
+                    results.push({ orderId, ok: false, msg: `Error: ${msg}.`, fileName: failedPdfItem?.fileName || tempPdf?.fileName || "", uri: failedPdfItem?.uri || "" });
+                  }
+                  await loadFailedPdfs();
                 }
               }
 
               setSendResults([...results]);
-
-              const okSet = new Set(
-                results.filter((r) => r.ok).map((r) => String(r.orderId)),
-              );
-
+              const okSet = new Set(results.filter((r) => r.ok).map((r) => String(r.orderId)));
               if (okSet.size) {
-                setAllOrdenes((prev) =>
-                  (prev || []).filter((it) => !okSet.has(String(it?.Orderid))),
-                );
-
-                setSelectedMap((prev) => {
-                  const next = { ...(prev || {}) };
-                  for (const id of okSet) delete next[id];
-                  return next;
-                });
+                setAllOrdenes((prev) => (prev || []).filter((it) => !okSet.has(String(it?.Orderid || it?.OrderId || ""))));
+                setSelectedMap((prev) => { const next = { ...prev }; for (const id of okSet) delete next[id]; return next; });
               }
-
-              const okCount = results.filter((r) => r.ok).length;
-              const failCount = results.length - okCount;
-
-              Alert.alert(
-                "Envío terminado",
-                online
-                  ? `Correctas: ${okCount}\nCon error: ${failCount}\n\nSe envió el paquete Bulk a SAP.`
-                  : `Guardadas/encoladas: ${okCount}\nCon error: ${failCount}\n\nEl paquete Bulk se enviará automáticamente cuando vuelva la red.`,
-              );
-
-              if (failCount === 0) {
-                setSelectMode(false);
-                clearSelection();
-                resetFirmaFields();
-              }
-            } finally {
-              setSending(false);
-              setSendProgress((p) => ({ ...p, current: "" }));
-            }
+              setLastSendSummary([...results]);
+              setShowSendSummaryModal(true);
+              if (results.filter((r) => !r.ok).length === 0) { setSelectMode(false); clearSelection(); resetFirmaFields(); }
+            } catch (globalErr) { Alert.alert("Error Global", "Ocurrió un fallo general."); }
+            finally { setSending(false); setSendProgress((p) => ({ ...p, current: "" })); }
           },
         },
-      ],
+      ]
     );
   };
 
-  const activeRangeText = useMemo(() => {
-    if (dateMode === "all") return "Últimos 365 días";
-    if (dateMode === "day")
-      return `Día: ${atStartOfDay(dayRef).toLocaleDateString()}`;
-    if (dateMode === "weekRange") {
-      const a = weekStart ? atStartOfDay(weekStart).toLocaleDateString() : "—";
-      const b = weekEnd ? atEndOfDay(weekEnd).toLocaleDateString() : "—";
-      return `Semana (rango): ${a} → ${b}`;
-    }
-    if (dateMode === "month")
-      return `Mes: ${MONTHS[monthYear.month]} ${monthYear.year}`;
-    if (dateMode === "year") return `Año: ${yearOnly}`;
-    return "";
-  }, [dateMode, dayRef, weekStart, weekEnd, monthYear, yearOnly]);
-
-  const YearPickerContent = ({
-    selectedYear,
-    onSelect,
-    from = 2020,
-    to = now.getFullYear() + 2,
-  }) => {
-    const years = [];
-    for (let y = to; y >= from; y--) years.push(y);
-
+  const YearPickerContent = ({ selectedYear, onSelect, from = 2020, to = now.getFullYear() + 2 }) => {
+    const years = []; for (let y = to; y >= from; y--) years.push(y);
     return (
       <ScrollView style={{ maxHeight: 320 }}>
         {years.map((y) => (
-          <TouchableOpacity
-            key={y}
-            style={[
-              styles.yearItem,
-              selectedYear === y && styles.yearItemActive,
-            ]}
-            onPress={() => onSelect(y)}
-          >
-            <Text
-              style={[
-                styles.yearItemText,
-                selectedYear === y && styles.yearItemTextActive,
-              ]}
-            >
-              {y}
-            </Text>
+          <TouchableOpacity key={y} style={[styles.yearItem, selectedYear === y && styles.yearItemActive]} onPress={() => onSelect(y)}>
+            <Text style={[styles.yearItemText, selectedYear === y && styles.yearItemTextActive]}>{y}</Text>
           </TouchableOpacity>
         ))}
       </ScrollView>
     );
   };
 
-  const renderItem = ({ item }) => {
-    const orderId = String(item?.Orderid ?? "");
-    const startLabel = formatDateDMY(item.start_date);
-    const finishLabel = formatDateDMY(item.finish_date);
+  const renderOrderItem = ({ item }) => {
+    const orderId = getOrderId(item);
+    const equipo = getEquipoNumber(item);
+    const cliente = getClienteName(item);
+    const tipoOrden = getTipoOrden(item);
+    const fechaLarga = formatLongDate(item?.start_date);
     const checked = !!selectedMap[orderId];
+    const isValidated = validatedOrderIds.includes(orderId);
 
     return (
       <Pressable
         style={[
-          styles.card,
-          { borderLeftWidth: 4, borderLeftColor: FIORI.warn },
+          styles.cleanOrderCard,
+          checked && styles.cleanOrderCardSelected,
+          isValidated && styles.cleanOrderCardValidated,
         ]}
         onPress={() => {
-          if (selectMode) toggleSelect(orderId);
-          else openDetalle(orderId);
+          if (selectMode) {
+            toggleSelect(orderId);
+          } else {
+            openDetalle(orderId);
+          }
         }}
       >
-        <View style={styles.cardTopRow}>
-          {selectMode ? (
-            <CheckBox checked={checked} onPress={() => toggleSelect(orderId)} />
-          ) : (
-            <View style={[styles.statusDot, { backgroundColor: FIORI.warn }]} />
-          )}
-
-          <View style={{ flex: 1 }}>
-            <Text style={styles.title}>
-              #{orderId} - {safeStr(item.order_type || "")}
-            </Text>
-            <Text style={styles.label}>
-              Equipo: {safeStr(item.equipment || "—")}
-            </Text>
-            <Text style={styles.label}>Inicio: {startLabel}</Text>
-            <Text style={styles.label}>Fin: {finishLabel}</Text>
-            <Text style={styles.label}>Estatus: PENDIENTE DE FIRMA</Text>
+        <View style={styles.cleanOrderTop}>
+          <View style={styles.cleanOrderLeft}>
+            {selectMode ? (
+              <CheckBox checked={checked} onPress={() => toggleSelect(orderId)} />
+            ) : (
+              <View style={styles.cleanStatusDot} />
+            )}
           </View>
-        </View>
 
-        <View style={{ alignItems: "flex-end", marginTop: 10 }}>
-          <View style={styles.pill}>
-            <Text style={styles.pillText}>Requiere firma</Text>
+          <View style={styles.cleanOrderContent}>
+            <View style={styles.cleanEquipmentRow}>
+              <Text style={styles.cleanEquipmentText} numberOfLines={1}>
+                {equipo}
+              </Text>
+
+              {isValidated ? (
+                <Ionicons name="shield-checkmark" size={15} color={FIORI.ok} />
+              ) : null}
+            </View>
+
+            <View style={styles.cleanMetaRow}>
+              <Ionicons name="document-text-outline" size={12} color={FIORI.textMuted} />
+              <Text style={styles.cleanMetaText} numberOfLines={1}>
+                Orden #{orderId} · {tipoOrden}
+              </Text>
+            </View>
+
+            <View style={styles.cleanMetaRow}>
+              <Ionicons name="calendar-outline" size={12} color={FIORI.accent} />
+              <Text style={styles.cleanDateText} numberOfLines={1}>
+                {fechaLarga}
+              </Text>
+            </View>
+
+            <View style={styles.cleanMetaRow}>
+              <Ionicons name="business-outline" size={12} color={FIORI.textMuted} />
+              <Text style={styles.cleanClientText} numberOfLines={1}>
+                {cliente}
+              </Text>
+            </View>
           </View>
         </View>
       </Pressable>
     );
   };
 
+  const renderGroupedItem = ({ item }) => {
+    if (item.type === "monthHeader") {
+      return (
+        <View style={styles.monthGroupHeader}>
+          <Text style={styles.monthGroupTitle}>{item.title}</Text>
+        </View>
+      );
+    }
+
+    if (item.type === "clientHeader") {
+      return (
+        <View style={styles.clientGroupHeader}>
+          <View style={styles.clientIconBox}>
+            <Ionicons name="business" size={14} color={FIORI.accent} />
+          </View>
+
+          <View style={{ flex: 1 }}>
+            <Text style={styles.clientGroupTitle} numberOfLines={1}>
+              {item.title}
+            </Text>
+            <Text style={styles.clientGroupSub}>
+              {item.count} {item.count === 1 ? "orden pendiente" : "órdenes pendientes"}
+            </Text>
+          </View>
+        </View>
+      );
+    }
+
+    return renderOrderItem({ item: item.item });
+  };
+
   return (
     <View style={styles.container}>
       <Header title="Pendiente de firma" />
-
-      <View style={styles.filtersWrap}>
+      <View style={styles.topPanel}>
         <View style={styles.searchRow}>
-          <TextInput
-            style={styles.searchInput}
-            value={query}
-            onChangeText={setQuery}
-            placeholder="Buscar por #, tipo, equipo, cliente…"
-            placeholderTextColor={FIORI.textMuted}
-            returnKeyType="search"
-          />
-
-          <TouchableOpacity
-            style={[
-              styles.actionBtn,
-              selectMode ? styles.actionBtnDanger : styles.actionBtnPrimary,
-            ]}
-            onPress={() => {
-              if (selectMode) {
-                setSelectMode(false);
-                clearSelection();
-                resetFirmaFields();
-              } else {
-                setSelectMode(true);
-              }
-            }}
-            activeOpacity={0.85}
-          >
-            <Ionicons
-              name={selectMode ? "close" : "checkbox-outline"}
-              size={18}
-              color="#fff"
-              style={{ marginRight: 6 }}
-            />
-            <Text style={styles.actionBtnText}>
-              {selectMode ? "Cancelar" : "Seleccionar"}
-            </Text>
-          </TouchableOpacity>
-        </View>
-
-        <View style={styles.chipsRow}>
-          <TouchableOpacity
-            style={[styles.chip, dateMode === "all" && styles.chipActive]}
-            onPress={() => setDateMode("all")}
-          >
-            <Text
-              style={[
-                styles.chipText,
-                dateMode === "all" && styles.chipTextActive,
-              ]}
-            >
-              Todas
-            </Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.chip, dateMode === "day" && styles.chipActive]}
-            onPress={() => {
-              setDateMode("day");
-              setShowDayPicker(true);
-            }}
-          >
-            <Text
-              style={[
-                styles.chipText,
-                dateMode === "day" && styles.chipTextActive,
-              ]}
-            >
-              Día
-            </Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.chip, dateMode === "weekRange" && styles.chipActive]}
-            onPress={() => {
-              setDateMode("weekRange");
-              setShowWeekStartPicker(true);
-            }}
-          >
-            <Text
-              style={[
-                styles.chipText,
-                dateMode === "weekRange" && styles.chipTextActive,
-              ]}
-            >
-              Semana
-            </Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.chip, dateMode === "month" && styles.chipActive]}
-            onPress={() => {
-              setDateMode("month");
-              setShowMonthModal(true);
-            }}
-          >
-            <Text
-              style={[
-                styles.chipText,
-                dateMode === "month" && styles.chipTextActive,
-              ]}
-            >
-              Mes
-            </Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.chip, dateMode === "year" && styles.chipActive]}
-            onPress={() => {
-              setDateMode("year");
-              setShowYearModal(true);
-            }}
-          >
-            <Text
-              style={[
-                styles.chipText,
-                dateMode === "year" && styles.chipTextActive,
-              ]}
-            >
-              Año
-            </Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={styles.clearBtn}
-            onPress={clearFilters}
-            activeOpacity={0.85}
-          >
-            <Text style={styles.clearBtnText}>Limpiar</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={styles.refreshBtn}
-            onPress={() => fetchOrdenes0400({ isRefresh: true })}
-            activeOpacity={0.85}
-          >
-            <Text style={styles.refreshBtnText}>Recargar</Text>
-          </TouchableOpacity>
-        </View>
-
-        <Text style={styles.activeRangeText}>
-          {activeRangeText} · {isOnline ? "Online" : "Offline"}
-        </Text>
-
-        <Text style={styles.hint}>
-          Mostrando solo órdenes con estatus{" "}
-          <Text style={{ fontWeight: "900" }}>Pendiente de firma</Text>.
-          {selectMode ? (
-            <>
-              {" "}
-              · Seleccionadas:{" "}
-              <Text style={{ fontWeight: "900" }}>{selectedIds.length}</Text>
-            </>
-          ) : null}
-          {selectMode && firmaDataUrl ? (
-            <>
-              {" "}
-              ·{" "}
-              <Text style={{ fontWeight: "900", color: FIORI.ok }}>
-                Firma lista ✅
-              </Text>
-            </>
-          ) : null}
-          {selectMode && clienteEmail ? (
-            <>
-              {" "}
-              · <Text style={{ fontWeight: "900" }}>{clienteEmail}</Text>
-            </>
-          ) : null}
-        </Text>
-
-        {showDayPicker && (
-          <DateTimePicker
-            value={dayRef ?? new Date()}
-            mode="date"
-            display={Platform.OS === "ios" ? "inline" : "default"}
-            onChange={(e, date) => {
-              if (Platform.OS === "android") {
-                setShowDayPicker(false);
-                if (e.type !== "set") return;
-              }
-              if (date) setDayRef(date);
-              if (Platform.OS === "ios") setShowDayPicker(true);
-            }}
-          />
-        )}
-
-        {showWeekStartPicker && (
-          <DateTimePicker
-            value={weekStart ?? new Date()}
-            mode="date"
-            display={Platform.OS === "ios" ? "inline" : "default"}
-            onChange={(e, date) => {
-              if (Platform.OS === "android") {
-                setShowWeekStartPicker(false);
-                if (e.type !== "set") return;
-              }
-              if (date) {
-                setWeekStart(date);
-                if (Platform.OS !== "ios") setShowWeekEndPicker(true);
-              }
-              if (Platform.OS === "ios") setShowWeekStartPicker(true);
-            }}
-          />
-        )}
-
-        {showWeekEndPicker && (
-          <DateTimePicker
-            value={weekEnd ?? weekStart ?? new Date()}
-            mode="date"
-            minimumDate={weekStart ?? undefined}
-            display={Platform.OS === "ios" ? "inline" : "default"}
-            onChange={(e, date) => {
-              if (Platform.OS === "android") {
-                setShowWeekEndPicker(false);
-                if (e.type !== "set") return;
-              }
-              if (date) setWeekEnd(date);
-              if (Platform.OS === "ios") setShowWeekEndPicker(true);
-            }}
-          />
-        )}
-
-        {dateMode === "weekRange" && (
-          <View style={styles.rangeButtonsRow}>
-            <TouchableOpacity
-              style={[styles.smallBtn, { backgroundColor: FIORI.cardSubtle }]}
-              onPress={() => setShowWeekStartPicker(true)}
-            >
-              <Text style={styles.smallBtnText}>
-                Inicio: {weekStart ? weekStart.toLocaleDateString() : "—"}
-              </Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={[styles.smallBtn, { backgroundColor: FIORI.cardSubtle }]}
-              onPress={() => setShowWeekEndPicker(true)}
-            >
-              <Text style={styles.smallBtnText}>
-                Fin: {weekEnd ? weekEnd.toLocaleDateString() : "—"}
-              </Text>
-            </TouchableOpacity>
+          <View style={styles.searchBox}>
+            <Ionicons name="search-outline" size={18} color={FIORI.textMuted} />
+            <TextInput style={styles.searchInput} value={query} onChangeText={setQuery} placeholder="Buscar orden, equipo…" placeholderTextColor={FIORI.textMuted} returnKeyType="search" />
           </View>
-        )}
+          <TouchableOpacity style={[styles.selectBtn, selectMode ? styles.selectBtnCancel : styles.selectBtnActive]} onPress={() => { if (selectMode) { setSelectMode(false); clearSelection(); resetFirmaFields(); } else setSelectMode(true); }}>
+            <Ionicons name={selectMode ? "close" : "checkbox-outline"} size={18} color="#fff" />
+            <Text style={styles.selectBtnText}>{selectMode ? "Cancelar" : "Seleccionar"}</Text>
+          </TouchableOpacity>
+        </View>
+
+        <View style={styles.historyRow}>
+            <TouchableOpacity style={styles.historyBtn} onPress={async () => { await loadSentPdfs(); setShowSentPdfsModal(true); }}>
+              <Ionicons name="checkmark-done-outline" size={14} color={FIORI.ok} />
+              <Text style={styles.historyBtnText}>PDFs Enviados</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.historyBtn} onPress={async () => { await loadFailedPdfs(); setShowFailedPdfsModal(true); }}>
+              <Ionicons name="alert-circle-outline" size={14} color={FIORI.warn} />
+              <Text style={styles.historyBtnText}>PDFs Pendientes</Text>
+            </TouchableOpacity>
+        </View>
+
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filtersScroll}>
+          {[["all", "Todas"], ["day", "Día"], ["weekRange", "Semana"], ["month", "Mes"], ["year", "Año"]].map(([mode, label]) => (
+            <TouchableOpacity key={mode} style={[styles.chip, dateMode === mode && styles.chipActive]} onPress={() => { setDateMode(mode); if (mode === "day") setShowDayPicker(true); if (mode === "weekRange") setShowWeekStartPicker(true); if (mode === "month") setShowMonthModal(true); if (mode === "year") setShowYearModal(true); }}>
+              <Text style={[styles.chipText, dateMode === mode && styles.chipTextActive]}>{label}</Text>
+            </TouchableOpacity>
+          ))}
+          <TouchableOpacity style={styles.clearChip} onPress={clearFilters}><Text style={styles.clearChipText}>Limpiar</Text></TouchableOpacity>
+          <TouchableOpacity style={styles.reloadChip} onPress={() => fetchOrdenes0400({ isRefresh: true })}><Ionicons name="refresh-outline" size={15} color="#fff" /><Text style={styles.reloadChipText}>Recargar</Text></TouchableOpacity>
+        </ScrollView>
+        {showDayPicker && <DateTimePicker value={dayRef ?? new Date()} mode="date" display={Platform.OS === "ios" ? "inline" : "default"} onChange={(e, date) => { if (Platform.OS === "android") { setShowDayPicker(false); if (e.type !== "set") return; } if (date) setDayRef(date); if (Platform.OS === "ios") setShowDayPicker(true); }} />}
+        {showWeekStartPicker && <DateTimePicker value={weekStart ?? new Date()} mode="date" display={Platform.OS === "ios" ? "inline" : "default"} onChange={(e, date) => { if (Platform.OS === "android") { setShowWeekStartPicker(false); if (e.type !== "set") return; } if (date) { setWeekStart(date); if (Platform.OS !== "ios") setShowWeekEndPicker(true); } if (Platform.OS === "ios") setShowWeekStartPicker(true); }} />}
+        {showWeekEndPicker && <DateTimePicker value={weekEnd ?? weekStart ?? new Date()} mode="date" minimumDate={weekStart ?? undefined} display={Platform.OS === "ios" ? "inline" : "default"} onChange={(e, date) => { if (Platform.OS === "android") { setShowWeekEndPicker(false); if (e.type !== "set") return; } if (date) setWeekEnd(date); if (Platform.OS === "ios") setShowWeekEndPicker(true); }} />}
       </View>
 
-      <Modal
-        visible={showMonthModal}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setShowMonthModal(false)}
-      >
-        <View style={styles.modalBackdrop}>
-          <View style={styles.modalCard}>
-            <View style={styles.modalHeader}>
-              <TouchableOpacity
-                onPress={() =>
-                  setMonthYear((s) => ({ ...s, year: s.year - 1 }))
-                }
-              >
-                <Text style={styles.modalHeaderBtn}>{"‹"}</Text>
-              </TouchableOpacity>
-              <Text style={styles.modalHeaderTitle}>{monthYear.year}</Text>
-              <TouchableOpacity
-                onPress={() =>
-                  setMonthYear((s) => ({ ...s, year: s.year + 1 }))
-                }
-              >
-                <Text style={styles.modalHeaderBtn}>{"›"}</Text>
-              </TouchableOpacity>
-            </View>
-
-            <View style={styles.monthGrid}>
-              {MONTHS.map((m, idx) => {
-                const active = idx === monthYear.month && dateMode === "month";
-                return (
-                  <TouchableOpacity
-                    key={m}
-                    style={[styles.monthCell, active && styles.monthCellActive]}
-                    onPress={() => {
-                      setMonthYear({ month: idx, year: monthYear.year });
-                      setShowMonthModal(false);
-                    }}
-                  >
-                    <Text
-                      style={[
-                        styles.monthCellText,
-                        active && styles.monthCellTextActive,
-                      ]}
-                    >
-                      {m}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-
-            <TouchableOpacity
-              style={styles.modalClose}
-              onPress={() => setShowMonthModal(false)}
-            >
-              <Text style={styles.modalCloseText}>Cerrar</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
-
-      <Modal
-        visible={showYearModal}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setShowYearModal(false)}
-      >
-        <View style={styles.modalBackdrop}>
-          <View style={styles.modalCard}>
-            <Text style={[styles.modalHeaderTitle, { marginBottom: 8 }]}>
-              Selecciona un año
-            </Text>
-            <YearPickerContent
-              selectedYear={yearOnly}
-              onSelect={(y) => {
-                setYearOnly(y);
-                setShowYearModal(false);
-              }}
-              from={now.getFullYear() - 10}
-              to={now.getFullYear() + 2}
-            />
-            <TouchableOpacity
-              style={styles.modalClose}
-              onPress={() => setShowYearModal(false)}
-            >
-              <Text style={styles.modalCloseText}>Cerrar</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
-
       {loading && allOrdenes.length === 0 ? (
-        <View style={{ paddingTop: 28, alignItems: "center" }}>
-          <ActivityIndicator size="large" color={FIORI.accent} />
-          <Text style={{ marginTop: 10, color: FIORI.textMuted }}>
-            Cargando…
-          </Text>
-        </View>
+        <View style={styles.loadingWrap}><ActivityIndicator size="large" color={FIORI.accent} /><Text style={styles.loadingText}>Cargando órdenes…</Text></View>
       ) : (
         <FlatList
-          data={rows}
-          keyExtractor={(item, idx) => String(item?.Orderid ?? `row-${idx}`)}
-          renderItem={renderItem}
-          contentContainerStyle={{
-            padding: 20,
-            paddingTop: 10,
-            paddingBottom: selectMode ? 190 : 90,
-          }}
+          data={groupedRows}
+          keyExtractor={(item) => item.key}
+          renderItem={renderGroupedItem}
+          contentContainerStyle={{ paddingHorizontal: 10, paddingTop: 8, paddingBottom: selectMode ? 210 : 90 }}
           refreshing={refreshing}
           onRefresh={() => fetchOrdenes0400({ isRefresh: true })}
-          ListEmptyComponent={
-            <Text
-              style={{
-                textAlign: "center",
-                marginTop: 24,
-                color: FIORI.textMuted,
-              }}
-            >
-              No hay órdenes pendientes de firma con los filtros actuales.
-            </Text>
-          }
+          ListEmptyComponent={<View style={styles.emptyBox}><Ionicons name="document-text-outline" size={32} color={FIORI.textMuted} /><Text style={styles.emptyTitle}>Sin órdenes pendientes</Text><Text style={styles.emptySub}>No hay órdenes pendientes con los filtros actuales.</Text></View>}
         />
       )}
 
-      {selectMode ? (
-        <View style={styles.bottomBar}>
-          <View
-            style={{
-              flexDirection: "row",
-              gap: 10,
-              flexWrap: "wrap",
-              justifyContent: "flex-end",
-            }}
-          >
-            <TouchableOpacity
-              style={[
-                styles.bottomBtn,
-                {
-                  backgroundColor: FIORI.cardSubtle,
-                  borderWidth: 1,
-                  borderColor: FIORI.border,
-                },
-              ]}
-              onPress={selectAllVisible}
-              activeOpacity={0.85}
-              disabled={sending}
-            >
-              <Ionicons
-                name="list"
-                size={18}
-                color={FIORI.ink}
-                style={{ marginRight: 6 }}
-              />
-              <Text style={[styles.bottomBtnText, { color: FIORI.ink }]}>
-                Seleccionar todo
-              </Text>
+      {selectMode && (
+        <View style={styles.wizardBar}>
+          <View style={styles.wizardHeaderCompact}>
+            <View style={styles.wizardHeaderTextBox}>
+              <Text style={styles.wizardTitle}>Finalizar órdenes pendientes</Text>
+              <Text style={styles.wizardSub}>Órdenes seleccionadas: {selectedCount}</Text>
+              <Text style={styles.wizardTinyInfo}>{isOnline ? "Online" : "Offline"} · {activeRangeText}</Text>
+            </View>
+          </View>
+          <View style={styles.wizardStepsRow}>
+            <TouchableOpacity style={[styles.stepButton, selectedCount ? styles.stepButtonActive : styles.stepButtonDisabled]} onPress={validateSelectedOrdersBeforeSign} disabled={!selectedCount || validatingOrders || sending}>
+              <Ionicons name="shield-checkmark-outline" size={16} color="#fff" />
+              <Text style={styles.stepButtonText}>{validatingOrders ? "Validando" : "1 Validar"}</Text>
             </TouchableOpacity>
 
-            <TouchableOpacity
-              style={[
-                styles.bottomBtn,
-                {
-                  backgroundColor: selectedIds.length
-                    ? FIORI.accent
-                    : "#9AA5B1",
-                },
-              ]}
-              onPress={startFirmaFlow}
-              activeOpacity={0.85}
-              disabled={!selectedIds.length || sending}
-            >
-              <Ionicons
-                name="create-outline"
-                size={18}
-                color="#fff"
-                style={{ marginRight: 6 }}
-              />
-              <Text style={[styles.bottomBtnText, { color: "#fff" }]}>
-                Agregar firma del cliente
-              </Text>
+            <TouchableOpacity style={[styles.stepButton, selectedAllReady ? styles.stepButtonActive : styles.stepButtonDisabled]} onPress={() => { if (!selectedAllReady) { Alert.alert("Valida primero", "Primero valida."); } else { setShowPreviewModal(true); } }} disabled={!selectedCount || sending}>
+              <Ionicons name="create-outline" size={16} color="#fff" />
+              <Text style={styles.stepButtonText}>2 Datos y Firma</Text>
             </TouchableOpacity>
 
-            <TouchableOpacity
-              style={[
-                styles.bottomBtn,
-                {
-                  backgroundColor:
-                    selectedIds.length &&
-                    firmaDataUrl &&
-                    isValidEmail(clienteEmail) &&
-                    clienteNombre.trim() &&
-                    clienteCargo.trim() &&
-                    comentarioCliente.trim() &&
-                    !sending
-                      ? "#0B8457"
-                      : "#9AA5B1",
-                },
-              ]}
-              onPress={sendSelectedOrders}
-              activeOpacity={0.85}
-              disabled={
-                !selectedIds.length ||
-                !firmaDataUrl ||
-                !isValidEmail(clienteEmail) ||
-                !clienteNombre.trim() ||
-                !clienteCargo.trim() ||
-                !comentarioCliente.trim() ||
-                sending
-              }
-            >
-              <Ionicons
-                name="cloud-upload-outline"
-                size={18}
-                color="#fff"
-                style={{ marginRight: 6 }}
-              />
-              <Text style={[styles.bottomBtnText, { color: "#fff" }]}>
-                {sending ? "Enviando…" : "Enviar órdenes"}
-              </Text>
+            <TouchableOpacity style={[styles.stepButton, canSend ? styles.stepButtonSuccess : styles.stepButtonDisabled]} onPress={sendSelectedOrders} disabled={!canSend}>
+              <Ionicons name="cloud-upload-outline" size={16} color="#fff" />
+              <Text style={styles.stepButtonText}>{sending ? "Enviando" : "3 Enviar"}</Text>
             </TouchableOpacity>
           </View>
-
-          <Text style={{ marginTop: 8, color: FIORI.textMuted, fontSize: 12 }}>
-            Seleccionadas:{" "}
-            <Text style={{ fontWeight: "900" }}>{selectedIds.length}</Text>
-            {firmaDataUrl ? (
-              <>
-                {" "}
-                ·{" "}
-                <Text style={{ fontWeight: "900", color: FIORI.ok }}>
-                  Firma lista ✅
-                </Text>
-              </>
-            ) : null}
-            {clienteEmail ? (
-              <>
-                {" "}
-                · Correo:{" "}
-                <Text
-                  style={{
-                    fontWeight: "900",
-                    color: isValidEmail(clienteEmail)
-                      ? FIORI.ink
-                      : FIORI.danger,
-                  }}
-                >
-                  {clienteEmail}
-                </Text>
-              </>
-            ) : (
-              <>
-                {" "}
-                · Correo:{" "}
-                <Text style={{ fontWeight: "900", color: FIORI.danger }}>
-                  pendiente
-                </Text>
-              </>
-            )}
-          </Text>
-        </View>
-      ) : null}
-
-      <Modal
-        visible={showPreviewModal}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setShowPreviewModal(false)}
-      >
-        <View style={styles.modalBackdrop}>
-          <View style={[styles.modalCard, { maxWidth: 520, maxHeight: "85%" }]}>
-            <Text style={styles.modalTitle}>Órdenes que se van a firmar</Text>
-
-            <Text style={styles.modalSub}>
-              Revisa con el cliente las órdenes seleccionadas antes de capturar
-              la firma.
+          <View style={styles.wizardStatusBox}>
+            <Text style={styles.wizardStatusText}>
+              {selectedAllReady
+                ? firmaDataUrl ? "Todo listo. Ya puedes enviar las órdenes a SAP." : "Paso 1 listo. Presiona 'Datos y Firma' para capturar info."
+                : "Selecciona órdenes y presiona Validar para empezar."}
             </Text>
+          </View>
+        </View>
+      )}
 
-            <ScrollView style={{ marginTop: 12, maxHeight: 420 }}>
-              {rows
-                .filter((item) => selectedIds.includes(String(item?.Orderid)))
-                .map((item) => {
-                  const orderId = String(item?.Orderid || "");
+      {/* MODAL: MESES */}
+      <Modal visible={showMonthModal} transparent animationType="fade" onRequestClose={() => setShowMonthModal(false)}>
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <View style={styles.modalHeader}>
+              <TouchableOpacity onPress={() => setMonthYear((s) => ({ ...s, year: s.year - 1 }))}><Text style={styles.modalHeaderBtn}>{"‹"}</Text></TouchableOpacity>
+              <Text style={styles.modalHeaderTitle}>{monthYear.year}</Text>
+              <TouchableOpacity onPress={() => setMonthYear((s) => ({ ...s, year: s.year + 1 }))}><Text style={styles.modalHeaderBtn}>{"›"}</Text></TouchableOpacity>
+            </View>
+            <View style={styles.monthGrid}>
+              {MONTHS.map((m, idx) => (
+                <TouchableOpacity key={m} style={[styles.monthCell, idx === monthYear.month && dateMode === "month" && styles.monthCellActive]} onPress={() => { setMonthYear({ month: idx, year: monthYear.year }); setShowMonthModal(false); }}>
+                  <Text style={[styles.monthCellText, idx === monthYear.month && dateMode === "month" && styles.monthCellTextActive]}>{m}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            <TouchableOpacity style={styles.modalPrimaryBtn} onPress={() => setShowMonthModal(false)}><Text style={styles.modalPrimaryBtnText}>Cerrar</Text></TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
 
-                  return (
-                    <View key={orderId} style={styles.previewOrderCard}>
-                      <Text style={styles.previewOrderTitle}>
-                        Orden #{orderId}
-                      </Text>
+      {/* MODAL: AÑOS */}
+      <Modal visible={showYearModal} transparent animationType="fade" onRequestClose={() => setShowYearModal(false)}>
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <Text style={[styles.modalTitle, { marginBottom: 10 }]}>Selecciona un año</Text>
+            <YearPickerContent selectedYear={yearOnly} onSelect={(y) => { setYearOnly(y); setShowYearModal(false); }} from={now.getFullYear() - 10} to={now.getFullYear() + 2} />
+            <TouchableOpacity style={styles.modalPrimaryBtn} onPress={() => setShowYearModal(false)}><Text style={styles.modalPrimaryBtnText}>Cerrar</Text></TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
 
-                      <Text style={styles.previewOrderText}>
-                        Tipo: {safeStr(item?.order_type || "—")}
-                      </Text>
-
-                      <Text style={styles.previewOrderText}>
-                        Equipo: {safeStr(item?.equipment || "—")}
-                      </Text>
-
-                      <Text style={styles.previewOrderText}>
-                        Inicio: {formatDateDMY(item?.start_date)}
-                      </Text>
-
-                      <Text style={styles.previewOrderText}>
-                        Fin: {formatDateDMY(item?.finish_date)}
-                      </Text>
-
-                      <Text
-                        style={[styles.previewOrderText, { fontWeight: "900" }]}
-                      >
-                        Estatus: PENDIENTE DE FIRMA
-                      </Text>
-                    </View>
-                  );
-                })}
+      {/* MODAL: VALIDACIÓN */}
+      <Modal visible={showValidationModal} transparent animationType="slide" onRequestClose={() => setShowValidationModal(false)}>
+        <View style={styles.modalBackdrop}>
+          <View style={[styles.modalCardLarge, { maxHeight: "88%" }]}>
+            <Text style={styles.modalTitle}>Validación de órdenes</Text>
+            <Text style={styles.modalSub}>Listas: {validationResults.filter((r) => r.ok).length} · Con error: {validationResults.filter((r) => !r.ok).length}</Text>
+            <ScrollView style={{ marginTop: 12, maxHeight: 460 }}>
+              {validationResults.map((item) => (
+                <View key={`${item.orderId}-${item.ok ? "ok" : "error"}`} style={styles.resultCard}>
+                  <View style={styles.resultHeader}><Text style={styles.resultTitle}>Orden #{item.orderId}</Text><View style={[styles.resultBadge, item.ok ? styles.resultBadgeOk : styles.resultBadgeError]}><Text style={[styles.resultBadgeText, { color: item.ok ? FIORI.ok : FIORI.danger }]}>{item.ok ? "LISTA" : "REVISAR"}</Text></View></View>
+                  <Text style={styles.previewOrderText}>{item.msg}</Text>
+                </View>
+              ))}
             </ScrollView>
-
-            <View
-              style={{
-                flexDirection: "row",
-                justifyContent: "flex-end",
-                gap: 10,
-                flexWrap: "wrap",
-                marginTop: 14,
-              }}
-            >
-              <TouchableOpacity
-                style={[
-                  styles.smallBtn,
-                  {
-                    backgroundColor: FIORI.cardSubtle,
-                    borderWidth: 1,
-                    borderColor: FIORI.border,
-                  },
-                ]}
-                onPress={() => setShowPreviewModal(false)}
-              >
-                <Text style={[styles.smallBtnText, { color: FIORI.ink }]}>
-                  Cancelar
-                </Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[styles.smallBtn, { backgroundColor: FIORI.accent }]}
-                onPress={confirmarOrdenesYFirmar}
-              >
-                <Text style={[styles.smallBtnText, { color: "#fff" }]}>
-                  Confirmar y firmar
-                </Text>
+            <View style={styles.modalActionsRow}>
+              <TouchableOpacity style={styles.modalSecondaryBtn} onPress={() => setShowValidationModal(false)}><Text style={styles.modalSecondaryBtnText}>Cerrar</Text></TouchableOpacity>
+              <TouchableOpacity style={[styles.modalActionBtn, validationResults.some((r) => !r.ok) && { backgroundColor: "#9AA5B1" }]} disabled={validationResults.some((r) => !r.ok)} onPress={continueToSignatureAfterValidation}>
+                <Ionicons name="arrow-forward-outline" size={18} color="#fff" style={{ marginRight: 6 }} /><Text style={styles.modalActionBtnText}>Continuar a Datos</Text>
               </TouchableOpacity>
             </View>
           </View>
         </View>
       </Modal>
 
-      <Modal
-        visible={showFirmaModal}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setShowFirmaModal(false)}
-      >
+      {/* MODAL: DATOS DEL CLIENTE */}
+      <Modal visible={showPreviewModal} transparent animationType="slide" onRequestClose={() => setShowPreviewModal(false)}>
         <View style={styles.modalBackdrop}>
-          <View style={[styles.modalCard, { maxWidth: 520 }]}>
-            <Text style={styles.modalTitle}>Firma del cliente</Text>
-
-            <Text style={styles.modalSub}>
-              Órdenes a firmar:{" "}
-              <Text style={{ fontWeight: "900" }}>
-                {firmaForOrderIds.length}
-              </Text>
-            </Text>
-
-            <View style={{ marginTop: 12 }}>
-              <Text
-                style={{
-                  color: FIORI.textMuted,
-                  marginBottom: 6,
-                  fontWeight: "700",
-                }}
-              >
-                Correo del cliente (obligatorio)
-              </Text>
-
-              <TextInput
-                value={clienteEmail}
-                onChangeText={setClienteEmail}
-                placeholder="correo@ejemplo.com"
-                placeholderTextColor={FIORI.textMuted}
-                autoCapitalize="none"
-                autoCorrect={false}
-                keyboardType="email-address"
-                style={styles.emailInput}
-              />
-
-              {!!clienteEmail && !isValidEmail(clienteEmail) ? (
-                <Text
-                  style={{
-                    marginTop: 6,
-                    color: FIORI.danger,
-                    fontSize: 12,
-                    fontWeight: "800",
-                  }}
-                >
-                  Escribe un correo válido.
-                </Text>
-              ) : null}
-            </View>
-
-            <View style={{ marginTop: 12 }}>
-              <Text
-                style={{
-                  color: FIORI.textMuted,
-                  marginBottom: 6,
-                  fontWeight: "700",
-                }}
-              >
-                Nombre del cliente (obligatorio)
-              </Text>
-
-              <TextInput
-                value={clienteNombre}
-                onChangeText={setClienteNombre}
-                placeholder="Nombre y apellidos"
-                placeholderTextColor={FIORI.textMuted}
-                autoCapitalize="words"
-                autoCorrect={false}
-                style={styles.emailInput}
-              />
-            </View>
-
-            <View style={{ marginTop: 12 }}>
-              <Text
-                style={{
-                  color: FIORI.textMuted,
-                  marginBottom: 6,
-                  fontWeight: "700",
-                }}
-              >
-                Cargo del cliente (obligatorio)
-              </Text>
-
-              <TextInput
-                value={clienteCargo}
-                onChangeText={setClienteCargo}
-                placeholder="Ej. Administrador / Seguridad / Mantenimiento"
-                placeholderTextColor={FIORI.textMuted}
-                autoCapitalize="words"
-                autoCorrect={false}
-                style={styles.emailInput}
-              />
-            </View>
-
-            <View style={{ marginTop: 12 }}>
-              <Text
-                style={{
-                  color: FIORI.textMuted,
-                  marginBottom: 6,
-                  fontWeight: "700",
-                }}
-              >
-                Comentarios del cliente (obligatorio)
-              </Text>
-
-              <TextInput
-                value={comentarioCliente}
-                onChangeText={setComentarioCliente}
-                placeholder="Comentario del cliente para insertar en todos los PDFs"
-                placeholderTextColor={FIORI.textMuted}
-                multiline
-                style={[
-                  styles.emailInput,
-                  {
-                    minHeight: 90,
-                    textAlignVertical: "top",
-                    paddingTop: 10,
-                  },
-                ]}
-              />
-            </View>
-
-            <View style={styles.signatureWrap}>
-              <Signature
-                ref={signatureRef}
-                onOK={onSignatureOK}
-                onEmpty={onSignatureEmpty}
-                autoClear={false}
-                descriptionText="Firma dentro del recuadro"
-                webStyle={`
-            .m-signature-pad { box-shadow: none; border: none; }
-            .m-signature-pad--body { border: 1px solid #DDE6F2; border-radius: 12px; }
-            .m-signature-pad--footer { display: none; margin: 0px; }
-            body,html { width: 100%; height: 100%; }
-          `}
-              />
-            </View>
-
-            <View
-              style={{
-                flexDirection: "row",
-                justifyContent: "flex-end",
-                gap: 10,
-                flexWrap: "wrap",
-              }}
-            >
-              <TouchableOpacity
-                style={[
-                  styles.smallBtn,
-                  {
-                    backgroundColor: FIORI.cardSubtle,
-                    borderWidth: 1,
-                    borderColor: FIORI.border,
-                  },
-                ]}
-                onPress={() => signatureRef.current?.clearSignature?.()}
-              >
-                <Ionicons
-                  name="trash-outline"
-                  size={18}
-                  color={FIORI.ink}
-                  style={{ marginRight: 6 }}
-                />
-                <Text style={[styles.smallBtnText, { color: FIORI.ink }]}>
-                  Limpiar
-                </Text>
+          <View style={[styles.modalCardLarge, { maxHeight: "92%" }]}>
+            <Text style={styles.modalTitle}>Datos y Firma del Cliente</Text>
+            <Text style={styles.modalSub}>Estos datos aparecerán en los PDFs de las órdenes validadas.</Text>
+            <ScrollView style={{ marginTop: 12, maxHeight: 560 }} showsVerticalScrollIndicator={false}>
+              <View style={styles.formSection}>
+                <Text style={styles.formSectionTitle}>Información del cliente</Text>
+                <View style={styles.inputGroup}><Text style={styles.inputLabel}>Correo</Text><TextInput value={clienteEmail} onChangeText={setClienteEmail} placeholder="correo@ejemplo.com" placeholderTextColor={FIORI.textMuted} autoCapitalize="none" keyboardType="email-address" style={[styles.formInput, !!clienteEmail && !isValidEmail(clienteEmail) && styles.inputError]} /></View>
+                <View style={styles.inputGroup}><Text style={styles.inputLabel}>Nombre</Text><TextInput value={clienteNombre} onChangeText={setClienteNombre} placeholder="Nombre y apellidos" placeholderTextColor={FIORI.textMuted} autoCapitalize="words" style={styles.formInput} /></View>
+                <View style={styles.inputGroup}><Text style={styles.inputLabel}>Cargo</Text><TextInput value={clienteCargo} onChangeText={setClienteCargo} placeholder="Ej. Administrador" placeholderTextColor={FIORI.textMuted} autoCapitalize="words" style={styles.formInput} /></View>
+                <View style={styles.inputGroup}><Text style={styles.inputLabel}>Comentarios</Text><TextInput value={comentarioCliente} onChangeText={setComentarioCliente} placeholder="Comentario..." placeholderTextColor={FIORI.textMuted} multiline style={[styles.formInput, styles.textAreaInput]} /></View>
+              </View>
+              <View style={styles.formSection}>
+                <Text style={styles.formSectionTitle}>Firma</Text>
+                <View style={styles.signatureStatusBox}>
+                  <Ionicons name={firmaDataUrl ? "checkmark-circle" : "create-outline"} size={22} color={firmaDataUrl ? FIORI.ok : FIORI.warn} />
+                  <View style={{ flex: 1 }}><Text style={styles.signatureStatusTitle}>{firmaDataUrl ? "Firma capturada" : "Firma pendiente"}</Text></View>
+                  <TouchableOpacity style={styles.miniPrimaryBtn} onPress={() => { 
+                      setShowPreviewModal(false); 
+                      setTimeout(() => setShowFirmaModal(true), 150); 
+                  }}>
+                    <Text style={styles.miniPrimaryBtnText}>{firmaDataUrl ? "Volver a Firmar" : "Firmar"}</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </ScrollView>
+            
+            <View style={styles.modalActionsRow}>
+              <TouchableOpacity style={styles.modalSecondaryBtn} onPress={() => setShowPreviewModal(false)}><Text style={styles.modalSecondaryBtnText}>Cerrar</Text></TouchableOpacity>
+              
+              <TouchableOpacity style={[styles.modalSecondaryBtn, !canSend && { opacity: 0.5 }]} disabled={!canSend || previewing} onPress={previewSelectedPdfs}>
+                <Ionicons name="eye-outline" size={18} color={FIORI.ink} style={{ marginRight: 6 }} />
+                <Text style={styles.modalSecondaryBtnText}>{previewing ? "Generando..." : "Ver Vista Previa"}</Text>
               </TouchableOpacity>
 
-              <TouchableOpacity
-                style={[styles.smallBtn, { backgroundColor: FIORI.accent }]}
-                onPress={() => {
-                  const email = String(clienteEmail || "").trim();
-                  const nombre = String(clienteNombre || "").trim();
-                  const cargo = String(clienteCargo || "").trim();
-                  const comentario = String(comentarioCliente || "").trim();
-
-                  if (!email) {
-                    Alert.alert(
-                      "Falta correo",
-                      "Escribe el correo del cliente antes de guardar la firma.",
-                    );
-                    return;
-                  }
-
-                  if (!isValidEmail(email)) {
-                    Alert.alert(
-                      "Correo inválido",
-                      "Escribe un correo válido (ej: nombre@dominio.com).",
-                    );
-                    return;
-                  }
-
-                  if (!nombre) {
-                    Alert.alert(
-                      "Falta nombre",
-                      "Escribe el nombre del cliente.",
-                    );
-                    return;
-                  }
-
-                  if (!cargo) {
-                    Alert.alert("Falta cargo", "Escribe el cargo del cliente.");
-                    return;
-                  }
-
-                  if (!comentario) {
-                    Alert.alert(
-                      "Falta comentario",
-                      "Escribe el comentario del cliente.",
-                    );
-                    return;
-                  }
-
-                  signatureRef.current?.readSignature?.();
-                }}
-              >
-                <Ionicons
-                  name="checkmark-done-outline"
-                  size={18}
-                  color="#fff"
-                  style={{ marginRight: 6 }}
-                />
-                <Text style={[styles.smallBtnText, { color: "#fff" }]}>
-                  Guardar firma
-                </Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[
-                  styles.smallBtn,
-                  {
-                    backgroundColor: FIORI.cardSubtle,
-                    borderWidth: 1,
-                    borderColor: FIORI.border,
-                  },
-                ]}
-                onPress={() => setShowFirmaModal(false)}
-              >
-                <Ionicons
-                  name="close"
-                  size={18}
-                  color={FIORI.ink}
-                  style={{ marginRight: 6 }}
-                />
-                <Text style={[styles.smallBtnText, { color: FIORI.ink }]}>
-                  Cancelar
-                </Text>
+              <TouchableOpacity style={[styles.modalActionBtn, !canSend && { backgroundColor: "#9AA5B1" }]} disabled={!canSend} onPress={() => { setShowPreviewModal(false); setTimeout(() => sendSelectedOrders(), 150); }}>
+                <Ionicons name="cloud-upload-outline" size={18} color="#fff" style={{ marginRight: 6 }} />
+                <Text style={styles.modalActionBtnText}>Enviar a SAP</Text>
               </TouchableOpacity>
             </View>
           </View>
         </View>
       </Modal>
 
-      <Modal
-        visible={sending}
-        transparent
-        animationType="fade"
-        statusBarTranslucent
-      >
+      {/* MODAL: VISUALIZAR VISTAS PREVIAS */}
+      <Modal visible={showTempPreviewsModal} transparent animationType="slide" onRequestClose={() => setShowTempPreviewsModal(false)}>
+        <View style={styles.modalBackdrop}>
+          <View style={[styles.modalCardLarge, { maxHeight: "88%" }]}>
+            <Text style={styles.modalTitle}>Vista Previa (Borradores)</Text>
+            <Text style={styles.modalSub}>Revisa cómo se verán los PDFs. Estos archivos no se han enviado ni guardado en el historial.</Text>
+            <ScrollView style={{ marginTop: 12, maxHeight: 460 }}>
+              {tempPreviews.map((item) => (
+                <View key={item.id} style={styles.resultCard}>
+                  <View style={styles.resultHeader}><Text style={styles.resultTitle}>Orden #{item.orderId}</Text></View>
+                  <Text style={styles.previewOrderText}>Cliente: {item.clienteNombre}</Text>
+                  <View style={styles.cardActionsRow}>
+                    <TouchableOpacity style={styles.miniPrimaryBtn} onPress={() => sharePdfItem(item)}>
+                      <Ionicons name="document-text-outline" size={16} color="#fff" style={{ marginRight: 5 }} />
+                      <Text style={styles.miniPrimaryBtnText}>Ver / Compartir Archivo</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              ))}
+            </ScrollView>
+            <View style={styles.modalActionsRow}>
+              <TouchableOpacity style={styles.modalActionBtn} onPress={() => setShowTempPreviewsModal(false)}><Text style={styles.modalActionBtnText}>Regresar</Text></TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* MODAL: FIRMA */}
+      <Modal visible={showFirmaModal} transparent animationType="slide" onRequestClose={() => setShowFirmaModal(false)}>
+        <View style={styles.modalBackdrop}>
+          <View style={[styles.modalCardLarge, { maxHeight: "88%" }]}>
+             <Text style={styles.modalTitle}>Firma del cliente</Text>
+             <Text style={styles.modalSub}>Órdenes a firmar: <Text style={{ fontWeight: "900" }}>{firmaForOrderIds.length || selectedIds.length}</Text></Text>
+             <View style={styles.signatureWrap}>
+                <Signature ref={signatureRef} onOK={onSignatureOK} onEmpty={onSignatureEmpty} autoClear={false} descriptionText="Firma dentro del recuadro" webStyle={`.m-signature-pad { box-shadow: none; border: none; } .m-signature-pad--body { border: 1px solid #DDE6F2; border-radius: 12px; } .m-signature-pad--footer { display: none; margin: 0px; } body,html { width: 100%; height: 100%; }`} />
+             </View>
+             <View style={styles.modalActionsRow}>
+                <TouchableOpacity style={styles.modalSecondaryBtn} onPress={() => signatureRef.current?.clearSignature?.()}><Ionicons name="trash-outline" size={18} color={FIORI.ink} style={{ marginRight: 6 }} /><Text style={styles.modalSecondaryBtnText}>Limpiar</Text></TouchableOpacity>
+                <TouchableOpacity style={styles.modalSecondaryBtn} onPress={() => { setShowFirmaModal(false); setTimeout(() => setShowPreviewModal(true), 150); }}><Text style={styles.modalSecondaryBtnText}>Volver</Text></TouchableOpacity>
+                <TouchableOpacity style={styles.modalActionBtn} onPress={() => signatureRef.current?.readSignature?.()}><Ionicons name="checkmark-done-outline" size={18} color="#fff" style={{ marginRight: 6 }} /><Text style={styles.modalActionBtnText}>Guardar firma</Text></TouchableOpacity>
+             </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* MODAL: PDFs ENVIADOS */}
+      <Modal visible={showSentPdfsModal} transparent animationType="slide" onRequestClose={() => setShowSentPdfsModal(false)}>
+        <View style={styles.modalBackdrop}>
+          <View style={[styles.modalCardLarge, { maxHeight: "88%" }]}>
+            <Text style={styles.modalTitle}>PDFs enviados / generados</Text>
+            <Text style={styles.modalSub}>Solo se muestran PDFs enviados o generados hoy.</Text>
+            <ScrollView style={{ marginTop: 12, maxHeight: 460 }}>
+              {sentPdfs.length === 0 ? (
+                <View style={styles.emptyMiniBox}><Ionicons name="document-outline" size={30} color={FIORI.textMuted} /><Text style={styles.emptyMiniTitle}>No hay PDFs enviados de hoy.</Text></View>
+              ) : (
+                sentPdfs.map((item) => (
+                  <View key={item.id} style={styles.resultCard}>
+                    <View style={styles.resultHeader}><Text style={styles.resultTitle}>Orden #{item.orderId}</Text><View style={[styles.resultBadge, styles.resultBadgeOk]}><Text style={[styles.resultBadgeText, { color: FIORI.ok }]}>DISPONIBLE</Text></View></View>
+                    <Text style={styles.previewOrderText}>Archivo: {item.fileName}</Text>
+                    <Text style={styles.previewOrderText}>Cliente: {item.clienteNombre || "—"}</Text>
+                    <View style={styles.cardActionsRow}>
+                      <TouchableOpacity style={styles.miniPrimaryBtn} onPress={() => sharePdfItem(item)}><Ionicons name="share-social-outline" size={16} color="#fff" style={{ marginRight: 5 }} /><Text style={styles.miniPrimaryBtnText}>Compartir</Text></TouchableOpacity>
+                      <TouchableOpacity style={styles.miniDangerBtn} onPress={() => { Alert.alert("Eliminar PDF", `¿Eliminar el PDF de la orden ${item.orderId}?`, [{ text: "Cancelar", style: "cancel" }, { text: "Eliminar", style: "destructive", onPress: async () => { await deletePdfItem(item, SENT_PDFS_INDEX_KEY); await loadSentPdfs(); } }]); }}><Ionicons name="trash-outline" size={16} color={FIORI.danger} style={{ marginRight: 5 }} /><Text style={styles.miniDangerBtnText}>Eliminar</Text></TouchableOpacity>
+                    </View>
+                  </View>
+                ))
+              )}
+            </ScrollView>
+            <View style={styles.modalActionsRow}>
+              <TouchableOpacity style={styles.modalActionBtn} onPress={() => setShowSentPdfsModal(false)}><Text style={styles.modalActionBtnText}>Cerrar</Text></TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* MODAL: PDFs PENDIENTES */}
+      <Modal visible={showFailedPdfsModal} transparent animationType="slide" onRequestClose={() => setShowFailedPdfsModal(false)}>
+        <View style={styles.modalBackdrop}>
+          <View style={[styles.modalCardLarge, { maxHeight: "88%" }]}>
+            <Text style={styles.modalTitle}>PDFs pendientes / no enviados</Text>
+            <Text style={styles.modalSub}>Solo se muestran PDFs pendientes generados hoy.</Text>
+            <ScrollView style={{ marginTop: 12, maxHeight: 460 }}>
+              {failedPdfs.length === 0 ? (
+                <View style={styles.emptyMiniBox}><Ionicons name="checkmark-circle-outline" size={30} color={FIORI.ok} /><Text style={styles.emptyMiniTitle}>No hay PDFs pendientes de hoy.</Text></View>
+              ) : (
+                failedPdfs.map((item) => (
+                  <View key={item.id} style={styles.resultCard}>
+                    <View style={styles.resultHeader}><Text style={styles.resultTitle}>Orden #{item.orderId}</Text><View style={[styles.resultBadge, styles.resultBadgeError]}><Text style={[styles.resultBadgeText, { color: FIORI.danger }]}>PENDIENTE</Text></View></View>
+                    <Text style={styles.previewOrderText}>Archivo: {item.fileName}</Text>
+                    <Text style={styles.previewOrderText}>Cliente: {item.clienteNombre || "—"}</Text>
+                    <Text style={styles.previewOrderText}>Motivo: {item.reason || "No se pudo enviar a SAP"}</Text>
+                    <View style={styles.cardActionsRow}>
+                      <TouchableOpacity style={styles.miniPrimaryBtn} onPress={() => sharePdfItem(item)}><Ionicons name="share-social-outline" size={16} color="#fff" style={{ marginRight: 5 }} /><Text style={styles.miniPrimaryBtnText}>Compartir</Text></TouchableOpacity>
+                      <TouchableOpacity style={styles.miniDangerBtn} onPress={() => { Alert.alert("Eliminar PDF", `¿Eliminar el PDF de la orden ${item.orderId}?`, [{ text: "Cancelar", style: "cancel" }, { text: "Eliminar", style: "destructive", onPress: async () => { await deletePdfItem(item, PENDING_PDFS_INDEX_KEY); await loadFailedPdfs(); } }]); }}><Ionicons name="trash-outline" size={16} color={FIORI.danger} style={{ marginRight: 5 }} /><Text style={styles.miniDangerBtnText}>Eliminar</Text></TouchableOpacity>
+                    </View>
+                  </View>
+                ))
+              )}
+            </ScrollView>
+            <View style={styles.modalActionsRow}>
+              <TouchableOpacity style={styles.modalActionBtn} onPress={() => setShowFailedPdfsModal(false)}><Text style={styles.modalActionBtnText}>Cerrar</Text></TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* MODAL: RESUMEN DE ENVÍO */}
+      <Modal visible={showSendSummaryModal} transparent animationType="slide" onRequestClose={() => setShowSendSummaryModal(false)}>
+        <View style={styles.modalBackdrop}>
+          <View style={[styles.modalCardLarge, { maxHeight: "88%" }]}>
+            <Text style={styles.modalTitle}>{lastSendSummary.some((r) => !r.ok) ? "Envío con detalles" : "Envío completado"}</Text>
+            <Text style={styles.modalSub}>Correctas: {lastSendSummary.filter((r) => r.ok).length} · Con error: {lastSendSummary.filter((r) => !r.ok).length}</Text>
+            <ScrollView style={{ marginTop: 12, maxHeight: 460 }}>
+              {lastSendSummary.map((item) => (
+                <View key={`${item.orderId}-${item.ok ? "ok" : "fail"}`} style={styles.resultCard}>
+                  <View style={styles.resultHeader}><Text style={styles.resultTitle}>Orden #{item.orderId}</Text><View style={[styles.resultBadge, item.ok ? styles.resultBadgeOk : styles.resultBadgeError]}><Text style={[styles.resultBadgeText, { color: item.ok ? FIORI.ok : FIORI.danger }]}>{item.ok ? "ENVIADA" : "NO ENVIADA"}</Text></View></View>
+                  <Text style={styles.previewOrderText}>{item.msg}</Text>
+                  {!!item.fileName && <Text style={styles.previewOrderText}>PDF: {item.fileName}</Text>}
+                  {!!item.uri && <TouchableOpacity style={styles.miniPrimaryBtn} onPress={() => sharePdfItem(item)}><Ionicons name="share-social-outline" size={16} color="#fff" style={{ marginRight: 5 }} /><Text style={styles.miniPrimaryBtnText}>Compartir PDF</Text></TouchableOpacity>}
+                </View>
+              ))}
+            </ScrollView>
+            <View style={styles.modalActionsRow}>
+              <TouchableOpacity style={styles.modalActionBtn} onPress={() => setShowSendSummaryModal(false)}><Text style={styles.modalActionBtnText}>Cerrar</Text></TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* MODAL: ESTADO ENVIANDO (SPINNER) */}
+      <Modal visible={sending} transparent animationType="fade" statusBarTranslucent>
         <View style={styles.blockBackdrop}>
           <View style={styles.blockCard}>
             <ActivityIndicator size="large" color={FIORI.accent} />
-            <Text style={styles.blockTitle}>
-              Enviando a SAP… ({sendProgress.done}/{sendProgress.total})
-            </Text>
-            <Text style={styles.blockSub}>
-              Orden actual:{" "}
-              <Text style={{ fontWeight: "900" }}>
-                {sendProgress.current || "—"}
-              </Text>
-            </Text>
-
-            {!!sendResults?.length && (
-              <View style={{ marginTop: 10, width: "100%" }}>
-                {sendResults.slice(-3).map((r) => (
-                  <Text
-                    key={`${r.orderId}-${r.ok ? "ok" : "fail"}`}
-                    style={{
-                      fontSize: 12,
-                      color: r.ok ? FIORI.ok : FIORI.danger,
-                      marginTop: 4,
-                    }}
-                  >
-                    {r.ok ? "✅" : "❌"} {r.orderId}: {r.msg}
-                  </Text>
-                ))}
-              </View>
-            )}
+            <Text style={styles.blockTitle}>Enviando a SAP… ({sendProgress.done}/{sendProgress.total})</Text>
+            <Text style={styles.blockSub}>Actual: <Text style={{ fontWeight: "900" }}>{sendProgress.current || "—"}</Text></Text>
           </View>
         </View>
       </Modal>
+
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: FIORI.pageBg },
-
-  filtersWrap: {
-    paddingHorizontal: 16,
-    paddingTop: 10,
-    paddingBottom: 12,
-    backgroundColor: FIORI.cardBg,
-    borderBottomColor: FIORI.border,
-    borderBottomWidth: 1,
-    ...Platform.select({
-      ios: {
-        shadowColor: "#000",
-        shadowOpacity: 0.03,
-        shadowRadius: 6,
-        shadowOffset: { width: 0, height: 2 },
-      },
-      android: { elevation: 1 },
-    }),
-  },
-
+  topPanel: { backgroundColor: FIORI.cardBg, paddingHorizontal: 14, paddingTop: 10, paddingBottom: 10, borderBottomWidth: 1, borderBottomColor: FIORI.border },
   searchRow: { flexDirection: "row", alignItems: "center", gap: 10 },
-  searchInput: {
-    flex: 1,
-    backgroundColor: FIORI.cardSubtle,
+  searchBox: { flex: 1, minHeight: 44, borderRadius: 14, backgroundColor: FIORI.cardSubtle, borderWidth: 1, borderColor: FIORI.border, paddingHorizontal: 12, flexDirection: "row", alignItems: "center", gap: 8 },
+  searchInput: { flex: 1, fontSize: 14, color: FIORI.ink, paddingVertical: Platform.OS === "ios" ? 10 : 7 },
+  selectBtn: { minHeight: 44, borderRadius: 14, paddingHorizontal: 12, flexDirection: "row", alignItems: "center", gap: 6 },
+  selectBtnActive: { backgroundColor: FIORI.accent },
+  selectBtnCancel: { backgroundColor: FIORI.danger },
+  selectBtnText: { color: "#fff", fontWeight: "900", fontSize: 13 },
+  historyRow: { flexDirection: 'row', gap: 10, marginTop: 12, paddingBottom: 4 },
+  historyBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: FIORI.cardSubtle, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10, borderWidth: 1, borderColor: FIORI.border },
+  historyBtnText: { fontSize: 12, fontWeight: '800', color: FIORI.ink },
+  filtersScroll: { gap: 8, paddingTop: 10, paddingRight: 12 },
+  chip: { borderWidth: 1, borderColor: FIORI.border, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 7, backgroundColor: FIORI.cardBg },
+  chipActive: { backgroundColor: FIORI.accent, borderColor: FIORI.accent },
+  chipText: { color: FIORI.ink, fontWeight: "700", fontSize: 12 },
+  chipTextActive: { color: "#fff" },
+  clearChip: { borderWidth: 1, borderColor: FIORI.border, backgroundColor: FIORI.neutralBtn, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 7 },
+  clearChipText: { color: FIORI.ink, fontWeight: "700", fontSize: 12 },
+  reloadChip: { flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: FIORI.accent, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 7 },
+  reloadChipText: { color: "#fff", fontWeight: "800", fontSize: 12 },
+  loadingWrap: { paddingTop: 28, alignItems: "center" },
+  loadingText: { marginTop: 10, color: FIORI.textMuted, fontWeight: "700" },
+  emptyBox: { marginTop: 28, alignItems: "center", padding: 20 },
+  emptyTitle: { marginTop: 8, color: FIORI.ink, fontSize: 16, fontWeight: "900" },
+  emptySub: { marginTop: 4, color: FIORI.textMuted, textAlign: "center", fontSize: 13 },
+  cbBox: { width: 20, height: 20, borderRadius: 6, borderWidth: 2, borderColor: FIORI.warn, backgroundColor: "#fff", alignItems: "center", justifyContent: "center" },
+  cbBoxChecked: { backgroundColor: FIORI.warn },
+  wizardBar: { position: "absolute", left: 0, right: 0, bottom: 0, backgroundColor: FIORI.cardBg, borderTopWidth: 1, borderTopColor: FIORI.border, paddingHorizontal: 14, paddingTop: 12, paddingBottom: Platform.OS === "ios" ? 24 : 14 },
+  wizardHeaderCompact: { marginBottom: 8 },
+  wizardHeaderTextBox: { width: "100%" },
+  wizardTitle: { color: FIORI.ink, fontSize: 15, fontWeight: "900" },
+  wizardSub: { color: FIORI.textMuted, fontSize: 12, marginTop: 2, fontWeight: "700" },
+  wizardTinyInfo: { color: FIORI.textMuted, fontSize: 11, marginTop: 2, fontWeight: "700" },
+  wizardStepsRow: { flexDirection: "row", gap: 8 },
+  stepButton: { flex: 1, minHeight: 44, borderRadius: 13, alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 6 },
+  stepButtonActive: { backgroundColor: FIORI.accent },
+  stepButtonSuccess: { backgroundColor: FIORI.successDark },
+  stepButtonDisabled: { backgroundColor: "#9AA5B1" },
+  stepButtonText: { color: "#fff", fontSize: 12, fontWeight: "900" },
+  wizardStatusBox: { marginTop: 9, backgroundColor: FIORI.cardSubtle, borderWidth: 1, borderColor: FIORI.border, borderRadius: 12, paddingHorizontal: 10, paddingVertical: 8 },
+  wizardStatusText: { color: FIORI.textMuted, fontSize: 12, fontWeight: "700" },
+  modalBackdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.45)", alignItems: "center", justifyContent: "center", padding: 16 },
+  modalCard: { width: "100%", maxWidth: 420, backgroundColor: FIORI.cardBg, borderRadius: 16, padding: 14, borderWidth: 1, borderColor: FIORI.border },
+  modalCardLarge: { width: "100%", maxWidth: 560, backgroundColor: FIORI.cardBg, borderRadius: 16, padding: 14, borderWidth: 1, borderColor: FIORI.border },
+  modalHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 10 },
+  modalHeaderTitle: { fontSize: 18, fontWeight: "900", color: FIORI.ink },
+  modalHeaderBtn: { fontSize: 24, fontWeight: "900", color: FIORI.accent, paddingHorizontal: 12 },
+  modalTitle: { color: FIORI.ink, fontSize: 18, fontWeight: "900" },
+  modalSub: { marginTop: 6, color: FIORI.textMuted, fontSize: 13, fontWeight: "700" },
+  modalActionsRow: { flexDirection: "row", justifyContent: "flex-end", gap: 10, flexWrap: "wrap", marginTop: 14 },
+  modalActionBtn: { backgroundColor: FIORI.accent, borderRadius: 10, paddingHorizontal: 13, paddingVertical: 10, flexDirection: "row", alignItems: "center" },
+  modalActionBtnText: { color: "#fff", fontWeight: "900" },
+  modalSecondaryBtn: { backgroundColor: FIORI.cardSubtle, borderRadius: 10, paddingHorizontal: 13, paddingVertical: 10, borderWidth: 1, borderColor: FIORI.border, flexDirection: "row", alignItems: "center" },
+  modalSecondaryBtnText: { color: FIORI.ink, fontWeight: "900" },
+  modalPrimaryBtn: { marginTop: 12, alignSelf: "flex-end", backgroundColor: FIORI.accent, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 9 },
+  modalPrimaryBtnText: { color: "#fff", fontWeight: "900" },
+  monthGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8, justifyContent: "space-between" },
+  monthCell: { width: "31.5%", backgroundColor: FIORI.cardSubtle, borderRadius: 10, paddingVertical: 12, alignItems: "center", marginBottom: 8, borderWidth: 1, borderColor: FIORI.border },
+  monthCellActive: { backgroundColor: FIORI.accent, borderColor: FIORI.accent },
+  monthCellText: { color: FIORI.ink, fontWeight: "700" },
+  monthCellTextActive: { color: "#fff" },
+  yearItem: { paddingVertical: 10, paddingHorizontal: 8, borderRadius: 10, marginBottom: 6, backgroundColor: FIORI.cardSubtle, borderWidth: 1, borderColor: FIORI.border },
+  yearItemActive: { backgroundColor: FIORI.accent, borderColor: FIORI.accent },
+  yearItemText: { fontSize: 16, color: FIORI.ink, fontWeight: "700" },
+  yearItemTextActive: { color: "#fff" },
+  resultCard: { backgroundColor: FIORI.cardSubtle, borderWidth: 1, borderColor: FIORI.border, borderRadius: 14, padding: 12, marginBottom: 10 },
+  resultHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", gap: 8 },
+  resultTitle: { color: FIORI.ink, fontSize: 15, fontWeight: "900", flex: 1 },
+  resultBadge: { borderRadius: 999, paddingHorizontal: 10, paddingVertical: 5, borderWidth: 1 },
+  resultBadgeOk: { backgroundColor: "#EAF8F0", borderColor: "#BDE8D0" },
+  resultBadgeError: { backgroundColor: "#FFF0F0", borderColor: "#F5C2C2" },
+  resultBadgeText: { fontSize: 11, fontWeight: "900" },
+  previewOrderText: { color: FIORI.textMuted, fontSize: 13, marginTop: 4, fontWeight: "700" },
+  formSection: { backgroundColor: FIORI.cardSubtle, borderWidth: 1, borderColor: FIORI.border, borderRadius: 14, padding: 12, marginBottom: 12 },
+  formSectionTitle: { color: FIORI.ink, fontSize: 14, fontWeight: "900", marginBottom: 10 },
+  inputGroup: { marginBottom: 12 },
+  inputLabel: { color: FIORI.textMuted, fontSize: 12, fontWeight: "900", marginBottom: 6 },
+  formInput: { backgroundColor: "#fff", borderRadius: 12, borderWidth: 1, borderColor: FIORI.border, paddingHorizontal: 12, paddingVertical: Platform.OS === "ios" ? 11 : 8, fontSize: 14, color: FIORI.ink },
+  inputError: { borderColor: FIORI.danger },
+  textAreaInput: { minHeight: 92, textAlignVertical: "top", paddingTop: 10 },
+  signatureStatusBox: { backgroundColor: "#fff", borderRadius: 12, borderWidth: 1, borderColor: FIORI.border, padding: 12, flexDirection: "row", gap: 10, alignItems: "center" },
+  signatureStatusTitle: { color: FIORI.ink, fontSize: 14, fontWeight: "900" },
+  signatureWrap: { height: 300, marginTop: 14, borderRadius: 14, overflow: "hidden", backgroundColor: "#fff", borderWidth: 1, borderColor: FIORI.border },
+  cardActionsRow: { flexDirection: "row", justifyContent: "flex-end", gap: 8, flexWrap: "wrap", marginTop: 10 },
+  miniPrimaryBtn: { marginTop: 10, alignSelf: "flex-start", backgroundColor: FIORI.accent, borderRadius: 9, paddingHorizontal: 10, paddingVertical: 8, flexDirection: "row", alignItems: "center" },
+  miniPrimaryBtnText: { color: "#fff", fontWeight: "900", fontSize: 12 },
+  miniDangerBtn: { marginTop: 10, alignSelf: "flex-start", backgroundColor: "#FFF0F0", borderRadius: 9, paddingHorizontal: 10, paddingVertical: 8, flexDirection: "row", alignItems: "center", borderWidth: 1, borderColor: "#F5C2C2" },
+  miniDangerBtnText: { color: FIORI.danger, fontWeight: "900", fontSize: 12 },
+  emptyMiniBox: { alignItems: "center", paddingVertical: 28 },
+  emptyMiniTitle: { marginTop: 8, color: FIORI.textMuted, fontSize: 14, fontWeight: "800", textAlign: "center" },
+  blockBackdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.35)", alignItems: "center", justifyContent: "center", padding: 20 },
+  blockCard: { width: "92%", maxWidth: 420, backgroundColor: "#fff", borderRadius: 16, padding: 18, alignItems: "center" },
+  blockTitle: { marginTop: 12, color: FIORI.ink, fontWeight: "900" },
+  blockSub: { marginTop: 6, color: FIORI.textMuted, textAlign: "center", fontSize: 12 },
+  cleanOrderCard: {
+    backgroundColor: "#FFFFFF",
     borderRadius: 12,
-    paddingHorizontal: 12,
-    paddingVertical: Platform.OS === "ios" ? 10 : 8,
-    fontSize: 14,
-    color: FIORI.ink,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    marginBottom: 7,
     borderWidth: 1,
     borderColor: FIORI.border,
   },
-
-  actionBtn: {
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderRadius: 10,
+  cleanOrderCardSelected: {
+    backgroundColor: "#F8FBFF",
+    borderColor: FIORI.accent,
+  },
+  cleanOrderCardValidated: {
+    borderColor: "#BDE8D0",
+  },
+  cleanOrderTop: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+  },
+  cleanOrderLeft: {
+    width: 22,
+    alignItems: "center",
+    paddingTop: 5,
+  },
+  cleanStatusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 99,
+    backgroundColor: FIORI.warn,
+  },
+  cleanOrderContent: {
+    flex: 1,
+  },
+  cleanEquipmentRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
+    marginBottom: 3,
+  },
+  cleanEquipmentText: {
+    flex: 1,
+    color: FIORI.ink,
+    fontSize: 15,
+    fontWeight: "900",
+    letterSpacing: -0.1,
+  },
+  cleanMetaRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    marginTop: 3,
+  },
+  cleanMetaText: {
+    flex: 1,
+    color: FIORI.textMuted,
+    fontSize: 11,
+    fontWeight: "700",
+  },
+  cleanDateText: {
+    flex: 1,
+    color: FIORI.ink,
+    fontSize: 11.5,
+    fontWeight: "800",
+  },
+  cleanClientText: {
+    flex: 1,
+    color: "#7A869A",
+    fontSize: 10.5,
+    fontWeight: "700",
+  },
+  monthGroupHeader: {
+    marginTop: 8,
+    marginBottom: 6,
+    paddingHorizontal: 2,
     flexDirection: "row",
     alignItems: "center",
   },
-  actionBtnPrimary: { backgroundColor: FIORI.accent },
-  actionBtnDanger: { backgroundColor: FIORI.danger },
-  actionBtnText: { color: "#fff", fontWeight: "900" },
-
-  chipsRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 10 },
-  chip: {
-    borderWidth: 1,
-    borderColor: FIORI.border,
-    borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    backgroundColor: FIORI.cardBg,
+  monthGroupTitle: {
+    color: FIORI.ink,
+    fontSize: 15,
+    fontWeight: "900",
+    letterSpacing: 0.3,
   },
-  chipActive: { backgroundColor: FIORI.accent, borderColor: FIORI.accent },
-  chipText: { color: FIORI.ink, fontWeight: "600" },
-  chipTextActive: { color: "#fff" },
-
-  clearBtn: {
-    backgroundColor: FIORI.neutralBtn,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: FIORI.border,
-  },
-  clearBtnText: { color: FIORI.ink, fontWeight: "600" },
-
-  refreshBtn: {
-    backgroundColor: FIORI.accent,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 10,
-  },
-  refreshBtnText: { color: "#fff", fontWeight: "700" },
-
-  activeRangeText: { marginTop: 8, color: FIORI.textMuted, fontSize: 12 },
-  hint: { marginTop: 10, color: FIORI.textMuted, fontSize: 12 },
-
-  rangeButtonsRow: { flexDirection: "row", gap: 10, marginTop: 10 },
-
-  card: {
-    backgroundColor: FIORI.cardBg,
-    borderRadius: 12,
-    padding: 14,
-    marginBottom: 14,
-    borderWidth: 1,
-    borderColor: FIORI.border,
-    shadowColor: "#000",
-    shadowOpacity: 0.06,
-    shadowOffset: { width: 0, height: 2 },
-    shadowRadius: 6,
-    elevation: 2,
-  },
-
-  cardTopRow: { flexDirection: "row", alignItems: "flex-start", gap: 10 },
-  statusDot: { width: 12, height: 12, borderRadius: 6, marginTop: 3 },
-
-  title: { fontWeight: "900", fontSize: 16, color: FIORI.ink, marginBottom: 2 },
-  label: { fontSize: 14, color: FIORI.textMuted },
-
-  pill: {
-    backgroundColor: "#EAF3FF",
-    borderWidth: 1,
-    borderColor: "#CFE2FF",
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 999,
-  },
-  pillText: { fontSize: 12, fontWeight: "900", color: FIORI.ink },
-
-  cbBox: {
-    width: 22,
-    height: 22,
-    borderRadius: 6,
-    borderWidth: 2,
-    borderColor: FIORI.warn,
-    backgroundColor: "#fff",
+  clientGroupHeader: {
+    flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
+    gap: 8,
+    backgroundColor: "#EEF6FF",
+    borderWidth: 1,
+    borderColor: "#D8E9FA",
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    marginBottom: 7,
     marginTop: 2,
   },
-  cbBoxChecked: { backgroundColor: FIORI.warn },
-
-  bottomBar: {
-    position: "absolute",
-    left: 0,
-    right: 0,
-    bottom: 0,
-    padding: 14,
-    backgroundColor: FIORI.cardBg,
-    borderTopWidth: 1,
-    borderTopColor: FIORI.border,
-  },
-  bottomBtn: {
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderRadius: 10,
-    flexDirection: "row",
+  clientIconBox: {
+    width: 26,
+    height: 26,
+    borderRadius: 9,
+    backgroundColor: "#FFFFFF",
     alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: "#D8E9FA",
   },
-  bottomBtnText: { fontWeight: "900" },
-
-  emailInput: {
-    backgroundColor: FIORI.cardSubtle,
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    paddingVertical: Platform.OS === "ios" ? 10 : 8,
-    fontSize: 14,
+  clientGroupTitle: {
     color: FIORI.ink,
-    borderWidth: 1,
-    borderColor: FIORI.border,
-  },
-
-  modalBackdrop: {
-    flex: 1,
-    backgroundColor: "rgba(0,0,0,0.45)",
-    alignItems: "center",
-    justifyContent: "center",
-    padding: 16,
-  },
-
-  modalCard: {
-    width: "100%",
-    maxWidth: 420,
-    backgroundColor: FIORI.cardBg,
-    borderRadius: 14,
-    padding: 14,
-    borderWidth: 1,
-    borderColor: FIORI.border,
-  },
-
-  modalHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginBottom: 10,
-  },
-  modalHeaderTitle: { fontSize: 18, fontWeight: "700", color: FIORI.ink },
-  modalHeaderBtn: {
-    fontSize: 22,
-    fontWeight: "900",
-    color: FIORI.accent,
-    paddingHorizontal: 12,
-  },
-
-  modalTitle: { fontSize: 18, fontWeight: "900", color: FIORI.ink },
-  modalSub: { marginTop: 6, color: FIORI.textMuted },
-
-  signatureWrap: {
-    height: 260,
-    marginTop: 12,
-    borderRadius: 12,
-    overflow: "hidden",
-    backgroundColor: "#fff",
-  },
-
-  smallBtn: {
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    borderRadius: 8,
-    backgroundColor: FIORI.cardSubtle,
-    borderWidth: 1,
-    borderColor: FIORI.border,
-    marginTop: 12,
-    flexDirection: "row",
-    alignItems: "center",
-  },
-  smallBtnText: { color: FIORI.ink, fontWeight: "600" },
-
-  monthGrid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 8,
-    justifyContent: "space-between",
-  },
-  monthCell: {
-    width: "31.5%",
-    backgroundColor: FIORI.cardSubtle,
-    borderRadius: 10,
-    paddingVertical: 12,
-    alignItems: "center",
-    marginBottom: 8,
-    borderWidth: 1,
-    borderColor: FIORI.border,
-  },
-  monthCellActive: { backgroundColor: FIORI.accent, borderColor: FIORI.accent },
-  monthCellText: { color: FIORI.ink, fontWeight: "600" },
-  monthCellTextActive: { color: "#fff" },
-
-  modalClose: {
-    marginTop: 10,
-    alignSelf: "flex-end",
-    backgroundColor: FIORI.accent,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 8,
-  },
-  modalCloseText: { color: "#fff", fontWeight: "700" },
-
-  yearItem: {
-    paddingVertical: 10,
-    paddingHorizontal: 8,
-    borderRadius: 8,
-    marginBottom: 6,
-    backgroundColor: FIORI.cardSubtle,
-    borderWidth: 1,
-    borderColor: FIORI.border,
-  },
-  yearItemActive: { backgroundColor: FIORI.accent, borderColor: FIORI.accent },
-  yearItemText: { fontSize: 16, color: FIORI.ink, fontWeight: "600" },
-  yearItemTextActive: { color: "#fff" },
-
-  blockBackdrop: {
-    flex: 1,
-    backgroundColor: "rgba(0,0,0,0.35)",
-    alignItems: "center",
-    justifyContent: "center",
-    padding: 20,
-  },
-  blockCard: {
-    width: "92%",
-    maxWidth: 420,
-    backgroundColor: "#fff",
-    borderRadius: 14,
-    padding: 16,
-    alignItems: "center",
-  },
-  blockTitle: { marginTop: 10, fontWeight: "900", color: FIORI.ink },
-  blockSub: {
-    marginTop: 6,
-    color: FIORI.textMuted,
-    textAlign: "center",
     fontSize: 12,
-  },
-  previewOrderCard: {
-    backgroundColor: FIORI.cardSubtle,
-    borderWidth: 1,
-    borderColor: FIORI.border,
-    borderRadius: 12,
-    padding: 12,
-    marginBottom: 10,
-  },
-
-  previewOrderTitle: {
-    color: FIORI.ink,
-    fontSize: 16,
     fontWeight: "900",
-    marginBottom: 6,
   },
-
-  previewOrderText: {
+  clientGroupSub: {
     color: FIORI.textMuted,
-    fontSize: 13,
-    marginTop: 3,
+    fontSize: 10,
+    fontWeight: "700",
+    marginTop: 1,
   },
 });

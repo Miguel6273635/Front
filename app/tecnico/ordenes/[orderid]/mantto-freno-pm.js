@@ -1,704 +1,2389 @@
-// app/tecnico/ordenes/[orderid]/mantto-freno-pm.js
-import React, { useEffect, useMemo, useState, useCallback } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, ScrollView, ActivityIndicator, Alert, Image, Switch } from 'react-native';
-import { useLocalSearchParams, router } from 'expo-router';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as ImagePicker from 'expo-image-picker';
-import Header from '../../../../src/components/Header';
-import api from '../../../../src/services/api';
+// app/tecnico/ordenes/[orderid]/mantto-freno-em-eh.js
+// Diseño moderno tipo wizard para Mantenimiento Freno EM/EH
+// Sin validaciones bloqueantes para poder visualizar el PDF.
 
-// —— UI utilitaria ——
-const Section = ({ children }) => <Text style={styles.section}>{children}</Text>;
-const Card = ({ children, style }) => <View style={[styles.card, style]}>{children}</View>;
-const Label = ({ children, style }) => <Text style={[styles.label, style]}>{children}</Text>;
-const Input = (props) => <TextInput {...props} style={[styles.input, props.style]} />;
-const Readonly = ({ children }) => (<View style={styles.readonly}><Text style={styles.readonlyText}>{String(children ?? '—')}</Text></View>);
-const Row2 = ({ children }) => <View style={styles.row2}>{children}</View>;
-const Col = ({ children, min = 220 }) => <View style={[styles.col, { minWidth: min }]}>{children}</View>;
-const Chips = ({ options, value, onChange }) => (
-  <View style={styles.chipsWrap}>
-    {options.map(opt => {
-      const active = value === opt;
-      return (
-        <TouchableOpacity key={opt} style={[styles.chip, active && styles.chipOn]} onPress={() => onChange(opt)}>
-          <Text style={[styles.chipText, active && styles.chipTextOn]}>{opt}</Text>
-        </TouchableOpacity>
-      );
-    })}
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  View,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  StyleSheet,
+  ScrollView,
+  ActivityIndicator,
+  Alert,
+  Switch,
+  Modal,
+  Platform,
+} from "react-native";
+import { WebView } from "react-native-webview";
+import { useLocalSearchParams } from "expo-router";
+import * as Print from "expo-print";
+import * as Sharing from "expo-sharing";
+import * as FileSystem from "expo-file-system/legacy";
+import * as ImagePicker from "expo-image-picker";
+
+import Header from "../../../../src/components/Header";
+import api from "../../../../src/services/api";
+import { useAuth } from "../../../../src/context/AuthContext";
+import { buildManttoFrenoEmEhHtml } from "../../../../src/services/templates/mantto_freno_em_eh/buildManttoFrenoEmEhHtml";
+
+const UI = {
+  bg: "#EEF3F8",
+  card: "#FFFFFF",
+  cardSoft: "#F8FAFC",
+  border: "#DDE6F0",
+  borderDark: "#CBD5E1",
+  text: "#0F172A",
+  muted: "#64748B",
+  muted2: "#94A3B8",
+  blue: "#0B2E6D",
+  blue2: "#2563EB",
+  blueSoft: "#EAF1FF",
+  green: "#16A34A",
+  greenSoft: "#DCFCE7",
+  yellow: "#F59E0B",
+  yellowSoft: "#FEF3C7",
+  red: "#DC2626",
+  redSoft: "#FEE2E2",
+};
+
+const STEPS = [
+  { key: "general", title: "General", short: "Orden" },
+  { key: "revision1", title: "Revisión 1", short: "Pines / Torque" },
+  { key: "revision2", title: "Revisión 2", short: "Resorte / Émbolo" },
+  { key: "revision3", title: "Revisión 3", short: "Brazo / Tambor" },
+  { key: "fotos", title: "Fotos", short: "Evidencia" },
+  { key: "resultado", title: "Resultado", short: "Cierre" },
+];
+
+const safeStr = (v) => String(v ?? "").trim();
+
+function getUserName(user) {
+  return safeStr(
+    user?.nombre ||
+      user?.name ||
+      user?.fullName ||
+      user?.displayName ||
+      user?.username ||
+      user?.correo ||
+      user?.email ||
+      ""
+  );
+}
+
+function fmtDate(value) {
+  if (!value) return "";
+  if (typeof value === "string" && value.includes("/")) return value;
+
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return safeStr(value);
+
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const yyyy = d.getFullYear();
+
+  return `${dd}/${mm}/${yyyy}`;
+}
+
+function createDefaultForm(orderid = "") {
+  return {
+    orderid,
+    tipo_reporte: "overhaul",
+    tipo_mt: "",
+    velocidad_nominal: "",
+    capacidad: "",
+    fecha: "",
+    hora_inicio: "",
+    hora_fin: "",
+
+    pines_levas: {
+      kitLubricacion: {
+        oxido_antes: false,
+        oxido_despues: false,
+        lubricacion_antes: "bien",
+        lubricacion_despues: "bien",
+      },
+      kitLibre: {
+        giro_antes: "bien",
+        giro_despues: "bien",
+        cubierta_antes: false,
+        cubierta_despues: false,
+      },
+      revisado: true,
+      revision_sma: "Ok",
+    },
+
+    torque: {
+      medicion1_antes: "",
+      medicion1_despues: "",
+      medicion2_antes: "",
+      medicion2_despues: "",
+      medicion3_antes: "",
+      medicion3_despues: "",
+      promedio_antes: "",
+      promedio_despues: "",
+      estado_antes: "bien",
+      estado_despues: "bien",
+      revisado: true,
+      revision_sma: "Ok",
+    },
+
+    resorte: {
+      izq_mm_antes: "",
+      izq_pct_antes: "",
+      izq_mm_despues: "",
+      izq_pct_despues: "",
+      der_mm_antes: "",
+      der_pct_antes: "",
+      der_mm_despues: "",
+      der_pct_despues: "",
+      estado_antes: "bien",
+      estado_despues: "bien",
+      revisado: true,
+      revision_sma: "Ok",
+    },
+
+    embolo: {
+      recorrido_izq_antes: "",
+      recorrido_izq_despues: "",
+      recorrido_der_antes: "",
+      recorrido_der_despues: "",
+      desgaste_antes: false,
+      desgaste_despues: false,
+      oxido_antes: false,
+      oxido_despues: false,
+      lubricacion_antes: "bien",
+      lubricacion_despues: "bien",
+      arandela_antes: "",
+      arandela_despues: "",
+      revisado: true,
+      revision_sma: "Ok",
+    },
+
+    contacto: {
+      izq_antes: "",
+      izq_despues: "",
+      der_antes: "",
+      der_despues: "",
+      punto_antes: "bien",
+      punto_despues: "bien",
+      revisado: true,
+      revision_sma: "Ok",
+    },
+
+    brazo: {
+      desgaste_izq_antes: false,
+      desgaste_izq_despues: false,
+      desgaste_der_antes: false,
+      desgaste_der_despues: false,
+      oxido_izq_antes: false,
+      oxido_izq_despues: false,
+      oxido_der_antes: false,
+      oxido_der_despues: false,
+      lubricacion_izq_antes: "bien",
+      lubricacion_izq_despues: "bien",
+      lubricacion_der_antes: "bien",
+      lubricacion_der_despues: "bien",
+      revisado: true,
+      revision_sma: "Ok",
+    },
+
+    tambor: {
+      desgaste_antes: false,
+      desgaste_despues: false,
+      aceite_antes: false,
+      aceite_despues: false,
+      oxido_antes: false,
+      oxido_despues: false,
+      revisado: true,
+      revision_sma: "Ok",
+    },
+
+    balatas: {
+      izquierdo_antes: false,
+      izquierdo_despues: false,
+      derecho_antes: false,
+      derecho_despues: false,
+      revisado: true,
+      revision_sma: "Ok",
+    },
+
+    operacion: {
+      antes: "bien",
+      despues: "bien",
+      revisado: true,
+      revision_sma: "Ok",
+    },
+
+    observaciones: "",
+    resultado_total: {
+      bien: true,
+      seguimiento: false,
+      detalle: "",
+    },
+
+    fotos: {
+      embolo_antes: "",
+      embolo_despues: "",
+      revestimiento_izq: "",
+      revestimiento_der: "",
+      brazo_izq_antes: "",
+      brazo_izq_despues: "",
+      brazo_der_antes: "",
+      brazo_der_despues: "",
+      otro_1_titulo: "",
+      otro_1_antes: "",
+      otro_1_despues: "",
+      otro_2_titulo: "",
+      otro_2_antes: "",
+      otro_2_despues: "",
+    },
+  };
+}
+
+const Label = ({ children, style }) => (
+  <Text style={[styles.label, style]}>{children}</Text>
+);
+
+const Input = ({ style, ...props }) => (
+  <TextInput
+    {...props}
+    placeholderTextColor={UI.muted2}
+    style={[styles.input, style]}
+  />
+);
+
+const Toggle = ({ value, onValueChange }) => (
+  <Switch
+    value={!!value}
+    onValueChange={onValueChange}
+    trackColor={{ false: "#CBD5E1", true: "#93C5FD" }}
+    thumbColor={value ? UI.blue : "#FFFFFF"}
+  />
+);
+
+const Chip = ({ active, children, onPress, tone = "blue" }) => {
+  const activeStyle =
+    tone === "green"
+      ? styles.chipGreen
+      : tone === "yellow"
+      ? styles.chipYellow
+      : tone === "red"
+      ? styles.chipRed
+      : styles.chipBlue;
+
+  return (
+    <TouchableOpacity
+      activeOpacity={0.86}
+      onPress={onPress}
+      style={[styles.chip, active && activeStyle]}
+    >
+      <Text style={[styles.chipText, active && styles.chipTextActive]}>
+        {children}
+      </Text>
+    </TouchableOpacity>
+  );
+};
+
+const InfoItem = ({ label, value }) => (
+  <View style={styles.infoItem}>
+    <Text style={styles.infoLabel}>{label}</Text>
+    <Text numberOfLines={2} style={styles.infoValue}>
+      {String(value || "—")}
+    </Text>
   </View>
 );
-const YN    = ({ value, onChange }) => <Chips options={['Si','No']} value={value} onChange={onChange} />;
-const BM    = ({ value, onChange }) => <Chips options={['Bien','Mal']} value={value} onChange={onChange} />;
-const OkSeg = ({ value, onChange }) => <Chips options={['Ok','Necesita Seguimiento']} value={value} onChange={onChange} />;
-const SiNoNa= ({ value, onChange }) => <Chips options={['Si','No','N/A']} value={value} onChange={onChange} />;
-const Toggle = ({ value, onValueChange }) => <Switch value={!!value} onValueChange={onValueChange} />;
 
-// —— Fotos —— (igual patrón que ya usas)
-function PhotoItem({ uri, note, onChangeNote, onRemove }) {
+const StatBox = ({ label, value, tone = "blue" }) => {
+  const boxStyle =
+    tone === "green"
+      ? styles.statGreen
+      : tone === "yellow"
+      ? styles.statYellow
+      : tone === "red"
+      ? styles.statRed
+      : styles.statBlue;
+
   return (
-    <View style={styles.photoItem}>
-      <Image source={{ uri }} style={styles.photoImg} />
-      <TextInput placeholder="Nota (opcional)" value={note} onChangeText={onChangeNote} style={styles.photoNote}/>
-      <TouchableOpacity onPress={onRemove} style={styles.photoRemove}><Text style={styles.photoRemoveText}>Eliminar</Text></TouchableOpacity>
+    <View style={[styles.statBox, boxStyle]}>
+      <Text style={styles.statValue}>{value}</Text>
+      <Text style={styles.statLabel}>{label}</Text>
+    </View>
+  );
+};
+
+function FieldRow({ children }) {
+  return <View style={styles.fieldRow}>{children}</View>;
+}
+
+function Field({ children, small = false, wide = false }) {
+  return (
+    <View
+      style={[styles.field, small && styles.fieldSmall, wide && styles.fieldWide]}
+    >
+      {children}
     </View>
   );
 }
-function PhotoBlock({ title, value, onChange }) {
-  const pick = async (momento) => {
-    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (perm.status !== 'granted') return Alert.alert('Permiso', 'Se requiere permiso para la galería.');
-    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 0.85 });
-    if (result.canceled) return;
-    const newUri = result.assets?.[0]?.uri; if (!newUri) return;
-    const arr = [...(value?.[momento] || [])]; arr.push({ uri: newUri, note: '' });
-    onChange({ ...(value || {}), [momento]: arr });
-  };
-  const removeAt = (momento, i) => { const arr = [...(value?.[momento] || [])]; arr.splice(i,1); onChange({ ...(value||{}), [momento]: arr }); };
-  const setNoteAt= (momento, i, t) => { const arr = [...(value?.[momento] || [])]; arr[i] = { ...(arr[i] || {}), note: t }; onChange({ ...(value||{}), [momento]: arr }); };
 
+function SectionBox({ title, subtitle, children }) {
   return (
-    <Card>
-      <Text style={styles.photoBlockTitle}>{title}</Text>
-      <View style={styles.photoColumns}>
-        {['antes','despues'].map(m => (
-          <View key={m} style={styles.photoCol}>
-            <View style={styles.photoColHeader}>
-              <Text style={styles.photoColTitle}>{m === 'antes' ? 'Antes' : 'Después'}</Text>
-              <TouchableOpacity onPress={() => pick(m)} style={styles.photoAdd}><Text style={styles.photoAddText}>+ Agregar</Text></TouchableOpacity>
-            </View>
-            <View style={styles.photoGrid}>
-              {(value?.[m] || []).map((p, i) => (
-                <PhotoItem key={`${m}-${i}-${p.uri}`} uri={p.uri} note={p.note} onChangeNote={(t)=>setNoteAt(m,i,t)} onRemove={()=>removeAt(m,i)} />
-              ))}
-            </View>
-          </View>
-        ))}
+    <View style={styles.sectionBox}>
+      <View style={styles.sectionTop}>
+        <Text style={styles.sectionTitle}>{title}</Text>
+        {!!subtitle && <Text style={styles.sectionSubtitle}>{subtitle}</Text>}
       </View>
-    </Card>
+
+      {children}
+    </View>
   );
 }
 
-export default function ManttoFrenoPmForm() {
+function BoolField({ label, value, onChange }) {
+  return (
+    <View style={styles.boolCard}>
+      <View style={{ flex: 1 }}>
+        <Text style={styles.boolTitle}>{label}</Text>
+        <Text style={styles.boolHint}>
+          {value ? "Marcado como Sí" : "Marcado como No"}
+        </Text>
+      </View>
+
+      <View style={styles.boolRight}>
+        <Text style={styles.boolValue}>{value ? "Sí" : "No"}</Text>
+        <Toggle value={value} onValueChange={onChange} />
+      </View>
+    </View>
+  );
+}
+
+function BienMalField({ label, value, onChange }) {
+  return (
+    <View style={styles.statusBlock}>
+      <Label>{label}</Label>
+
+      <View style={styles.chipsWrap}>
+        <Chip tone="green" active={value === "bien"} onPress={() => onChange("bien")}>
+          Bien
+        </Chip>
+
+        <Chip tone="red" active={value === "mal"} onPress={() => onChange("mal")}>
+          Mal
+        </Chip>
+      </View>
+    </View>
+  );
+}
+
+function PhotoField({ label, value, onCamera, onGallery, onRemove }) {
+  const hasPhoto = !!safeStr(value);
+
+  return (
+    <View style={[styles.photoField, hasPhoto && styles.photoFieldActive]}>
+      <View style={styles.photoIcon}>
+        <Text style={styles.photoIconText}>{hasPhoto ? "✓" : "+"}</Text>
+      </View>
+
+      <View style={{ flex: 1 }}>
+        <Text style={styles.photoLabel}>{label}</Text>
+        <Text style={[styles.photoStatus, hasPhoto && styles.photoStatusActive]}>
+          {hasPhoto ? "Foto agregada al reporte" : "Sin foto"}
+        </Text>
+      </View>
+
+      <View style={styles.photoActions}>
+        <TouchableOpacity style={styles.photoBtn} onPress={onCamera} activeOpacity={0.86}>
+          <Text style={styles.photoBtnText}>Cámara</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity style={styles.photoBtnLight} onPress={onGallery} activeOpacity={0.86}>
+          <Text style={styles.photoBtnLightText}>Galería</Text>
+        </TouchableOpacity>
+
+        {hasPhoto ? (
+          <TouchableOpacity style={styles.photoRemoveBtn} onPress={onRemove} activeOpacity={0.86}>
+            <Text style={styles.photoRemoveText}>Quitar</Text>
+          </TouchableOpacity>
+        ) : null}
+      </View>
+    </View>
+  );
+}
+
+export default function ManttoFrenoEmEhScreen() {
   const { orderid } = useLocalSearchParams();
+  const { user } = useAuth();
+
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [auto, setAuto] = useState(null);
+  const [orden, setOrden] = useState(null);
 
-  // Encabezado documento (MX/Equipo/Técnico/Fecha/Horario/Control/Tipo Máquina PM-*, Velocidad, Capacidad) — del formato oficial
-  const [mx, setMx] = useState('');
-  const [fecha, setFecha] = useState('');
-  const [horario, setHorario] = useState('');
-  const [control, setControl] = useState('');
-  const [tipoMaquinaSufijo, setTipoMaquinaSufijo] = useState(''); // PM-____
-  const [velNominal, setVelNominal] = useState('');
-  const [capacidadKg, setCapacidadKg] = useState('');
-  const [reporteTipo, setReporteTipo] = useState('revision'); // 'revision'|'overhaul'
-
-  // ===== 1) TORQUE ESTÁTICO =====
-  const [torqueE_valor, setTorqueE_valor] = useState('');
-  const [torqueE_a1, setTorqueE_a1] = useState(''); const [torqueE_d1, setTorqueE_d1] = useState('');
-  const [torqueE_a2, setTorqueE_a2] = useState(''); const [torqueE_d2, setTorqueE_d2] = useState('');
-  const [torqueE_a3, setTorqueE_a3] = useState(''); const [torqueE_d3, setTorqueE_d3] = useState('');
-  const torqueE_prom_a = useMemo(()=>promedio([torqueE_a1,torqueE_a2,torqueE_a3]),[torqueE_a1,torqueE_a2,torqueE_a3]);
-  const torqueE_prom_d = useMemo(()=>promedio([torqueE_d1,torqueE_d2,torqueE_d3]),[torqueE_d1,torqueE_d2,torqueE_d3]);
-  const [torqueE_estado_a, setTorqueE_estado_a] = useState(null);
-  const [torqueE_estado_d, setTorqueE_estado_d] = useState(null);
-  const [torqueE_revisado, setTorqueE_revisado] = useState(null);
-  const [torqueE_ajuste, setTorqueE_ajuste] = useState(null);
-  const [torqueE_revSMA, setTorqueE_revSMA] = useState(null);
-
-  // ===== 2) TORQUE DINÁMICO =====
-  const [torqueD_valor, setTorqueD_valor] = useState('');
-  const [torqueD_a1, setTorqueD_a1] = useState(''); const [torqueD_d1, setTorqueD_d1] = useState('');
-  const [torqueD_a2, setTorqueD_a2] = useState(''); const [torqueD_d2, setTorqueD_d2] = useState('');
-  const [torqueD_a3, setTorqueD_a3] = useState(''); const [torqueD_d3, setTorqueD_d3] = useState('');
-  const torqueD_prom_a = useMemo(()=>promedio([torqueD_a1,torqueD_a2,torqueD_a3]),[torqueD_a1,torqueD_a2,torqueD_a3]);
-  const torqueD_prom_d = useMemo(()=>promedio([torqueD_d1,torqueD_d2,torqueD_d3]),[torqueD_d1,torqueD_d2,torqueD_d3]);
-  const [torqueD_estado_a, setTorqueD_estado_a] = useState(null);
-  const [torqueD_estado_d, setTorqueD_estado_d] = useState(null);
-  const [torqueD_revisado, setTorqueD_revisado] = useState(null);
-  const [torqueD_ajuste, setTorqueD_ajuste] = useState(null);
-  const [torqueD_revSMA, setTorqueD_revSMA] = useState(null);
-
-  // ===== 3) TORNILLO DE AJUSTE DEL TORQUE (IZQ/DER) =====
-  const [tornillo_izq_a, setTornillo_izq_a] = useState(null);
-  const [tornillo_izq_d, setTornillo_izq_d] = useState(null);
-  const [tornillo_der_a, setTornillo_der_a] = useState(null);
-  const [tornillo_der_d, setTornillo_der_d] = useState(null);
-  const [tornillo_revisado, setTornillo_revisado] = useState(null);
-  const [tornillo_ajuste, setTornillo_ajuste] = useState(null);
-  const [tornillo_revSMA, setTornillo_revSMA] = useState(null);
-
-  // ===== 4) RECORRIDO DE BOBINA (IZQ/DER, mm) =====
-  const [bobina_izq_a, setBobina_izq_a] = useState(''); const [bobina_izq_d, setBobina_izq_d] = useState('');
-  const [bobina_der_a, setBobina_der_a] = useState(''); const [bobina_der_d, setBobina_der_d] = useState('');
-  const [bobina_revisado, setBobina_revisado] = useState(null);
-  const [bobina_ajuste, setBobina_ajuste] = useState(null);
-  const [bobina_revSMA, setBobina_revSMA] = useState(null);
-
-  // ===== 5) RECORRIDO DEL MICRO SWITCH (IZQ/DER) - Superior/Inferior Bien/Mal =====
-  const [ms_izq_sup_a, setMs_izq_sup_a] = useState(null);
-  const [ms_izq_inf_a, setMs_izq_inf_a] = useState(null);
-  const [ms_izq_sup_d, setMs_izq_sup_d] = useState(null);
-  const [ms_izq_inf_d, setMs_izq_inf_d] = useState(null);
-  const [ms_der_sup_a, setMs_der_sup_a] = useState(null);
-  const [ms_der_inf_a, setMs_der_inf_a] = useState(null);
-  const [ms_der_sup_d, setMs_der_sup_d] = useState(null);
-  const [ms_der_inf_d, setMs_der_inf_d] = useState(null);
-  const [ms_revisado, setMs_revisado] = useState(null);
-  const [ms_ajuste, setMs_ajuste] = useState(null);
-  const [ms_revSMA, setMs_revSMA] = useState(null);
-
-  // ===== 6) REVISAR FUNCIONAMIENTO DE MICRO SWITCH (IZQ Freno#1 / DER Freno#2) =====
-  const [ms_func_izq_a, setMs_func_izq_a] = useState(null);
-  const [ms_func_izq_d, setMs_func_izq_d] = useState(null);
-  const [ms_func_der_a, setMs_func_der_a] = useState(null);
-  const [ms_func_der_d, setMs_func_der_d] = useState(null);
-  const [ms_func_revisado, setMs_func_revisado] = useState(null);
-  const [ms_func_ajuste, setMs_func_ajuste] = useState(null);
-  const [ms_func_revSMA, setMs_func_revSMA] = useState(null);
-
-  // ===== 7) CONDICIONES DE TAMBOR (Lubricante/Plástico y Óxido) =====
-  const [tambor_lub_a, setTambor_lub_a] = useState(null);
-  const [tambor_lub_d, setTambor_lub_d] = useState(null);
-  const [tambor_ox_a, setTambor_ox_a] = useState(null);
-  const [tambor_ox_d, setTambor_ox_d] = useState(null);
-  const [tambor_revisado, setTambor_revisado] = useState(null);
-  const [tambor_ajuste, setTambor_ajuste] = useState(null);
-  const [tambor_revSMA, setTambor_revSMA] = useState(null);
-
-  // ===== 8) TUBO DE PLÁSTICO PARA DRENADO (Conexión Si/No; Depósito Si/No/N/A) =====
-  const [tubo_conexion_a, setTubo_conexion_a] = useState(null);
-  const [tubo_conexion_d, setTubo_conexion_d] = useState(null);
-  const [tubo_deposito_a, setTubo_deposito_a] = useState(null); // Si/No/N/A
-  const [tubo_deposito_d, setTubo_deposito_d] = useState(null);
-  const [tubo_revisado, setTubo_revisado] = useState(null);
-  const [tubo_ajuste, setTubo_ajuste] = useState(null);
-  const [tubo_revSMA, setTubo_revSMA] = useState(null);
-
-  // ===== 9) CONDICIÓN DE OPERACIÓN DEL FRENO – Prueba de funcionamiento (4 ruidos) =====
-  const [ruido_zapata_tambor_a, setR1a] = useState(null);
-  const [ruido_cubierta_cables_a, setR2a] = useState(null);
-  const [ruido_cubiertas_polea_a, setR3a] = useState(null);
-  const [ruido_excesivo_frenos_a, setR4a] = useState(null);
-  const [ruido_zapata_tambor_d, setR1d] = useState(null);
-  const [ruido_cubierta_cables_d, setR2d] = useState(null);
-  const [ruido_cubiertas_polea_d, setR3d] = useState(null);
-  const [ruido_excesivo_frenos_d, setR4d] = useState(null);
-  const [op_revisado, setOp_revisado] = useState(null);
-  const [op_revSMA, setOp_revSMA] = useState(null);
-
-  // ===== 10) RESULTADO =====
-  const [resultado, setResultado] = useState('bien'); // 'bien' | 'seguimiento'
-  const [detalle, setDetalle] = useState('');
-
-  // Firmas (texto/placeholder; la firma real suele ser canvas e imagen)
-  const [firmaMecanico, setFirmaMecanico] = useState(false);
-  const [firmaSupervisor, setFirmaSupervisor] = useState(false);
-  const [firmaGerente, setFirmaGerente] = useState(false);
-
-  // ===== Fotos 2ª página =====
-  const [photos, setPhotos] = useState({
-    vista_izquierda: {},
-    vista_derecha: {},
-    otro_1: {},
-    otro_2: {}
+  const [auto, setAuto] = useState({
+    orden: "",
+    cliente: "",
+    equipo: "",
+    tecnico_nombre: "",
+    start_date: "",
   });
-  const updPhoto = (k, v) => setPhotos(s => ({ ...s, [k]: v }));
 
-  // Fecha por defecto
-  useEffect(() => {
-    const d = new Date();
-    setFecha(`${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${d.getFullYear()}`);
-  }, []);
+  const [form, setForm] = useState(() => createDefaultForm(""));
+  const [activeStep, setActiveStep] = useState(0);
 
-  const load = useCallback(async () => {
+  const [previewVisible, setPreviewVisible] = useState(false);
+  const [previewHtml, setPreviewHtml] = useState("");
+  const [pdfUri, setPdfUri] = useState(null);
+  const [generatingPdf, setGeneratingPdf] = useState(false);
+
+  const patchForm = (patch) => {
+    setPdfUri(null);
+    setForm((s) => ({ ...s, ...patch }));
+  };
+
+  const patchSection = (section, patch) => {
+    setPdfUri(null);
+    setForm((s) => ({
+      ...s,
+      [section]: {
+        ...(s[section] || {}),
+        ...patch,
+      },
+    }));
+  };
+
+  const patchNested = (section, group, patch) => {
+    setPdfUri(null);
+    setForm((s) => ({
+      ...s,
+      [section]: {
+        ...(s[section] || {}),
+        [group]: {
+          ...(s[section]?.[group] || {}),
+          ...patch,
+        },
+      },
+    }));
+  };
+
+  const setFoto = (key, value) => {
+    setPdfUri(null);
+    setForm((s) => ({
+      ...s,
+      fotos: {
+        ...(s.fotos || {}),
+        [key]: value,
+      },
+    }));
+  };
+
+  const tomarFoto = async (key) => {
+    try {
+      const perm = await ImagePicker.requestCameraPermissionsAsync();
+
+      if (!perm.granted) {
+        Alert.alert("Permiso requerido", "Permite acceso a la cámara para tomar fotos.");
+        return;
+      }
+
+      const result = await ImagePicker.launchCameraAsync({
+        allowsEditing: false,
+        quality: 0.45,
+        base64: true,
+      });
+
+      if (result.canceled) return;
+
+      const asset = result.assets?.[0];
+      const base64 = asset?.base64;
+
+      if (!base64) {
+        Alert.alert("Error", "No se pudo obtener la foto.");
+        return;
+      }
+
+      const mime = asset?.mimeType || "image/jpeg";
+      setFoto(key, `data:${mime};base64,${base64}`);
+    } catch (e) {
+      console.log("[ManttoFrenoEmEh] tomarFoto error:", e);
+      Alert.alert("Error", "No se pudo tomar la foto.");
+    }
+  };
+
+  const seleccionarFoto = async (key) => {
+    try {
+      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+
+      if (!perm.granted) {
+        Alert.alert("Permiso requerido", "Permite acceso a la galería para seleccionar fotos.");
+        return;
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: false,
+        quality: 0.45,
+        base64: true,
+      });
+
+      if (result.canceled) return;
+
+      const asset = result.assets?.[0];
+      const base64 = asset?.base64;
+
+      if (!base64) {
+        Alert.alert("Error", "No se pudo obtener la imagen.");
+        return;
+      }
+
+      const mime = asset?.mimeType || "image/jpeg";
+      setFoto(key, `data:${mime};base64,${base64}`);
+    } catch (e) {
+      console.log("[ManttoFrenoEmEh] seleccionarFoto error:", e);
+      Alert.alert("Error", "No se pudo seleccionar la foto.");
+    }
+  };
+
+  const quitarFoto = (key) => setFoto(key, "");
+
+  const cargarOrden = useCallback(async () => {
+    const oid = safeStr(orderid);
+
+    if (!oid || oid === "[orderid]") {
+      setLoading(false);
+      Alert.alert("Error", "No se encontró el número de orden.");
+      return;
+    }
+
     try {
       setLoading(true);
-      const token = await AsyncStorage.getItem('token');
-      const res = await api.get(`/mantenimiento-freno-pm/datos/${orderid}`, {
-        headers: { Authorization: `Bearer ${token}` },
-        validateStatus: () => true
-      });
-      if (res.status >= 400) throw new Error(res.data?.error || 'No se pudo cargar');
-      const { auto: a, form } = res.data || {};
-      setAuto(a || {});
-      // Prefill encabezado
-      setMx(String(orderid));
-      // Si ya existe un formulario previo:
-      if (form) {
-        // Cargar aquí todos los setState desde form si lo deseas (por brevedad, omito)
+
+      const resOrden = await api.get(`/api/ordenes/sap/${oid}`);
+      const dataOrden = resOrden?.data || {};
+      let clienteFromAddress = "";
+
+      try {
+        const resAddr = await api.get(
+          `/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet('${oid}')/ToAddresses`
+        );
+
+        const results = resAddr?.data?.d?.results || resAddr?.data?.results || [];
+        clienteFromAddress = safeStr(results?.[0]?.Name1);
+      } catch (addrError) {
+        console.log(
+          "[ManttoFrenoEmEh] ToAddresses error:",
+          addrError?.response?.data || addrError?.message || addrError
+        );
       }
+
+      const data = {
+        ...dataOrden,
+        cliente: clienteFromAddress || dataOrden?.cliente || dataOrden?.Name1 || "",
+      };
+
+      const autoData = {
+        orden: safeStr(data?.Orderid || data?.OrderId || oid),
+        cliente: safeStr(data?.cliente || ""),
+        equipo: safeStr(data?.equipment || data?.Equipment || data?.equipo || data?.Equnr || ""),
+        tecnico_nombre: getUserName(user),
+        start_date: safeStr(data?.start_date || data?.StartDate || data?.fecha || ""),
+      };
+
+      setOrden(data);
+      setAuto(autoData);
+
+      setForm((s) => ({
+        ...s,
+        orderid: autoData.orden || oid,
+        fecha: s.fecha || fmtDate(autoData.start_date),
+      }));
     } catch (e) {
-      console.error('[PM load]', e);
-      Alert.alert('Error', e.message || 'Error al cargar');
+      console.log("[ManttoFrenoEmEh] cargarOrden error:", e?.response?.data || e);
+
+      const oid = safeStr(orderid);
+
+      setOrden({ Orderid: oid });
+      setAuto({
+        orden: oid,
+        cliente: "",
+        equipo: "",
+        tecnico_nombre: getUserName(user),
+        start_date: "",
+      });
+
+      setForm((s) => ({ ...s, orderid: oid }));
+
+      Alert.alert(
+        "Aviso",
+        "No se pudieron cargar todos los datos de la orden. Puedes llenar el formulario y generar el PDF."
+      );
     } finally {
       setLoading(false);
     }
-  }, [orderid]);
+  }, [orderid, user]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    cargarOrden();
+  }, [cargarOrden]);
 
-  const onGuardar = async () => {
+  const photoCount = useMemo(() => {
+    const fotos = form.fotos || {};
+
+    return Object.keys(fotos)
+      .filter(
+        (key) =>
+          key.includes("antes") ||
+          key.includes("despues") ||
+          key.includes("revestimiento") ||
+          key.includes("brazo")
+      )
+      .filter((key) => !!safeStr(fotos[key])).length;
+  }, [form.fotos]);
+
+  const issueCount = useMemo(() => {
+    let count = 0;
+
+    if (form.torque.estado_antes === "mal") count += 1;
+    if (form.torque.estado_despues === "mal") count += 1;
+    if (form.resorte.estado_antes === "mal") count += 1;
+    if (form.resorte.estado_despues === "mal") count += 1;
+    if (form.embolo.desgaste_antes) count += 1;
+    if (form.embolo.desgaste_despues) count += 1;
+    if (form.embolo.oxido_antes) count += 1;
+    if (form.embolo.oxido_despues) count += 1;
+    if (form.resultado_total.seguimiento) count += 1;
+
+    return count;
+  }, [form]);
+
+  function buildHtmlActual() {
+    return buildManttoFrenoEmEhHtml({
+      orden: {
+        ...(orden || {}),
+        Orderid: auto?.orden || form?.orderid,
+        cliente: auto?.cliente,
+        equipment: auto?.equipo,
+        tecnico_nombre: auto?.tecnico_nombre,
+        start_date: auto?.start_date || form?.fecha,
+      },
+      form,
+      user,
+    });
+  }
+
+  const abrirPreviewPdf = async () => {
     try {
-      setSaving(true);
-      const token = await AsyncStorage.getItem('token');
-
-      const payload = buildPayload();
-      const res = await api.post('/mantenimiento-freno-pm/guardar', payload, {
-        headers: { Authorization: `Bearer ${token}` },
-        validateStatus: () => true
-      });
-      if (res.status >= 400) throw new Error(res.data?.error || 'No se pudo guardar');
-
-      // Subir fotos
-      await uploadAllPhotos(String(orderid), photos, token);
-
-      Alert.alert('Listo', 'Formulario y fotos guardados', [{ text: 'OK', onPress: () => router.back() }]);
+      const html = buildHtmlActual();
+      setPreviewHtml(html);
+      setPreviewVisible(true);
     } catch (e) {
-      console.error(e);
-      Alert.alert('Error', e.message || 'No se pudo guardar');
-    } finally {
-      setSaving(false);
+      console.log("[ManttoFrenoEmEh] preview error:", e);
+      Alert.alert("Error", "No se pudo generar la vista previa.");
     }
   };
 
-  const buildPayload = () => ({
-    orderid: String(orderid),
-    encabezado: {
-      mx, equipo: auto?.equipo || '', tecnico: auto?.tecnico_nombre || '', nomina: auto?.tecnico_nomina || '',
-      fecha, horario, control, tipo_maquina: `PM-${tipoMaquinaSufijo || ''}`, velocidad_mmin: num(velNominal), capacidad_kg: num(capacidadKg),
-      reporte_tipo: (reporteTipo === 'overhaul' ? 'overhaul' : 'revision')
-    },
-    torque_estatico: {
-      valor: txt(torqueE_valor),
-      datos_antes: [num(torqueE_a1), num(torqueE_a2), num(torqueE_a3)],
-      datos_despues: [num(torqueE_d1), num(torqueE_d2), num(torqueE_d3)],
-      promedio: { antes: num(torqueE_prom_a), despues: num(torqueE_prom_d) },
-      estado: { antes: bm(torqueE_estado_a), despues: bm(torqueE_estado_d) },
-      revisado: yn(torqueE_revisado), ajuste: yn(torqueE_ajuste), revision_sma: okseg(torqueE_revSMA)
-    },
-    torque_dinamico: {
-      valor: txt(torqueD_valor),
-      datos_antes: [num(torqueD_a1), num(torqueD_a2), num(torqueD_a3)],
-      datos_despues: [num(torqueD_d1), num(torqueD_d2), num(torqueD_d3)],
-      promedio: { antes: num(torqueD_prom_a), despues: num(torqueD_prom_d) },
-      estado: { antes: bm(torqueD_estado_a), despues: bm(torqueD_estado_d) },
-      revisado: yn(torqueD_revisado), ajuste: yn(torqueD_ajuste), revision_sma: okseg(torqueD_revSMA)
-    },
-    tornillo_ajuste: {
-      izquierdo: { antes: bm(tornillo_izq_a), despues: bm(tornillo_izq_d) },
-      derecho:   { antes: bm(tornillo_der_a), despues: bm(tornillo_der_d) },
-      revisado: yn(tornillo_revisado), ajuste: yn(tornillo_ajuste), revision_sma: okseg(tornillo_revSMA)
-    },
-    recorrido_bobina: {
-      izquierdo_mm: { antes: num(bobina_izq_a), despues: num(bobina_izq_d) },
-      derecho_mm:   { antes: num(bobina_der_a), despues: num(bobina_der_d) },
-      revisado: yn(bobina_revisado), ajuste: yn(bobina_ajuste), revision_sma: okseg(bobina_revSMA)
-    },
-    recorrido_micro_switch: {
-      izquierdo: { superior: { antes: bm(ms_izq_sup_a), despues: bm(ms_izq_sup_d) }, inferior: { antes: bm(ms_izq_inf_a), despues: bm(ms_izq_inf_d) } },
-      derecho:   { superior: { antes: bm(ms_der_sup_a), despues: bm(ms_der_sup_d) }, inferior: { antes: bm(ms_der_inf_a), despues: bm(ms_der_inf_d) } },
-      revisado: yn(ms_revisado), ajuste: yn(ms_ajuste), revision_sma: okseg(ms_revSMA)
-    },
-    funcionamiento_micro_switch: {
-      izquierdo_freno1: { antes: bm(ms_func_izq_a), despues: bm(ms_func_izq_d) },
-      derecho_freno2:   { antes: bm(ms_func_der_a), despues: bm(ms_func_der_d) },
-      revisado: yn(ms_func_revisado), ajuste: yn(ms_func_ajuste), revision_sma: okseg(ms_func_revSMA)
-    },
-    condiciones_tambor: {
-      lubricante_plastico: { antes: yn(tambor_lub_a), despues: yn(tambor_lub_d) },
-      oxido:               { antes: yn(tambor_ox_a),  despues: yn(tambor_ox_d)  },
-      revisado: yn(tambor_revisado), ajuste: yn(tambor_ajuste), revision_sma: okseg(tambor_revSMA)
-    },
-    tubo_plastico_drenado: {
-      conexion: { antes: yn(tubo_conexion_a), despues: yn(tubo_conexion_d) },
-      deposito: { antes: sinoNa(tubo_deposito_a), despues: sinoNa(tubo_deposito_d) },
-      revisado: yn(tubo_revisado), ajuste: yn(tubo_ajuste), revision_sma: okseg(tubo_revSMA)
-    },
-    prueba_funcionamiento: {
-      ruido_zapata_tambor: { antes: bm(ruido_zapata_tambor_a), despues: bm(ruido_zapata_tambor_d) },
-      ruido_cubierta_cables:{ antes: bm(ruido_cubierta_cables_a), despues: bm(ruido_cubierta_cables_d) },
-      ruido_cubiertas_polea:{ antes: bm(ruido_cubiertas_polea_a), despues: bm(ruido_cubiertas_polea_d) },
-      ruido_excesivo_frenos:{ antes: bm(ruido_excesivo_frenos_a), despues: bm(ruido_excesivo_frenos_d) },
-      revisado: yn(op_revisado), revision_sma: yn(op_revSMA) // en formato original este último es Si/No
-    },
-    resultado: {
-      tipo: (resultado === 'seguimiento' ? 'seguimiento' : 'bien'),
-      detalle: txt(detalle)
-    },
-    firmas: {
-      mecanico: !!firmaMecanico,
-      supervisor: !!firmaSupervisor,
-      gerente: !!firmaGerente
-    },
-    fotos_meta: Object.fromEntries(Object.entries(photos).map(([k,v]) => [k, { antes: v?.antes?.length||0, despues: v?.despues?.length||0 }]))
-  });
+  const generarPdf = async () => {
+    try {
+      setGeneratingPdf(true);
 
-  const uploadAllPhotos = async (orderidStr, photosObj, token) => {
-    for (const [seccion, v] of Object.entries(photosObj)) {
-      for (const momento of ['antes','despues']) {
-        for (const item of (v?.[momento] || [])) {
-          const form = new FormData();
-          form.append('orderid', orderidStr);
-          form.append('seccion', seccion);
-          form.append('momento', momento);
-          if (item.note) form.append('nota', item.note);
-          const name = item.uri.split('/').pop() || `foto_${Date.now()}.jpg`;
-          const ext = (name.split('.').pop() || 'jpg').toLowerCase();
-          const type = ext === 'png' ? 'image/png' : 'image/jpeg';
-          form.append('file', { uri: item.uri, name, type });
-          const res = await api.post('/mantenimiento-freno-pm/fotos', form, {
-            headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'multipart/form-data' },
-            validateStatus: () => true
-          });
-          if (res.status >= 400) console.warn('Foto falló', seccion, momento, res.status, res.data);
-        }
-      }
+      const html = buildHtmlActual();
+
+      const result = await Print.printToFileAsync({
+        html,
+        base64: false,
+      });
+
+      const cleanOrder = safeStr(auto?.orden || form?.orderid || "orden").replace(
+        /[^a-zA-Z0-9_-]/g,
+        "_"
+      );
+
+      const fileName = `mantto_freno_em_eh_${cleanOrder}.pdf`;
+      const targetUri = `${FileSystem.documentDirectory}${fileName}`;
+
+      await FileSystem.copyAsync({
+        from: result.uri,
+        to: targetUri,
+      });
+
+      setPdfUri(targetUri);
+      return targetUri;
+    } finally {
+      setGeneratingPdf(false);
     }
+  };
+
+  const compartirPdf = async () => {
+    try {
+      const uri = pdfUri || (await generarPdf());
+      const canShare = await Sharing.isAvailableAsync();
+
+      if (!canShare) {
+        Alert.alert(
+          "PDF generado",
+          "El PDF se generó, pero este dispositivo no permite compartir archivos."
+        );
+        return;
+      }
+
+      await Sharing.shareAsync(uri, {
+        mimeType: "application/pdf",
+        dialogTitle: "Compartir mantenimiento de freno EM/EH",
+      });
+    } catch (e) {
+      console.log("[ManttoFrenoEmEh] compartir error:", e);
+      Alert.alert("Error", "No se pudo generar o compartir el PDF.");
+    }
+  };
+
+  const goNext = () => {
+    setActiveStep((s) => Math.min(s + 1, STEPS.length - 1));
+  };
+
+  const goBack = () => {
+    setActiveStep((s) => Math.max(s - 1, 0));
+  };
+
+  const renderProgress = () => (
+    <View style={styles.progressCard}>
+      <Text style={styles.progressTitle}>Avance del formulario</Text>
+
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.stepsScroll}
+      >
+        {STEPS.map((step, index) => {
+          const active = index === activeStep;
+          const done = index < activeStep;
+
+          return (
+            <TouchableOpacity
+              key={step.key}
+              activeOpacity={0.86}
+              onPress={() => setActiveStep(index)}
+              style={[
+                styles.stepItem,
+                active && styles.stepItemActive,
+                done && styles.stepItemDone,
+              ]}
+            >
+              <View
+                style={[
+                  styles.stepNumber,
+                  active && styles.stepNumberActive,
+                  done && styles.stepNumberDone,
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.stepNumberText,
+                    (active || done) && styles.stepNumberTextActive,
+                  ]}
+                >
+                  {index + 1}
+                </Text>
+              </View>
+
+              <View>
+                <Text
+                  style={[
+                    styles.stepName,
+                    active && styles.stepNameActive,
+                    done && styles.stepNameDone,
+                  ]}
+                >
+                  {step.title}
+                </Text>
+
+                <Text style={styles.stepShort}>{step.short}</Text>
+              </View>
+            </TouchableOpacity>
+          );
+        })}
+      </ScrollView>
+    </View>
+  );
+
+  const renderGeneral = () => (
+    <>
+      <SectionBox
+        title="Resumen de la orden"
+        subtitle="Datos automáticos que se enviarán al PDF."
+      >
+        <View style={styles.infoGrid}>
+          <InfoItem label="Orden / Control" value={auto.orden || form.orderid} />
+          <InfoItem label="Cliente" value={auto.cliente} />
+          <InfoItem label="No. equipo" value={auto.equipo} />
+          <InfoItem label="Técnico" value={auto.tecnico_nombre} />
+        </View>
+      </SectionBox>
+
+      <SectionBox
+        title="Datos generales"
+        subtitle="Información base del mantenimiento."
+      >
+        <Label>Tipo de reporte</Label>
+
+        <View style={styles.chipsWrap}>
+          <Chip
+            active={form.tipo_reporte === "overhaul"}
+            onPress={() => patchForm({ tipo_reporte: "overhaul" })}
+          >
+            Overhaul
+          </Chip>
+
+          <Chip
+            active={form.tipo_reporte === "ajuste_reparacion_sustitucion"}
+            onPress={() => patchForm({ tipo_reporte: "ajuste_reparacion_sustitucion" })}
+          >
+            Ajuste / reparación / sustitución
+          </Chip>
+        </View>
+
+        <FieldRow>
+          <Field>
+            <Label>Fecha</Label>
+            <Input
+              value={form.fecha}
+              onChangeText={(t) => patchForm({ fecha: t })}
+              placeholder="DD/MM/AAAA"
+            />
+          </Field>
+
+          <Field small>
+            <Label>Hora inicio</Label>
+            <Input
+              value={form.hora_inicio}
+              onChangeText={(t) => patchForm({ hora_inicio: t })}
+              placeholder="08:00"
+            />
+          </Field>
+
+          <Field small>
+            <Label>Hora fin</Label>
+            <Input
+              value={form.hora_fin}
+              onChangeText={(t) => patchForm({ hora_fin: t })}
+              placeholder="10:30"
+            />
+          </Field>
+        </FieldRow>
+
+        <FieldRow>
+          <Field>
+            <Label>Tipo de MT</Label>
+            <Input
+              value={form.tipo_mt}
+              onChangeText={(t) => patchForm({ tipo_mt: t })}
+              placeholder="Preventivo / Correctivo"
+            />
+          </Field>
+
+          <Field small>
+            <Label>Velocidad nominal</Label>
+            <Input
+              keyboardType="numeric"
+              value={form.velocidad_nominal}
+              onChangeText={(t) => patchForm({ velocidad_nominal: t })}
+              placeholder="m/min"
+            />
+          </Field>
+
+          <Field small>
+            <Label>Capacidad</Label>
+            <Input
+              keyboardType="numeric"
+              value={form.capacidad}
+              onChangeText={(t) => patchForm({ capacidad: t })}
+              placeholder="kg"
+            />
+          </Field>
+        </FieldRow>
+      </SectionBox>
+    </>
+  );
+
+  const renderRevision1 = () => (
+    <>
+      <SectionBox
+        title="1. Pines y levas de freno"
+        subtitle="Revisión del kit con lubricación y kit libre."
+      >
+        <View style={styles.groupPill}>
+          <Text style={styles.groupPillText}>Kit con lubricación</Text>
+        </View>
+
+        <BoolField
+          label="Óxido antes"
+          value={form.pines_levas.kitLubricacion.oxido_antes}
+          onChange={(v) => patchNested("pines_levas", "kitLubricacion", { oxido_antes: v })}
+        />
+
+        <BoolField
+          label="Óxido después"
+          value={form.pines_levas.kitLubricacion.oxido_despues}
+          onChange={(v) => patchNested("pines_levas", "kitLubricacion", { oxido_despues: v })}
+        />
+
+        <BienMalField
+          label="Lubricación antes"
+          value={form.pines_levas.kitLubricacion.lubricacion_antes}
+          onChange={(v) => patchNested("pines_levas", "kitLubricacion", { lubricacion_antes: v })}
+        />
+
+        <BienMalField
+          label="Lubricación después"
+          value={form.pines_levas.kitLubricacion.lubricacion_despues}
+          onChange={(v) => patchNested("pines_levas", "kitLubricacion", { lubricacion_despues: v })}
+        />
+
+        <View style={styles.divider} />
+
+        <View style={styles.groupPill}>
+          <Text style={styles.groupPillText}>Kit libre de lubricación</Text>
+        </View>
+
+        <BienMalField
+          label="Giro libre antes"
+          value={form.pines_levas.kitLibre.giro_antes}
+          onChange={(v) => patchNested("pines_levas", "kitLibre", { giro_antes: v })}
+        />
+
+        <BienMalField
+          label="Giro libre después"
+          value={form.pines_levas.kitLibre.giro_despues}
+          onChange={(v) => patchNested("pines_levas", "kitLibre", { giro_despues: v })}
+        />
+
+        <BoolField
+          label="Cubierta antes"
+          value={form.pines_levas.kitLibre.cubierta_antes}
+          onChange={(v) => patchNested("pines_levas", "kitLibre", { cubierta_antes: v })}
+        />
+
+        <BoolField
+          label="Cubierta después"
+          value={form.pines_levas.kitLibre.cubierta_despues}
+          onChange={(v) => patchNested("pines_levas", "kitLibre", { cubierta_despues: v })}
+        />
+      </SectionBox>
+
+      <SectionBox
+        title="2. Par de torsión / Torque"
+        subtitle="Captura mediciones antes/después y estado."
+      >
+        <FieldRow>
+          {["1", "2", "3"].map((n) => (
+            <React.Fragment key={n}>
+              <Field small>
+                <Label>{`Medición ${n} antes`}</Label>
+                <Input
+                  value={form.torque[`medicion${n}_antes`]}
+                  onChangeText={(t) => patchSection("torque", { [`medicion${n}_antes`]: t })}
+                  placeholder="Valor"
+                />
+              </Field>
+
+              <Field small>
+                <Label>{`Medición ${n} después`}</Label>
+                <Input
+                  value={form.torque[`medicion${n}_despues`]}
+                  onChangeText={(t) => patchSection("torque", { [`medicion${n}_despues`]: t })}
+                  placeholder="Valor"
+                />
+              </Field>
+            </React.Fragment>
+          ))}
+        </FieldRow>
+
+        <FieldRow>
+          <Field>
+            <Label>Promedio antes</Label>
+            <Input
+              value={form.torque.promedio_antes}
+              onChangeText={(t) => patchSection("torque", { promedio_antes: t })}
+              placeholder="Valor"
+            />
+          </Field>
+
+          <Field>
+            <Label>Promedio después</Label>
+            <Input
+              value={form.torque.promedio_despues}
+              onChangeText={(t) => patchSection("torque", { promedio_despues: t })}
+              placeholder="Valor"
+            />
+          </Field>
+        </FieldRow>
+
+        <BienMalField
+          label="Estado antes"
+          value={form.torque.estado_antes}
+          onChange={(v) => patchSection("torque", { estado_antes: v })}
+        />
+
+        <BienMalField
+          label="Estado después"
+          value={form.torque.estado_despues}
+          onChange={(v) => patchSection("torque", { estado_despues: v })}
+        />
+      </SectionBox>
+    </>
+  );
+
+  const renderRevision2 = () => (
+    <>
+      <SectionBox
+        title="3. Resorte de freno"
+        subtitle="Mediciones de lado izquierdo y derecho."
+      >
+        <FieldRow>
+          {[
+            ["izq_mm_antes", "Izq. mm antes"],
+            ["izq_pct_antes", "Izq. % antes"],
+            ["izq_mm_despues", "Izq. mm después"],
+            ["izq_pct_despues", "Izq. % después"],
+            ["der_mm_antes", "Der. mm antes"],
+            ["der_pct_antes", "Der. % antes"],
+            ["der_mm_despues", "Der. mm después"],
+            ["der_pct_despues", "Der. % después"],
+          ].map(([key, label]) => (
+            <Field small key={key}>
+              <Label>{label}</Label>
+              <Input
+                keyboardType="numeric"
+                value={form.resorte[key]}
+                onChangeText={(t) => patchSection("resorte", { [key]: t })}
+                placeholder="0"
+              />
+            </Field>
+          ))}
+        </FieldRow>
+
+        <BienMalField
+          label="Estado antes"
+          value={form.resorte.estado_antes}
+          onChange={(v) => patchSection("resorte", { estado_antes: v })}
+        />
+
+        <BienMalField
+          label="Estado después"
+          value={form.resorte.estado_despues}
+          onChange={(v) => patchSection("resorte", { estado_despues: v })}
+        />
+      </SectionBox>
+
+      <SectionBox
+        title="4. Condiciones del émbolo"
+        subtitle="Recorridos, desgaste, óxido y lubricación."
+      >
+        <FieldRow>
+          {[
+            ["recorrido_izq_antes", "Recorrido izq. antes"],
+            ["recorrido_izq_despues", "Recorrido izq. después"],
+            ["recorrido_der_antes", "Recorrido der. antes"],
+            ["recorrido_der_despues", "Recorrido der. después"],
+            ["arandela_antes", "Espesor arandela antes"],
+            ["arandela_despues", "Espesor arandela después"],
+          ].map(([key, label]) => (
+            <Field key={key}>
+              <Label>{label}</Label>
+              <Input
+                keyboardType="numeric"
+                value={form.embolo[key]}
+                onChangeText={(t) => patchSection("embolo", { [key]: t })}
+                placeholder="0"
+              />
+            </Field>
+          ))}
+        </FieldRow>
+
+        <BoolField
+          label="Desgaste antes"
+          value={form.embolo.desgaste_antes}
+          onChange={(v) => patchSection("embolo", { desgaste_antes: v })}
+        />
+
+        <BoolField
+          label="Desgaste después"
+          value={form.embolo.desgaste_despues}
+          onChange={(v) => patchSection("embolo", { desgaste_despues: v })}
+        />
+
+        <BoolField
+          label="Óxido antes"
+          value={form.embolo.oxido_antes}
+          onChange={(v) => patchSection("embolo", { oxido_antes: v })}
+        />
+
+        <BoolField
+          label="Óxido después"
+          value={form.embolo.oxido_despues}
+          onChange={(v) => patchSection("embolo", { oxido_despues: v })}
+        />
+
+        <BienMalField
+          label="Lubricación antes"
+          value={form.embolo.lubricacion_antes}
+          onChange={(v) => patchSection("embolo", { lubricacion_antes: v })}
+        />
+
+        <BienMalField
+          label="Lubricación después"
+          value={form.embolo.lubricacion_despues}
+          onChange={(v) => patchSection("embolo", { lubricacion_despues: v })}
+        />
+      </SectionBox>
+
+      <SectionBox
+        title="5. Contacto de freno"
+        subtitle="Mediciones por lado y punto de contacto."
+      >
+        <FieldRow>
+          {[
+            ["izq_antes", "Izquierdo antes"],
+            ["izq_despues", "Izquierdo después"],
+            ["der_antes", "Derecho antes"],
+            ["der_despues", "Derecho después"],
+          ].map(([key, label]) => (
+            <Field small key={key}>
+              <Label>{label}</Label>
+              <Input
+                keyboardType="numeric"
+                value={form.contacto[key]}
+                onChangeText={(t) => patchSection("contacto", { [key]: t })}
+                placeholder="0"
+              />
+            </Field>
+          ))}
+        </FieldRow>
+
+        <BienMalField
+          label="Punto de contacto antes"
+          value={form.contacto.punto_antes}
+          onChange={(v) => patchSection("contacto", { punto_antes: v })}
+        />
+
+        <BienMalField
+          label="Punto de contacto después"
+          value={form.contacto.punto_despues}
+          onChange={(v) => patchSection("contacto", { punto_despues: v })}
+        />
+      </SectionBox>
+    </>
+  );
+
+  const renderRevision3 = () => (
+    <>
+      <SectionBox
+        title="6. Brazo, palanca y perno"
+        subtitle="Desgaste, óxido y lubricación por lado."
+      >
+        {[
+          ["desgaste_izq_antes", "Desgaste izquierdo antes"],
+          ["desgaste_izq_despues", "Desgaste izquierdo después"],
+          ["desgaste_der_antes", "Desgaste derecho antes"],
+          ["desgaste_der_despues", "Desgaste derecho después"],
+          ["oxido_izq_antes", "Óxido izquierdo antes"],
+          ["oxido_izq_despues", "Óxido izquierdo después"],
+          ["oxido_der_antes", "Óxido derecho antes"],
+          ["oxido_der_despues", "Óxido derecho después"],
+        ].map(([key, label]) => (
+          <BoolField
+            key={key}
+            label={label}
+            value={form.brazo[key]}
+            onChange={(v) => patchSection("brazo", { [key]: v })}
+          />
+        ))}
+
+        <BienMalField
+          label="Lubricación izquierdo antes"
+          value={form.brazo.lubricacion_izq_antes}
+          onChange={(v) => patchSection("brazo", { lubricacion_izq_antes: v })}
+        />
+
+        <BienMalField
+          label="Lubricación izquierdo después"
+          value={form.brazo.lubricacion_izq_despues}
+          onChange={(v) => patchSection("brazo", { lubricacion_izq_despues: v })}
+        />
+
+        <BienMalField
+          label="Lubricación derecho antes"
+          value={form.brazo.lubricacion_der_antes}
+          onChange={(v) => patchSection("brazo", { lubricacion_der_antes: v })}
+        />
+
+        <BienMalField
+          label="Lubricación derecho después"
+          value={form.brazo.lubricacion_der_despues}
+          onChange={(v) => patchSection("brazo", { lubricacion_der_despues: v })}
+        />
+      </SectionBox>
+
+      <SectionBox
+        title="7. Condiciones de tambor"
+        subtitle="Revisión de desgaste, aceite y óxido."
+      >
+        {[
+          ["desgaste_antes", "Desgaste antes"],
+          ["desgaste_despues", "Desgaste después"],
+          ["aceite_antes", "Aceite antes"],
+          ["aceite_despues", "Aceite después"],
+          ["oxido_antes", "Óxido antes"],
+          ["oxido_despues", "Óxido después"],
+        ].map(([key, label]) => (
+          <BoolField
+            key={key}
+            label={label}
+            value={form.tambor[key]}
+            onChange={(v) => patchSection("tambor", { [key]: v })}
+          />
+        ))}
+      </SectionBox>
+
+      <SectionBox
+        title="8. Revestimiento / Balatas"
+        subtitle="Revisión del lado izquierdo y derecho."
+      >
+        {[
+          ["izquierdo_antes", "Izquierdo antes"],
+          ["izquierdo_despues", "Izquierdo después"],
+          ["derecho_antes", "Derecho antes"],
+          ["derecho_despues", "Derecho después"],
+        ].map(([key, label]) => (
+          <BoolField
+            key={key}
+            label={label}
+            value={form.balatas[key]}
+            onChange={(v) => patchSection("balatas", { [key]: v })}
+          />
+        ))}
+      </SectionBox>
+
+      <SectionBox
+        title="9. Operación del freno"
+        subtitle="Prueba antes y después del mantenimiento."
+      >
+        <BienMalField
+          label="Prueba antes"
+          value={form.operacion.antes}
+          onChange={(v) => patchSection("operacion", { antes: v })}
+        />
+
+        <BienMalField
+          label="Prueba después"
+          value={form.operacion.despues}
+          onChange={(v) => patchSection("operacion", { despues: v })}
+        />
+      </SectionBox>
+    </>
+  );
+
+  const renderFotos = () => (
+    <SectionBox
+      title="Hoja de fotos"
+      subtitle="Agrega evidencia fotográfica antes/después."
+    >
+      <View style={styles.photoSummary}>
+        <Text style={styles.photoSummaryTitle}>Fotos agregadas</Text>
+        <Text style={styles.photoSummaryValue}>{photoCount}</Text>
+      </View>
+
+      <Text style={styles.photoGroupTitle}>Émbolo del freno</Text>
+
+      <PhotoField
+        label="Émbolo antes"
+        value={form.fotos.embolo_antes}
+        onCamera={() => tomarFoto("embolo_antes")}
+        onGallery={() => seleccionarFoto("embolo_antes")}
+        onRemove={() => quitarFoto("embolo_antes")}
+      />
+
+      <PhotoField
+        label="Émbolo después"
+        value={form.fotos.embolo_despues}
+        onCamera={() => tomarFoto("embolo_despues")}
+        onGallery={() => seleccionarFoto("embolo_despues")}
+        onRemove={() => quitarFoto("embolo_despues")}
+      />
+
+      <Text style={styles.photoGroupTitle}>Revestimiento del freno</Text>
+
+      <PhotoField
+        label="Revestimiento lado izquierdo"
+        value={form.fotos.revestimiento_izq}
+        onCamera={() => tomarFoto("revestimiento_izq")}
+        onGallery={() => seleccionarFoto("revestimiento_izq")}
+        onRemove={() => quitarFoto("revestimiento_izq")}
+      />
+
+      <PhotoField
+        label="Revestimiento lado derecho"
+        value={form.fotos.revestimiento_der}
+        onCamera={() => tomarFoto("revestimiento_der")}
+        onGallery={() => seleccionarFoto("revestimiento_der")}
+        onRemove={() => quitarFoto("revestimiento_der")}
+      />
+
+      <Text style={styles.photoGroupTitle}>Brazo, palanca y pernos lado izquierdo</Text>
+
+      <PhotoField
+        label="Lado izquierdo antes"
+        value={form.fotos.brazo_izq_antes}
+        onCamera={() => tomarFoto("brazo_izq_antes")}
+        onGallery={() => seleccionarFoto("brazo_izq_antes")}
+        onRemove={() => quitarFoto("brazo_izq_antes")}
+      />
+
+      <PhotoField
+        label="Lado izquierdo después"
+        value={form.fotos.brazo_izq_despues}
+        onCamera={() => tomarFoto("brazo_izq_despues")}
+        onGallery={() => seleccionarFoto("brazo_izq_despues")}
+        onRemove={() => quitarFoto("brazo_izq_despues")}
+      />
+
+      <Text style={styles.photoGroupTitle}>Brazo, palanca y pernos lado derecho</Text>
+
+      <PhotoField
+        label="Lado derecho antes"
+        value={form.fotos.brazo_der_antes}
+        onCamera={() => tomarFoto("brazo_der_antes")}
+        onGallery={() => seleccionarFoto("brazo_der_antes")}
+        onRemove={() => quitarFoto("brazo_der_antes")}
+      />
+
+      <PhotoField
+        label="Lado derecho después"
+        value={form.fotos.brazo_der_despues}
+        onCamera={() => tomarFoto("brazo_der_despues")}
+        onGallery={() => seleccionarFoto("brazo_der_despues")}
+        onRemove={() => quitarFoto("brazo_der_despues")}
+      />
+
+      <Text style={styles.photoGroupTitle}>Otros</Text>
+
+      <Label>Nombre otro 1</Label>
+      <Input
+        value={form.fotos.otro_1_titulo}
+        onChangeText={(t) => patchSection("fotos", { otro_1_titulo: t })}
+        placeholder="Ej. Tambor / cable / soporte"
+      />
+
+      <PhotoField
+        label="Otro 1 antes"
+        value={form.fotos.otro_1_antes}
+        onCamera={() => tomarFoto("otro_1_antes")}
+        onGallery={() => seleccionarFoto("otro_1_antes")}
+        onRemove={() => quitarFoto("otro_1_antes")}
+      />
+
+      <PhotoField
+        label="Otro 1 después"
+        value={form.fotos.otro_1_despues}
+        onCamera={() => tomarFoto("otro_1_despues")}
+        onGallery={() => seleccionarFoto("otro_1_despues")}
+        onRemove={() => quitarFoto("otro_1_despues")}
+      />
+
+      <Label>Nombre otro 2</Label>
+      <Input
+        value={form.fotos.otro_2_titulo}
+        onChangeText={(t) => patchSection("fotos", { otro_2_titulo: t })}
+        placeholder="Ej. Componente adicional"
+      />
+
+      <PhotoField
+        label="Otro 2 antes"
+        value={form.fotos.otro_2_antes}
+        onCamera={() => tomarFoto("otro_2_antes")}
+        onGallery={() => seleccionarFoto("otro_2_antes")}
+        onRemove={() => quitarFoto("otro_2_antes")}
+      />
+
+      <PhotoField
+        label="Otro 2 después"
+        value={form.fotos.otro_2_despues}
+        onCamera={() => tomarFoto("otro_2_despues")}
+        onGallery={() => seleccionarFoto("otro_2_despues")}
+        onRemove={() => quitarFoto("otro_2_despues")}
+      />
+    </SectionBox>
+  );
+
+  const renderResultado = () => (
+    <SectionBox
+      title="Observaciones y resultado"
+      subtitle="Cierre del mantenimiento y detalle final."
+    >
+      <Label>Observaciones</Label>
+      <Input
+        multiline
+        style={styles.textArea}
+        value={form.observaciones}
+        onChangeText={(t) => patchForm({ observaciones: t })}
+        placeholder="Observaciones generales"
+      />
+
+      <Label>Resultado total</Label>
+
+      <View style={styles.chipsWrap}>
+        <Chip
+          tone="green"
+          active={form.resultado_total.bien}
+          onPress={() =>
+            patchSection("resultado_total", {
+              bien: !form.resultado_total.bien,
+            })
+          }
+        >
+          Bien
+        </Chip>
+
+        <Chip
+          tone="yellow"
+          active={form.resultado_total.seguimiento}
+          onPress={() =>
+            patchSection("resultado_total", {
+              seguimiento: !form.resultado_total.seguimiento,
+            })
+          }
+        >
+          Necesita seguimiento
+        </Chip>
+      </View>
+
+      <Label>Detalle</Label>
+      <Input
+        multiline
+        style={styles.textArea}
+        value={form.resultado_total.detalle}
+        onChangeText={(t) => patchSection("resultado_total", { detalle: t })}
+        placeholder="Detalle del resultado"
+      />
+    </SectionBox>
+  );
+
+  const renderStepContent = () => {
+    if (activeStep === 0) return renderGeneral();
+    if (activeStep === 1) return renderRevision1();
+    if (activeStep === 2) return renderRevision2();
+    if (activeStep === 3) return renderRevision3();
+    if (activeStep === 4) return renderFotos();
+    return renderResultado();
   };
 
   if (loading) {
-    return <View style={{flex:1,justifyContent:'center',alignItems:'center'}}><ActivityIndicator size="large"/><Text style={{marginTop:8}}>Cargando…</Text></View>;
+    return (
+      <View style={styles.loadingScreen}>
+        <ActivityIndicator size="large" color={UI.blue} />
+        <Text style={styles.loadingTitle}>Cargando formulario</Text>
+        <Text style={styles.loadingText}>Preparando datos de la orden…</Text>
+      </View>
+    );
   }
 
   return (
-    <View style={{ flex:1, backgroundColor:'#F5F7FB' }}>
-      <Header title="Mantenimiento de freno (tipo PM)" />
-      <ScrollView contentContainerStyle={{ padding:16, paddingBottom:180 }}>
-        {/* Datos cliente/orden */}
-        <Section>Datos del cliente/orden</Section>
-        <Card>
-          <Row2>
-            <Col><Label>MX</Label><Input value={mx} onChangeText={setMx} /></Col>
-            <Col><Label>No. Equipo</Label><Readonly>{auto?.equipo}</Readonly></Col>
-          </Row2>
-          <Row2>
-            <Col><Label>Nombre del técnico</Label><Readonly>{auto?.tecnico_nombre}</Readonly></Col>
-            <Col><Label>Fecha de inicio</Label><Readonly>{(auto?.start_date ?? '').toString()}</Readonly></Col>
-          </Row2>
-         
-        </Card>
+    <View style={styles.container}>
+      <Header title="Mantenimiento freno EM/EH" />
 
-        {/* Encabezado del reporte (plantilla oficial) */}
-        <Section>Datos del reporte</Section>
-        <Card>
-          <Row2>
-            <Col><Label>FECHA</Label><Input value={fecha} onChangeText={setFecha} placeholder="DD/MM/AAAA" /></Col>
-            <Col><Label>HORARIO</Label><Input value={horario} onChangeText={setHorario} placeholder="08:00–12:00" /></Col>
-          </Row2>
-          <Row2>
-            <Col><Label>CONTROL</Label><Input value={control} onChangeText={setControl} /></Col>
-            <Col><Label>TIPO DE MÁQUINA</Label>
-              <View style={{flexDirection:'row',alignItems:'center',gap:8}}>
-                <Readonly>PM-</Readonly>
-                <Input value={tipoMaquinaSufijo} onChangeText={setTipoMaquinaSufijo} placeholder="modelo" style={{flex:1}}/>
-              </View>
-            </Col>
-          </Row2>
-          <Row2>
-            <Col><Label>VELOCIDAD NOMINAL [m/min]</Label><Input keyboardType="numeric" value={velNominal} onChangeText={setVelNominal} /></Col>
-            <Col><Label>CAPACIDAD [kg]</Label><Input keyboardType="numeric" value={capacidadKg} onChangeText={setCapacidadKg} /></Col>
-          </Row2>
-          <Label style={{marginTop:10}}>REPORTE</Label>
-          <Chips options={['revision','overhaul']} value={reporteTipo} onChange={setReporteTipo}/>
-        </Card>
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+        contentContainerStyle={styles.content}
+      >
+        <View style={styles.hero}>
+          <View style={styles.heroTop}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.heroKicker}>Formato técnico</Text>
+              <Text style={styles.heroTitle}>Mantenimiento de freno EM/EH</Text>
+              <Text style={styles.heroText}>
+                Captura revisión antes/después, fotos y resultado final. Puedes
+                previsualizar el PDF aunque falten campos.
+              </Text>
+            </View>
 
-        {/* 1) Torque estático */}
-        <Section>1) Torque estático</Section>
-        <Card>
-          <Row2><Col><Label>VALOR</Label><Input value={torqueE_valor} onChangeText={setTorqueE_valor} /></Col></Row2>
-          <Label style={{marginTop:6}}>Datos</Label>
-          <Row2>
-            <Col><Label>Dato #1 (antes)</Label><Input keyboardType="numeric" value={torqueE_a1} onChangeText={setTorqueE_a1} /></Col>
-            <Col><Label>Dato #1 (después)</Label><Input keyboardType="numeric" value={torqueE_d1} onChangeText={setTorqueE_d1} /></Col>
-          </Row2>
-          <Row2>
-            <Col><Label>Dato #2 (antes)</Label><Input keyboardType="numeric" value={torqueE_a2} onChangeText={setTorqueE_a2} /></Col>
-            <Col><Label>Dato #2 (después)</Label><Input keyboardType="numeric" value={torqueE_d2} onChangeText={setTorqueE_d2} /></Col>
-          </Row2>
-          <Row2>
-            <Col><Label>Dato #3 (antes)</Label><Input keyboardType="numeric" value={torqueE_a3} onChangeText={setTorqueE_a3} /></Col>
-            <Col><Label>Dato #3 (después)</Label><Input keyboardType="numeric" value={torqueE_d3} onChangeText={setTorqueE_d3} /></Col>
-          </Row2>
-          <Row2>
-            <Col><Label>PROMEDIO (antes)</Label><Readonly>{isNum(torqueE_prom_a)?torqueE_prom_a:'—'}</Readonly></Col>
-            <Col><Label>PROMEDIO (después)</Label><Readonly>{isNum(torqueE_prom_d)?torqueE_prom_d:'—'}</Readonly></Col>
-          </Row2>
-          <Row2>
-            <Col><Label>ESTADO (antes)</Label><BM value={torqueE_estado_a} onChange={setTorqueE_estado_a}/></Col>
-            <Col><Label>ESTADO (después)</Label><BM value={torqueE_estado_d} onChange={setTorqueE_estado_d}/></Col>
-          </Row2>
-          <Row2>
-            <Col><Label>REVISADO</Label><YN value={torqueE_revisado} onChange={setTorqueE_revisado}/></Col>
-            <Col><Label>AJUSTE</Label><YN value={torqueE_ajuste} onChange={setTorqueE_ajuste}/></Col>
-          </Row2>
-          <Label>REVISIÓN SMA</Label>
-          <OkSeg value={torqueE_revSMA} onChange={setTorqueE_revSMA}/>
-        </Card>
+            <View style={styles.heroBadge}>
+              <Text style={styles.heroBadgeText}>PDF libre</Text>
+            </View>
+          </View>
 
-        {/* 2) Torque dinámico */}
-        <Section>2) Torque dinámico</Section>
-        <Card>
-          <Row2><Col><Label>VALOR</Label><Input value={torqueD_valor} onChangeText={setTorqueD_valor} /></Col></Row2>
-          <Label style={{marginTop:6}}>Datos</Label>
-          <Row2>
-            <Col><Label>Dato #1 (antes)</Label><Input keyboardType="numeric" value={torqueD_a1} onChangeText={setTorqueD_a1} /></Col>
-            <Col><Label>Dato #1 (después)</Label><Input keyboardType="numeric" value={torqueD_d1} onChangeText={setTorqueD_d1} /></Col>
-          </Row2>
-          <Row2>
-            <Col><Label>Dato #2 (antes)</Label><Input keyboardType="numeric" value={torqueD_a2} onChangeText={setTorqueD_a2} /></Col>
-            <Col><Label>Dato #2 (después)</Label><Input keyboardType="numeric" value={torqueD_d2} onChangeText={setTorqueD_d2} /></Col>
-          </Row2>
-          <Row2>
-            <Col><Label>Dato #3 (antes)</Label><Input keyboardType="numeric" value={torqueD_a3} onChangeText={setTorqueD_a3} /></Col>
-            <Col><Label>Dato #3 (después)</Label><Input keyboardType="numeric" value={torqueD_d3} onChangeText={setTorqueD_d3} /></Col>
-          </Row2>
-          <Row2>
-            <Col><Label>PROMEDIO (antes)</Label><Readonly>{isNum(torqueD_prom_a)?torqueD_prom_a:'—'}</Readonly></Col>
-            <Col><Label>PROMEDIO (después)</Label><Readonly>{isNum(torqueD_prom_d)?torqueD_prom_d:'—'}</Readonly></Col>
-          </Row2>
-          <Row2>
-            <Col><Label>ESTADO (antes)</Label><BM value={torqueD_estado_a} onChange={setTorqueD_estado_a}/></Col>
-            <Col><Label>ESTADO (después)</Label><BM value={torqueD_estado_d} onChange={setTorqueD_estado_d}/></Col>
-          </Row2>
-          <Row2>
-            <Col><Label>REVISADO</Label><YN value={torqueD_revisado} onChange={setTorqueD_revisado}/></Col>
-            <Col><Label>AJUSTE</Label><YN value={torqueD_ajuste} onChange={setTorqueD_ajuste}/></Col>
-          </Row2>
-          <Label>REVISIÓN SMA</Label>
-          <OkSeg value={torqueD_revSMA} onChange={setTorqueD_revSMA}/>
-        </Card>
+          <View style={styles.statsRow}>
+            <StatBox label="Fotos" value={photoCount} />
+            <StatBox
+              label="Hallazgos"
+              value={issueCount}
+              tone={issueCount > 0 ? "yellow" : "green"}
+            />
+            <StatBox label="Paso" value={`${activeStep + 1}/${STEPS.length}`} tone="red" />
+          </View>
+        </View>
 
-        {/* 3) Tornillo ajuste */}
-        <Section>3) Tornillo de ajuste del torque</Section>
-        <Card>
-          <Row2>
-            <Col><Label>Lado Izquierdo</Label><BM value={tornillo_izq_a} onChange={setTornillo_izq_a}/></Col>
-            <Col><Label>(después)</Label><BM value={tornillo_izq_d} onChange={setTornillo_izq_d}/></Col>
-          </Row2>
-          <Row2>
-            <Col><Label>Lado Derecho</Label><BM value={tornillo_der_a} onChange={setTornillo_der_a}/></Col>
-            <Col><Label>(después)</Label><BM value={tornillo_der_d} onChange={setTornillo_der_d}/></Col>
-          </Row2>
-          <Row2>
-            <Col><Label>Revisado</Label><YN value={tornillo_revisado} onChange={setTornillo_revisado}/></Col>
-            <Col><Label>Ajuste</Label><YN value={tornillo_ajuste} onChange={setTornillo_ajuste}/></Col>
-          </Row2>
-          <Label>Revisión SMA</Label>
-          <OkSeg value={tornillo_revSMA} onChange={setTornillo_revSMA}/>
-        </Card>
+        {renderProgress()}
 
-        {/* 4) Recorrido de bobina */}
-        <Section>4) Recorrido de bobina</Section>
-        <Card>
-          <Row2>
-            <Col><Label>Izquierdo (antes) [mm]</Label><Input keyboardType="numeric" value={bobina_izq_a} onChangeText={setBobina_izq_a}/></Col>
-            <Col><Label>Izquierdo (después) [mm]</Label><Input keyboardType="numeric" value={bobina_izq_d} onChangeText={setBobina_izq_d}/></Col>
-          </Row2>
-          <Row2>
-            <Col><Label>Derecho (antes) [mm]</Label><Input keyboardType="numeric" value={bobina_der_a} onChangeText={setBobina_der_a}/></Col>
-            <Col><Label>Derecho (después) [mm]</Label><Input keyboardType="numeric" value={bobina_der_d} onChangeText={setBobina_der_d}/></Col>
-          </Row2>
-          <Row2>
-            <Col><Label>Revisado</Label><YN value={bobina_revisado} onChange={setBobina_revisado}/></Col>
-            <Col><Label>Ajuste</Label><YN value={bobina_ajuste} onChange={setBobina_ajuste}/></Col>
-          </Row2>
-          <Label>Revisión SMA</Label>
-          <OkSeg value={bobina_revSMA} onChange={setBobina_revSMA}/>
-        </Card>
+        <View style={styles.activeStepHeader}>
+          <Text style={styles.activeStepSmall}>
+            Paso {activeStep + 1} de {STEPS.length}
+          </Text>
+          <Text style={styles.activeStepTitle}>{STEPS[activeStep].title}</Text>
+        </View>
 
-        {/* 5) Recorrido micro switch */}
-        <Section>5) Recorrido del micro switch de freno</Section>
-        <Card>
-          <Label>Izquierdo</Label>
-          <Row2>
-            <Col><Label>Superior (antes)</Label><BM value={ms_izq_sup_a} onChange={setMs_izq_sup_a}/></Col>
-            <Col><Label>Superior (después)</Label><BM value={ms_izq_sup_d} onChange={setMs_izq_sup_d}/></Col>
-          </Row2>
-          <Row2>
-            <Col><Label>Inferior (antes)</Label><BM value={ms_izq_inf_a} onChange={setMs_izq_inf_a}/></Col>
-            <Col><Label>Inferior (después)</Label><BM value={ms_izq_inf_d} onChange={setMs_izq_inf_d}/></Col>
-          </Row2>
+        {renderStepContent()}
 
-          <Label style={{marginTop:10}}>Derecho</Label>
-          <Row2>
-            <Col><Label>Superior (antes)</Label><BM value={ms_der_sup_a} onChange={setMs_der_sup_a}/></Col>
-            <Col><Label>Superior (después)</Label><BM value={ms_der_sup_d} onChange={setMs_der_sup_d}/></Col>
-          </Row2>
-          <Row2>
-            <Col><Label>Inferior (antes)</Label><BM value={ms_der_inf_a} onChange={setMs_der_inf_a}/></Col>
-            <Col><Label>Inferior (después)</Label><BM value={ms_der_inf_d} onChange={setMs_der_inf_d}/></Col>
-          </Row2>
+        <View style={styles.navRow}>
+          <TouchableOpacity
+            style={[styles.navBtn, activeStep === 0 && styles.navBtnDisabled]}
+            onPress={goBack}
+            disabled={activeStep === 0}
+            activeOpacity={0.86}
+          >
+            <Text style={[styles.navBtnText, activeStep === 0 && styles.navBtnTextDisabled]}>
+              Anterior
+            </Text>
+          </TouchableOpacity>
 
-          <Row2>
-            <Col><Label>Revisado</Label><YN value={ms_revisado} onChange={setMs_revisado}/></Col>
-            <Col><Label>Ajuste</Label><YN value={ms_ajuste} onChange={setMs_ajuste}/></Col>
-          </Row2>
-          <Label>Revisión SMA</Label>
-          <OkSeg value={ms_revSMA} onChange={setMs_revSMA}/>
-        </Card>
-
-        {/* 6) Revisar funcionamiento micro switch */}
-        <Section>6) Revisar funcionamiento de micro switch</Section>
-        <Card>
-          <Row2>
-            <Col><Label>IZQ Freno #1 (antes)</Label><BM value={ms_func_izq_a} onChange={setMs_func_izq_a}/></Col>
-            <Col><Label>IZQ Freno #1 (después)</Label><BM value={ms_func_izq_d} onChange={setMs_func_izq_d}/></Col>
-          </Row2>
-          <Row2>
-            <Col><Label>DER Freno #2 (antes)</Label><BM value={ms_func_der_a} onChange={setMs_func_der_a}/></Col>
-            <Col><Label>DER Freno #2 (después)</Label><BM value={ms_func_der_d} onChange={setMs_func_der_d}/></Col>
-          </Row2>
-          <Row2>
-            <Col><Label>Revisado</Label><YN value={ms_func_revisado} onChange={setMs_func_revisado}/></Col>
-            <Col><Label>Ajuste</Label><YN value={ms_func_ajuste} onChange={setMs_func_ajuste}/></Col>
-          </Row2>
-          <Label>Revisión SMA</Label>
-          <OkSeg value={ms_func_revSMA} onChange={setMs_func_revSMA}/>
-        </Card>
-
-        {/* 7) Condiciones de tambor */}
-        <Section>7) Condiciones de tambor</Section>
-        <Card>
-          <Row2>
-            <Col><Label>¿Existe lubricante/plástico? (antes)</Label><YN value={tambor_lub_a} onChange={setTambor_lub_a}/></Col>
-            <Col><Label>(después)</Label><YN value={tambor_lub_d} onChange={setTambor_lub_d}/></Col>
-          </Row2>
-          <Row2>
-            <Col><Label>¿Existe óxido? (antes)</Label><YN value={tambor_ox_a} onChange={setTambor_ox_a}/></Col>
-            <Col><Label>(después)</Label><YN value={tambor_ox_d} onChange={setTambor_ox_d}/></Col>
-          </Row2>
-          <Row2>
-            <Col><Label>Revisado</Label><YN value={tambor_revisado} onChange={setTambor_revisado}/></Col>
-            <Col><Label>Ajuste</Label><YN value={tambor_ajuste} onChange={setTambor_ajuste}/></Col>
-          </Row2>
-          <Label>Revisión SMA</Label>
-          <OkSeg value={tambor_revSMA} onChange={setTambor_revSMA}/>
-        </Card>
-
-        {/* 8) Tubo plástico drenado */}
-        <Section>8) Tubo de plástico para drenado</Section>
-        <Card>
-          <Row2>
-            <Col><Label>Conexión (antes)</Label><YN value={tubo_conexion_a} onChange={setTubo_conexion_a}/></Col>
-            <Col><Label>Conexión (después)</Label><YN value={tubo_conexion_d} onChange={setTubo_conexion_d}/></Col>
-          </Row2>
-          <Row2>
-            <Col><Label>Depósito (antes)</Label><SiNoNa value={tubo_deposito_a} onChange={setTubo_deposito_a}/></Col>
-            <Col><Label>Depósito (después)</Label><SiNoNa value={tubo_deposito_d} onChange={setTubo_deposito_d}/></Col>
-          </Row2>
-          <Row2>
-            <Col><Label>Revisado</Label><YN value={tubo_revisado} onChange={setTubo_revisado}/></Col>
-            <Col><Label>Ajuste</Label><YN value={tubo_ajuste} onChange={setTubo_ajuste}/></Col>
-          </Row2>
-          <Label>Revisión SMA</Label>
-          <OkSeg value={tubo_revSMA} onChange={setTubo_revSMA}/>
-        </Card>
-
-        {/* 9) Prueba de funcionamiento */}
-        <Section>9) Prueba de funcionamiento</Section>
-        <Card>
-          {[
-            ['Ruido entre zapata y tambor', ruido_zapata_tambor_a, setR1a, ruido_zapata_tambor_d, setR1d],
-            ['Ruido entre cubierta y cables', ruido_cubierta_cables_a, setR2a, ruido_cubierta_cables_d, setR2d],
-            ['Ruido entre cubiertas y polea', ruido_cubiertas_polea_a, setR3a, ruido_cubiertas_polea_d, setR3d],
-            ['Ruido excesivo en frenos', ruido_excesivo_frenos_a, setR4a, ruido_excesivo_frenos_d, setR4d]
-          ].map(([label, va, sA, vd, sD]) => (
-            <Row2 key={label}>
-              <Col><Label>{label} (antes)</Label><BM value={va} onChange={sA}/></Col>
-              <Col><Label>(después)</Label><BM value={vd} onChange={sD}/></Col>
-            </Row2>
-          ))}
-          <Row2>
-            <Col><Label>Revisado</Label><YN value={op_revisado} onChange={setOp_revisado}/></Col>
-            <Col><Label>Revisión SMA</Label><YN value={op_revSMA} onChange={setOp_revSMA}/></Col>
-          </Row2>
-        </Card>
-
-        {/* 10) Resultado */}
-        <Section>10) Resultado de la revisión</Section>
-        <Card>
-          <Label>Selecciona:</Label>
-          <Chips options={['bien','seguimiento']} value={resultado} onChange={setResultado}/>
-          <Label style={{marginTop:10}}>Detalle (si requiere seguimiento)</Label>
-          <Input value={detalle} onChangeText={setDetalle} placeholder="[DETALLE]" multiline/>
-        </Card>
-
-        {/* Firmas */}
-        <Section>Firmas</Section>
-        <Card>
-          <Row2>
-            <Col><Label>Mecánico — Firma y fecha</Label><Toggle value={firmaMecanico} onValueChange={setFirmaMecanico}/></Col>
-            <Col><Label>Aprobación Supervisor — Firma y fecha</Label><Toggle value={firmaSupervisor} onValueChange={setFirmaSupervisor}/></Col>
-          </Row2>
-          <Row2>
-            <Col><Label>Aprobación Gerente — Firma y fecha</Label><Toggle value={firmaGerente} onValueChange={setFirmaGerente}/></Col>
-          </Row2>
-        </Card>
-
-        {/* ===== 2ª página — Fotos ===== */}
-        <Section>Fotos — Vista completa del freno</Section>
-        <PhotoBlock title="Lado Izquierdo" value={photos.vista_izquierda} onChange={v => updPhoto('vista_izquierda', v)} />
-        <PhotoBlock title="Lado Derecho" value={photos.vista_derecha} onChange={v => updPhoto('vista_derecha', v)} />
-        <Section>Fotos — Otro</Section>
-        <PhotoBlock title="OTRO (1)" value={photos.otro_1} onChange={v => updPhoto('otro_1', v)} />
-        <PhotoBlock title="OTRO (2)" value={photos.otro_2} onChange={v => updPhoto('otro_2', v)} />
-
-        <TouchableOpacity onPress={onGuardar} style={[styles.btn, styles.btnPrimary]}>
-          <Text style={[styles.btnText, { color: '#fff' }]}>{saving ? 'Guardando…' : 'Guardar'}</Text>
-        </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.navBtnPrimary, activeStep === STEPS.length - 1 && styles.navBtnDisabled]}
+            onPress={goNext}
+            disabled={activeStep === STEPS.length - 1}
+            activeOpacity={0.86}
+          >
+            <Text
+              style={[
+                styles.navBtnPrimaryText,
+                activeStep === STEPS.length - 1 && styles.navBtnTextDisabled,
+              ]}
+            >
+              Siguiente
+            </Text>
+          </TouchableOpacity>
+        </View>
       </ScrollView>
+
+      <View style={styles.bottomBar}>
+        <TouchableOpacity
+          style={styles.previewBtn}
+          onPress={abrirPreviewPdf}
+          disabled={generatingPdf}
+          activeOpacity={0.9}
+        >
+          <Text style={styles.previewBtnText}>Vista previa</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.shareBtn}
+          onPress={compartirPdf}
+          disabled={generatingPdf}
+          activeOpacity={0.9}
+        >
+          {generatingPdf ? (
+            <ActivityIndicator color="#FFFFFF" />
+          ) : (
+            <Text style={styles.shareBtnText}>Compartir PDF</Text>
+          )}
+        </TouchableOpacity>
+      </View>
+
+      <Modal
+        visible={previewVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setPreviewVisible(false)}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.previewCard}>
+            <View style={styles.previewHeader}>
+              <View>
+                <Text style={styles.previewKicker}>Documento</Text>
+                <Text style={styles.previewTitle}>Vista previa PDF</Text>
+              </View>
+
+              <TouchableOpacity
+                style={styles.previewClose}
+                onPress={() => setPreviewVisible(false)}
+              >
+                <Text style={styles.previewCloseText}>Cerrar</Text>
+              </TouchableOpacity>
+            </View>
+
+            <WebView
+              originWhitelist={["*"]}
+              source={{ html: previewHtml }}
+              style={styles.webview}
+            />
+
+            <View style={styles.previewFooter}>
+              <TouchableOpacity
+                style={styles.shareBtn}
+                onPress={compartirPdf}
+                disabled={generatingPdf}
+                activeOpacity={0.9}
+              >
+                {generatingPdf ? (
+                  <ActivityIndicator color="#FFFFFF" />
+                ) : (
+                  <Text style={styles.shareBtnText}>Compartir PDF</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
 
-// —— helpers ——
-const num = (v) => {
-  if (v == null || v === '') return null;
-  const n = Number(String(v).replace(',','.')); return Number.isFinite(n) ? n : null;
-};
-const txt = (v) => (v == null || v === '' ? null : String(v));
-const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
-const promedio = (arr) => {
-  const xs = arr.map(num).filter(isNum);
-  if (!xs.length) return null;
-  const s = xs.reduce((a,b)=>a+b,0); return Math.round((s/xs.length)*100)/100;
-};
-const yn    = (v) => v == null ? null : (v==='Si');
-const bm    = (v) => v == null ? null : (v==='Bien' ? 'bien' : (v==='Mal' ? 'mal':null));
-const okseg = (v) => v == null ? null : (v==='Ok' ? 'ok' : (v==='Necesita Seguimiento' ? 'seguimiento':null));
-const sinoNa= (v) => v == null ? null : (v==='Si' ? 'si' : (v==='No' ? 'no' : (v==='N/A' ? 'na': null)));
-
 const styles = StyleSheet.create({
-  section:{ marginTop:18, fontSize:18, fontWeight:'800', color:'#1f2937' },
-  card:{ backgroundColor:'#fff', borderRadius:14, padding:16, marginTop:10, borderWidth:1, borderColor:'#e5e7eb', shadowColor:'#000', shadowOpacity:0.03, shadowRadius:6, elevation:1 },
-  label:{ fontSize:12, color:'#6b7280', marginBottom:6 },
-  input:{ borderWidth:1, borderColor:'#d1d5db', borderRadius:12, paddingVertical:12, paddingHorizontal:14, backgroundColor:'#fff', fontSize:16, color:'#111827' },
-  readonly:{ borderWidth:1, borderColor:'#e5e7eb', borderRadius:12, paddingVertical:12, paddingHorizontal:14, backgroundColor:'#f9fafb' },
-  readonlyText:{ fontSize:16, color:'#111827' },
-  row2:{ flexDirection:'row', gap:12, flexWrap:'wrap' },
-  col:{ flexGrow:1, flexBasis:0, minWidth:220 },
-  chipsWrap:{ flexDirection:'row', flexWrap:'wrap', gap:10 },
-  chip:{ borderWidth:1, borderColor:'#c7cdd6', paddingVertical:10, paddingHorizontal:14, borderRadius:999, backgroundColor:'#fff' },
-  chipOn:{ backgroundColor:'#111827', borderColor:'#111827' },
-  chipText:{ color:'#111827', fontWeight:'700' },
-  chipTextOn:{ color:'#fff' },
-  btn:{ marginTop:20, padding:16, borderRadius:14, alignItems:'center' },
-  btnPrimary:{ backgroundColor:'#2563eb' },
-  btnText:{ fontWeight:'900', fontSize:16 },
-  // Fotos
-  photoBlockTitle:{ fontSize:16, fontWeight:'800', marginBottom:8, color:'#111827' },
-  photoColumns:{ flexDirection:'row', gap:12, flexWrap:'wrap' },
-  photoCol:{ flexGrow:1, flexBasis:0, minWidth:260 },
-  photoColHeader:{ flexDirection:'row', justifyContent:'space-between', alignItems:'center', marginBottom:6 },
-  photoColTitle:{ fontWeight:'800', color:'#374151' },
-  photoAdd:{ paddingVertical:8, paddingHorizontal:12, backgroundColor:'#0ea5e9', borderRadius:999 },
-  photoAddText:{ color:'#fff', fontWeight:'800' },
-  photoGrid:{ flexDirection:'row', flexWrap:'wrap', gap:10 },
-  photoItem:{ width:150, borderWidth:1, borderColor:'#e5e7eb', borderRadius:12, overflow:'hidden', backgroundColor:'#fff' },
-  photoImg:{ width:'100%', height:100, backgroundColor:'#f3f4f6' },
-  photoNote:{ paddingHorizontal:8, paddingVertical:8, borderTopWidth:1, borderTopColor:'#eef2f7' },
-  photoRemove:{ alignItems:'center', paddingVertical:8, borderTopWidth:1, borderTopColor:'#eef2f7', backgroundColor:'#fee2e2' },
-  photoRemoveText:{ color:'#991b1b', fontWeight:'700' },
+  container: {
+    flex: 1,
+    backgroundColor: UI.bg,
+  },
+
+  loadingScreen: {
+    flex: 1,
+    backgroundColor: UI.bg,
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 24,
+  },
+
+  loadingTitle: {
+    marginTop: 14,
+    color: UI.text,
+    fontSize: 18,
+    fontWeight: "900",
+  },
+
+  loadingText: {
+    marginTop: 4,
+    color: UI.muted,
+    fontSize: 13,
+    fontWeight: "700",
+  },
+
+  content: {
+    padding: 16,
+    paddingBottom: 120,
+  },
+
+  hero: {
+    backgroundColor: UI.blue,
+    borderRadius: 28,
+    padding: 18,
+    shadowColor: "#000",
+    shadowOpacity: 0.1,
+    shadowRadius: 12,
+    elevation: 3,
+  },
+
+  heroTop: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 12,
+  },
+
+  heroKicker: {
+    color: "#BFDBFE",
+    fontSize: 11,
+    fontWeight: "900",
+    textTransform: "uppercase",
+    letterSpacing: 0.9,
+    marginBottom: 4,
+  },
+
+  heroTitle: {
+    color: "#FFFFFF",
+    fontSize: 24,
+    fontWeight: "900",
+    lineHeight: 30,
+  },
+
+  heroText: {
+    color: "#DBEAFE",
+    fontSize: 13,
+    fontWeight: "700",
+    lineHeight: 19,
+    marginTop: 8,
+  },
+
+  heroBadge: {
+    backgroundColor: "rgba(255,255,255,0.15)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.22)",
+    borderRadius: 999,
+    paddingHorizontal: 11,
+    paddingVertical: 8,
+  },
+
+  heroBadgeText: {
+    color: "#FFFFFF",
+    fontSize: 11,
+    fontWeight: "900",
+  },
+
+  statsRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 10,
+    marginTop: 16,
+  },
+
+  statBox: {
+    flexGrow: 1,
+    minWidth: 82,
+    borderRadius: 18,
+    paddingVertical: 11,
+    paddingHorizontal: 10,
+    alignItems: "center",
+  },
+
+  statBlue: {
+    backgroundColor: "rgba(255,255,255,0.13)",
+  },
+
+  statGreen: {
+    backgroundColor: "rgba(22,163,74,0.28)",
+  },
+
+  statYellow: {
+    backgroundColor: "rgba(245,158,11,0.28)",
+  },
+
+  statRed: {
+    backgroundColor: "rgba(220,38,38,0.26)",
+  },
+
+  statValue: {
+    color: "#FFFFFF",
+    fontSize: 19,
+    fontWeight: "900",
+  },
+
+  statLabel: {
+    color: "#DBEAFE",
+    fontSize: 11,
+    fontWeight: "800",
+    marginTop: 2,
+  },
+
+  progressCard: {
+    backgroundColor: UI.card,
+    borderWidth: 1,
+    borderColor: UI.border,
+    borderRadius: 22,
+    padding: 14,
+    marginTop: 14,
+  },
+
+  progressTitle: {
+    color: UI.text,
+    fontSize: 14,
+    fontWeight: "900",
+    marginBottom: 10,
+  },
+
+  stepsScroll: {
+    gap: 10,
+    paddingRight: 10,
+  },
+
+  stepItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
+    minWidth: 130,
+    backgroundColor: UI.cardSoft,
+    borderWidth: 1,
+    borderColor: UI.border,
+    borderRadius: 18,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+
+  stepItemActive: {
+    backgroundColor: UI.blueSoft,
+    borderColor: "#93C5FD",
+  },
+
+  stepItemDone: {
+    backgroundColor: UI.greenSoft,
+    borderColor: "#86EFAC",
+  },
+
+  stepNumber: {
+    width: 30,
+    height: 30,
+    borderRadius: 11,
+    backgroundColor: "#E2E8F0",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  stepNumberActive: {
+    backgroundColor: UI.blue,
+  },
+
+  stepNumberDone: {
+    backgroundColor: UI.green,
+  },
+
+  stepNumberText: {
+    color: UI.muted,
+    fontSize: 12,
+    fontWeight: "900",
+  },
+
+  stepNumberTextActive: {
+    color: "#FFFFFF",
+  },
+
+  stepName: {
+    color: UI.text,
+    fontSize: 12,
+    fontWeight: "900",
+  },
+
+  stepNameActive: {
+    color: UI.blue,
+  },
+
+  stepNameDone: {
+    color: UI.green,
+  },
+
+  stepShort: {
+    color: UI.muted,
+    fontSize: 10,
+    fontWeight: "800",
+    marginTop: 1,
+  },
+
+  activeStepHeader: {
+    marginTop: 16,
+    marginBottom: 8,
+  },
+
+  activeStepSmall: {
+    color: UI.blue2,
+    fontSize: 11,
+    fontWeight: "900",
+    textTransform: "uppercase",
+    letterSpacing: 0.8,
+  },
+
+  activeStepTitle: {
+    color: UI.text,
+    fontSize: 21,
+    fontWeight: "900",
+    marginTop: 2,
+  },
+
+  sectionBox: {
+    backgroundColor: UI.card,
+    borderWidth: 1,
+    borderColor: UI.border,
+    borderRadius: 24,
+    padding: 15,
+    marginTop: 10,
+    shadowColor: "#0F172A",
+    shadowOpacity: 0.04,
+    shadowRadius: 10,
+    elevation: 1,
+  },
+
+  sectionTop: {
+    marginBottom: 14,
+  },
+
+  sectionTitle: {
+    color: UI.text,
+    fontSize: 17,
+    fontWeight: "900",
+  },
+
+  sectionSubtitle: {
+    color: UI.muted,
+    fontSize: 12,
+    fontWeight: "700",
+    lineHeight: 17,
+    marginTop: 3,
+  },
+
+  infoGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 10,
+  },
+
+  infoItem: {
+    flexGrow: 1,
+    flexBasis: "46%",
+    minWidth: 150,
+    backgroundColor: UI.cardSoft,
+    borderRadius: 16,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: UI.border,
+  },
+
+  infoLabel: {
+    color: UI.muted,
+    fontSize: 10,
+    fontWeight: "900",
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+    marginBottom: 5,
+  },
+
+  infoValue: {
+    color: UI.text,
+    fontSize: 14,
+    fontWeight: "900",
+    lineHeight: 18,
+  },
+
+  label: {
+    color: UI.muted,
+    fontSize: 11,
+    fontWeight: "900",
+    textTransform: "uppercase",
+    letterSpacing: 0.4,
+    marginBottom: 6,
+  },
+
+  input: {
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1,
+    borderColor: UI.borderDark,
+    borderRadius: 15,
+    paddingHorizontal: 13,
+    paddingVertical: Platform.OS === "ios" ? 12 : 9,
+    minHeight: 45,
+    color: UI.text,
+    fontSize: 14,
+    fontWeight: "800",
+    marginBottom: 10,
+  },
+
+  textArea: {
+    minHeight: 125,
+    paddingTop: 12,
+    textAlignVertical: "top",
+  },
+
+  fieldRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 11,
+    marginTop: 10,
+  },
+
+  field: {
+    flexGrow: 1,
+    flexBasis: 0,
+    minWidth: 170,
+  },
+
+  fieldSmall: {
+    minWidth: 112,
+  },
+
+  fieldWide: {
+    minWidth: 230,
+  },
+
+  chipsWrap: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 9,
+    marginBottom: 12,
+  },
+
+  chip: {
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1,
+    borderColor: UI.borderDark,
+    borderRadius: 999,
+    paddingVertical: 9,
+    paddingHorizontal: 13,
+  },
+
+  chipBlue: {
+    backgroundColor: UI.blue,
+    borderColor: UI.blue,
+  },
+
+  chipGreen: {
+    backgroundColor: UI.green,
+    borderColor: UI.green,
+  },
+
+  chipYellow: {
+    backgroundColor: UI.yellow,
+    borderColor: UI.yellow,
+  },
+
+  chipRed: {
+    backgroundColor: UI.red,
+    borderColor: UI.red,
+  },
+
+  chipText: {
+    color: UI.text,
+    fontSize: 12,
+    fontWeight: "900",
+  },
+
+  chipTextActive: {
+    color: "#FFFFFF",
+  },
+
+  groupPill: {
+    alignSelf: "flex-start",
+    backgroundColor: UI.blueSoft,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    marginBottom: 10,
+  },
+
+  groupPillText: {
+    color: UI.blue,
+    fontSize: 12,
+    fontWeight: "900",
+  },
+
+  divider: {
+    height: 1,
+    backgroundColor: UI.border,
+    marginVertical: 14,
+  },
+
+  boolCard: {
+    backgroundColor: UI.cardSoft,
+    borderWidth: 1,
+    borderColor: UI.border,
+    borderRadius: 18,
+    padding: 13,
+    marginBottom: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+  },
+
+  boolTitle: {
+    color: UI.text,
+    fontSize: 14,
+    fontWeight: "900",
+  },
+
+  boolHint: {
+    color: UI.muted,
+    fontSize: 11,
+    fontWeight: "700",
+    marginTop: 2,
+  },
+
+  boolRight: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+
+  boolValue: {
+    color: UI.text,
+    fontSize: 12,
+    fontWeight: "900",
+  },
+
+  statusBlock: {
+    marginTop: 4,
+    marginBottom: 6,
+  },
+
+  photoSummary: {
+    backgroundColor: UI.blueSoft,
+    borderWidth: 1,
+    borderColor: "#BFDBFE",
+    borderRadius: 18,
+    padding: 14,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 14,
+  },
+
+  photoSummaryTitle: {
+    color: UI.blue,
+    fontWeight: "900",
+    fontSize: 14,
+  },
+
+  photoSummaryValue: {
+    color: UI.blue,
+    fontWeight: "900",
+    fontSize: 22,
+  },
+
+  photoGroupTitle: {
+    color: UI.text,
+    fontSize: 15,
+    fontWeight: "900",
+    marginTop: 12,
+    marginBottom: 10,
+  },
+
+  photoField: {
+    backgroundColor: UI.cardSoft,
+    borderWidth: 1,
+    borderColor: UI.border,
+    borderRadius: 18,
+    padding: 12,
+    marginBottom: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+
+  photoFieldActive: {
+    backgroundColor: UI.greenSoft,
+    borderColor: "#86EFAC",
+  },
+
+  photoIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 14,
+    backgroundColor: UI.blue,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  photoIconText: {
+    color: "#FFFFFF",
+    fontSize: 18,
+    fontWeight: "900",
+  },
+
+  photoLabel: {
+    color: UI.text,
+    fontSize: 14,
+    fontWeight: "900",
+  },
+
+  photoStatus: {
+    color: UI.muted,
+    fontSize: 11,
+    fontWeight: "800",
+    marginTop: 2,
+  },
+
+  photoStatusActive: {
+    color: UI.green,
+  },
+
+  photoActions: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 7,
+    justifyContent: "flex-end",
+  },
+
+  photoBtn: {
+    backgroundColor: UI.blue,
+    paddingHorizontal: 11,
+    paddingVertical: 8,
+    borderRadius: 999,
+  },
+
+  photoBtnText: {
+    color: "#FFFFFF",
+    fontSize: 11,
+    fontWeight: "900",
+  },
+
+  photoBtnLight: {
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1,
+    borderColor: UI.blue,
+    paddingHorizontal: 11,
+    paddingVertical: 8,
+    borderRadius: 999,
+  },
+
+  photoBtnLightText: {
+    color: UI.blue,
+    fontSize: 11,
+    fontWeight: "900",
+  },
+
+  photoRemoveBtn: {
+    backgroundColor: UI.redSoft,
+    paddingHorizontal: 11,
+    paddingVertical: 8,
+    borderRadius: 999,
+  },
+
+  photoRemoveText: {
+    color: UI.red,
+    fontSize: 11,
+    fontWeight: "900",
+  },
+
+  navRow: {
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 16,
+    marginBottom: 4,
+  },
+
+  navBtn: {
+    flex: 1,
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1,
+    borderColor: UI.blue,
+    borderRadius: 16,
+    alignItems: "center",
+    paddingVertical: 14,
+  },
+
+  navBtnPrimary: {
+    flex: 1,
+    backgroundColor: UI.blue,
+    borderWidth: 1,
+    borderColor: UI.blue,
+    borderRadius: 16,
+    alignItems: "center",
+    paddingVertical: 14,
+  },
+
+  navBtnDisabled: {
+    opacity: 0.45,
+  },
+
+  navBtnText: {
+    color: UI.blue,
+    fontSize: 14,
+    fontWeight: "900",
+  },
+
+  navBtnPrimaryText: {
+    color: "#FFFFFF",
+    fontSize: 14,
+    fontWeight: "900",
+  },
+
+  navBtnTextDisabled: {
+    color: UI.muted,
+  },
+
+  bottomBar: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    bottom: 0,
+    flexDirection: "row",
+    gap: 10,
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: Platform.OS === "ios" ? 26 : 14,
+    backgroundColor: "rgba(238,243,248,0.97)",
+    borderTopWidth: 1,
+    borderTopColor: UI.border,
+  },
+
+  previewBtn: {
+    flex: 1,
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1,
+    borderColor: UI.blue,
+    borderRadius: 17,
+    alignItems: "center",
+    justifyContent: "center",
+    minHeight: 52,
+  },
+
+  previewBtnText: {
+    color: UI.blue,
+    fontSize: 14,
+    fontWeight: "900",
+  },
+
+  shareBtn: {
+    flex: 1,
+    backgroundColor: UI.blue,
+    borderRadius: 17,
+    alignItems: "center",
+    justifyContent: "center",
+    minHeight: 52,
+  },
+
+  shareBtnText: {
+    color: "#FFFFFF",
+    fontSize: 14,
+    fontWeight: "900",
+  },
+
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(15,23,42,0.58)",
+    padding: 12,
+    justifyContent: "center",
+  },
+
+  previewCard: {
+    flex: 1,
+    backgroundColor: "#FFFFFF",
+    borderRadius: 24,
+    overflow: "hidden",
+  },
+
+  previewHeader: {
+    backgroundColor: UI.blue,
+    padding: 14,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+
+  previewKicker: {
+    color: "#BFDBFE",
+    fontSize: 11,
+    fontWeight: "900",
+    textTransform: "uppercase",
+    letterSpacing: 0.8,
+  },
+
+  previewTitle: {
+    color: "#FFFFFF",
+    fontSize: 17,
+    fontWeight: "900",
+    marginTop: 1,
+  },
+
+  previewClose: {
+    backgroundColor: "rgba(255,255,255,0.15)",
+    paddingVertical: 9,
+    paddingHorizontal: 13,
+    borderRadius: 999,
+  },
+
+  previewCloseText: {
+    color: "#FFFFFF",
+    fontSize: 12,
+    fontWeight: "900",
+  },
+
+  webview: {
+    flex: 1,
+    backgroundColor: "#FFFFFF",
+  },
+
+  previewFooter: {
+    padding: 12,
+    borderTopWidth: 1,
+    borderTopColor: UI.border,
+  },
 });

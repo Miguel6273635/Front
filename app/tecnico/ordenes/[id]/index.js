@@ -1997,6 +1997,10 @@ export default function DetalleOrden() {
         clienteNombre: String(clienteNombre || "").trim(),
         clienteCargo: String(clienteCargo || "").trim(),
         avisoCliente: String(avisoCliente || "").trim(),
+
+        cobertura_tipo: coberturaTipo || orden?.cobertura_tipo || "SIN COBERTURA",
+        ShortText: orden?.ShortText || "",
+
         orderStartedAtMs: Number.isFinite(orderStartedAtMs)
           ? orderStartedAtMs
           : null,
@@ -2428,6 +2432,8 @@ export default function DetalleOrden() {
       return;
     }
 
+    
+
     if (orderStartedAtMs) {
       const elapsed = Math.max(0, Date.now() - orderStartedAtMs);
       await saveOrderElapsed(orderId, elapsed);
@@ -2447,6 +2453,10 @@ export default function DetalleOrden() {
       clienteNombre: String(clienteNombre || "").trim(),
       clienteCargo: String(clienteCargo || "").trim(),
       avisoCliente: String(avisoCliente || "").trim(),
+
+      cobertura_tipo: coberturaTipo || orden?.cobertura_tipo || "SIN COBERTURA",
+      ShortText: orden?.ShortText || "",
+
       orderStartedAtMs: Number.isFinite(orderStartedAtMs)
         ? orderStartedAtMs
         : null,

@@ -92,6 +92,12 @@ export default function SideDrawer() {
         onPress: () => router.push("/info"),
       },
       {
+        key: "diagnostico",
+        label: "Diagnóstico",
+        icon: "phone-portrait-outline",
+        onPress: () => router.push("/diagnostico"),
+      },
+      {
         key: "logout",
         label: "Cerrar sesión",
         icon: "log-out-outline",

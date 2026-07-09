@@ -313,6 +313,10 @@ const matchesQuery = (item, q) => {
     item?.equipment ?? "",
     item?.partner_name ?? "",
     item?.partner_address ?? "",
+    item?.ShortText ?? "",
+    item?.shortText ?? "",
+    item?.short_text ?? "",
+    item?.cobertura ?? "",
     item?.userstatus ?? "",
     item?.estatus_label ?? "",
     item?.estatus_code ?? "",
@@ -1221,9 +1225,58 @@ export default function ListaOrdenesTecnico() {
     setYearOnly(now.getFullYear());
   };
 
+  const getOrderIdDisplay = (item = {}) => {
+    const raw = String(item?.Orderid || item?.orderid || "").trim();
+
+    if (!raw) return "";
+
+    return raw.replace(/^0+/, "") || raw;
+  };
+  const getCoberturaOrden = (item = {}) => {
+    const raw = String(
+      item?.ShortText ||
+        item?.shortText ||
+        item?.shorttext ||
+        item?.short_text ||
+        item?.coverage ||
+        item?.cobertura ||
+        "",
+    ).trim();
+
+    if (!raw) return "";
+
+    const upper = raw.toUpperCase();
+
+    if (upper.includes("BASICA") || upper.includes("BÁSICA")) {
+      return "BÁSICA";
+    }
+
+    if (upper.includes("MEDIA")) {
+      return "MEDIA";
+    }
+
+    if (
+      upper.includes("SEMI FULL") ||
+      upper.includes("SEMIFULL") ||
+      upper.includes("SEMI")
+    ) {
+      return "SEMIFULL";
+    }
+
+    if (upper.includes("FULL")) {
+      return "FULL";
+    }
+
+    return raw.split("|")[0].replace(/COBERTURA/gi, "").trim();
+  };
+
   const renderItem = ({ item }) => {
     const startLabel = formatDateDMY(item.start_date);
     const finishLabel = formatDateDMY(item.finish_date);
+
+    const orderIdDisplay = getOrderIdDisplay(item);
+
+    const coberturaLabel = getCoberturaOrden(item);
 
     const stBase = resolveUserstatus(
       item?.userstatus ?? "",
@@ -1236,7 +1289,6 @@ export default function ListaOrdenesTecnico() {
     const tbmYaProceso = stBase.code === "0200";
     const ordenYaAvanzo = ["0400", "0300", "0600"].includes(stBase.code);
 
-    // ✅ No permitas que un pendiente offline viejo regrese visualmente la orden a 0100
     const st =
       isPendingOffline && !tbmYaProceso && !ordenYaAvanzo
         ? {
@@ -1259,49 +1311,50 @@ export default function ListaOrdenesTecnico() {
       <Pressable
         style={[
           styles.card,
-          { borderLeftWidth: 4, borderLeftColor: st.color },
+          { borderLeftColor: st.color },
           st.type === "no_mantto" && styles.cardNoMant,
           st.type === "final" && styles.cardFinished,
         ]}
         onPress={() => irADetalles(item)}
       >
-        <View style={styles.cardContent}>
-          <View style={[styles.statusDot, { backgroundColor: st.color }]} />
+        <View style={styles.cardTopRow}>
+          <Text style={styles.cardTitle} numberOfLines={1}>
+            #{orderIdDisplay}{" "}
+            <Text style={styles.cardSubtitle}>• {item.order_type}</Text>
+          </Text>
 
-          <View style={{ flex: 1 }}>
-            <Text style={styles.title}>
-              #{item.Orderid} - {item.order_type}
+          <View style={[styles.badge, { backgroundColor: `${st.color}1A` }]}>
+            <View style={[styles.statusDot, { backgroundColor: st.color }]} />
+            <Text style={[styles.badgeText, { color: st.color }]}>
+              {st.label}
             </Text>
-
-            <Text style={styles.label}>Equipo: {item.equipment}</Text>
-            <Text style={styles.label}>Inicio: {startLabel}</Text>
-            <Text style={styles.label}>Fin: {finishLabel}</Text>
-
-            <Text style={styles.label}>Estatus: {st.label}</Text>
           </View>
         </View>
 
-        <View
-          pointerEvents="box-none"
-          style={{
-            flexDirection: "row",
-            gap: 10,
-            justifyContent: "flex-end",
-            marginTop: 12,
-            flexWrap: "wrap",
-          }}
-        >
+        <View style={styles.cardMiddleRow}>
+          <Text style={styles.infoText} numberOfLines={1}>
+            <Text style={styles.infoStrong}>Eq: </Text>
+            {item.equipment || "—"}
+          </Text>
+
+          <Text style={styles.infoDateText} numberOfLines={1}>
+            {startLabel} - {finishLabel}
+          </Text>
+        </View>
+
+        <View style={styles.coverageRow}>
+          <Text style={styles.coverageText} numberOfLines={1}>
+            <Text style={styles.coverageLabel}>Cobertura: </Text>
+            {coberturaLabel || "Sin cobertura"}
+          </Text>
+        </View>
+
+        <View style={styles.cardBottomRow} pointerEvents="box-none">
           {lockAll ? (
-            <Text
-              style={{
-                color: FIORI.textMuted,
-                fontSize: 12,
-                fontStyle: "italic",
-              }}
-            >
+            <Text style={styles.lockText}>
               {st.type === "no_mantto"
-                ? "Orden Carta No Mantto. Acciones bloqueadas."
-                : "Orden bloqueada por estatus."}
+                ? "Carta No Mantto. Bloqueada."
+                : "Bloqueada por estatus."}
             </Text>
           ) : showCheckinBtn ? (
             <TouchableOpacity
@@ -1338,21 +1391,13 @@ export default function ListaOrdenesTecnico() {
                   }}
                 >
                   <Text style={[styles.botonTexto, { color: FIORI.accent }]}>
-                    Carta No Mantto
+                    No Mantto
                   </Text>
                 </TouchableOpacity>
               )}
             </>
           ) : (
-            <Text
-              style={{
-                color: FIORI.textMuted,
-                fontSize: 12,
-                fontStyle: "italic",
-              }}
-            >
-              Se requiere la firma del cliente para finalizar.
-            </Text>
+            <Text style={styles.lockText}>Firma del cliente requerida.</Text>
           )}
         </View>
       </Pressable>
@@ -1836,7 +1881,7 @@ export default function ListaOrdenesTecnico() {
           data={ordenes}
           keyExtractor={(item, idx) => String(item?.Orderid ?? `row-${idx}`)}
           renderItem={renderItem}
-          contentContainerStyle={{ padding: 20, paddingTop: 6 }}
+          contentContainerStyle={{ padding: 12, paddingTop: 6 }}
           refreshing={refreshing}
           onRefresh={() => fetchOrdenes({ isRefresh: true })}
           ListEmptyComponent={
@@ -1997,64 +2042,141 @@ const styles = StyleSheet.create({
 
   card: {
     backgroundColor: FIORI.cardBg,
-    borderRadius: 10,
-    padding: 14,
-    marginBottom: 14,
+    borderRadius: 8,
+    padding: 10,
+    marginBottom: 8,
     borderWidth: 1,
     borderColor: FIORI.border,
+    borderLeftWidth: 4,
     shadowColor: "#000",
-    shadowOpacity: 0.06,
-    shadowOffset: { width: 0, height: 2 },
-    shadowRadius: 6,
-    elevation: 2,
-    position: "relative",
+    shadowOpacity: 0.03,
+    shadowOffset: { width: 0, height: 1 },
+    shadowRadius: 2,
+    elevation: 1,
   },
 
+  coverageRow: {
+    marginTop: 6,
+    backgroundColor: "#F5F7FA",
+    borderWidth: 1,
+    borderColor: FIORI.border,
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+  },
+
+  coverageText: {
+    fontSize: 11,
+    color: FIORI.textMuted,
+    fontWeight: "600",
+  },
+
+  coverageLabel: {
+    color: FIORI.ink,
+    fontWeight: "800",
+  },
   cardNoMant: {
-    backgroundColor: "#F0F0F0",
-    borderColor: "#D0D0D0",
+    backgroundColor: "#F8F9FA",
+    borderColor: "#E2E2E2",
   },
 
   cardFinished: {
-    backgroundColor: "#EAF7EF",
-    borderColor: "#CFE9D8",
+    backgroundColor: "#F2FCF5",
+    borderColor: "#D3EEDC",
   },
 
-  cardContent: {
+  cardTopRow: {
     flexDirection: "row",
+    justifyContent: "space-between",
     alignItems: "center",
   },
 
-  statusDot: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    marginRight: 10,
-  },
-
-  title: {
-    fontWeight: "700",
-    fontSize: 16,
-    color: FIORI.ink,
-    marginBottom: 2,
-  },
-
-  label: {
+  cardTitle: {
+    fontWeight: "800",
     fontSize: 14,
+    color: FIORI.ink,
+    flex: 1,
+    marginRight: 6,
+  },
+
+  cardSubtitle: {
+    fontWeight: "400",
     color: FIORI.textMuted,
   },
 
+  badge: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+
+  statusDot: {
+    width: 5,
+    height: 5,
+    borderRadius: 2.5,
+    marginRight: 4,
+  },
+
+  badgeText: {
+    fontSize: 9,
+    fontWeight: "800",
+    textTransform: "uppercase",
+  },
+
+  cardMiddleRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginTop: 6,
+    gap: 8,
+  },
+
+  infoText: {
+    flex: 1,
+    fontSize: 12,
+    color: FIORI.textMuted,
+  },
+
+  infoStrong: {
+    fontWeight: "700",
+    color: FIORI.ink,
+  },
+
+  infoDateText: {
+    fontSize: 12,
+    color: FIORI.textMuted,
+    textAlign: "right",
+  },
+
+  cardBottomRow: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    alignItems: "center",
+    marginTop: 8,
+    gap: 6,
+    flexWrap: "wrap",
+  },
+
+  lockText: {
+    color: FIORI.textMuted,
+    fontSize: 11,
+    fontStyle: "italic",
+    flex: 1,
+    textAlign: "right",
+  },
+
   boton: {
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 8,
-    alignSelf: "flex-end",
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 6,
   },
 
   botonTexto: {
     color: "#fff",
     fontWeight: "700",
-    fontSize: 14,
+    fontSize: 11,
   },
 
   botonSecundario: {

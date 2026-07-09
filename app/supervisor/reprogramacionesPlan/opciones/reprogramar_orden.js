@@ -148,6 +148,119 @@ function buildRangeMarkedDates(startYmd, endYmd) {
   return marked;
 }
 
+function collectSapReturnMessages(value, out = [], seen = new WeakSet()) {
+  if (!value) return out;
+
+  if (Array.isArray(value)) {
+    value.forEach((x) => collectSapReturnMessages(x, out, seen));
+    return out;
+  }
+
+  if (typeof value !== "object") return out;
+
+  if (seen.has(value)) return out;
+  seen.add(value);
+
+  const type = safeStr(value.Type || value.type);
+  const message = safeStr(value.Message || value.message);
+
+  if (type && message) {
+    out.push({
+      type: type.toUpperCase(),
+      message,
+      id: safeStr(value.Id || value.id),
+      number: safeStr(value.Number || value.number),
+    });
+  }
+
+  const returnResults =
+    value?.ReturnSet?.results ||
+    value?.returnSet?.results ||
+    value?.ReturnSet ||
+    value?.returnSet ||
+    value?.d?.ReturnSet?.results ||
+    value?.data?.d?.ReturnSet?.results ||
+    value?.raw?.d?.ReturnSet?.results ||
+    value?.sapResponse?.d?.ReturnSet?.results;
+
+  if (returnResults && returnResults !== value) {
+    collectSapReturnMessages(returnResults, out, seen);
+  }
+
+  // Recorremos algunas propiedades comunes por si tu servicio envuelve la respuesta
+  [
+    "data",
+    "d",
+    "raw",
+    "response",
+    "sapResponse",
+    "result",
+    "results",
+    "payload",
+  ].forEach((key) => {
+    if (value?.[key] && value[key] !== value) {
+      collectSapReturnMessages(value[key], out, seen);
+    }
+  });
+
+  return out;
+}
+
+function getImportantSapMessage(response) {
+  const all = collectSapReturnMessages(response);
+
+  const unique = [];
+  const seenMessages = new Set();
+
+  all.forEach((m) => {
+    const msg = safeStr(m.message).trim();
+    if (!msg) return;
+
+    const key = msg.toLowerCase();
+    if (seenMessages.has(key)) return;
+
+    seenMessages.add(key);
+    unique.push({
+      ...m,
+      message: msg,
+    });
+  });
+
+  // Estos son mensajes que sí deben detener el flujo visual de éxito
+  const issues = unique.filter((m) =>
+    ["E", "A", "X", "W"].includes(safeStr(m.type).toUpperCase())
+  );
+
+  if (!issues.length) return null;
+
+  const first = issues[0];
+
+  return {
+    type: first.type,
+    message: first.message,
+    count: issues.length,
+    title:
+      first.type === "W"
+        ? "Aviso de SAP"
+        : "Error de SAP",
+  };
+}
+
+function showSapMessageIfNeeded(response) {
+  const sapMsg = getImportantSapMessage(response);
+
+  if (!sapMsg) return false;
+
+  Alert.alert(
+    sapMsg.title,
+    sapMsg.count > 1
+      ? `${sapMsg.message}\n\nSe detectaron ${sapMsg.count} mensajes de SAP, se muestra el principal.`
+      : sapMsg.message
+  );
+
+  return true;
+}
+
 function getSyncBadge(sync) {
   const state = sync?.state;
   if (!state) return null;
@@ -434,7 +547,13 @@ export default function ReprogramarOrden() {
       });
 
       if (!r.ok) {
-        Alert.alert("Error", r.error || "No se pudo reprogramar.");
+        if (showSapMessageIfNeeded(r)) return;
+
+        Alert.alert("Error", r.error || r.message || "No se pudo reprogramar.");
+        return;
+      }
+
+      if (r.mode !== "offline" && showSapMessageIfNeeded(r)) {
         return;
       }
 
@@ -558,7 +677,16 @@ export default function ReprogramarOrden() {
       });
 
       if (!r.ok) {
-        Alert.alert("Error", r.error || "No se pudieron reprogramar las órdenes seleccionadas.");
+        if (showSapMessageIfNeeded(r)) return;
+
+        Alert.alert(
+          "Error",
+          r.error || r.message || "No se pudieron reprogramar las órdenes seleccionadas."
+        );
+        return;
+      }
+
+      if (r.mode !== "offline" && showSapMessageIfNeeded(r)) {
         return;
       }
 
@@ -686,7 +814,16 @@ export default function ReprogramarOrden() {
       });
 
       if (!r.ok) {
-        Alert.alert("Error", r.error || r.message || "No se pudo reasignar el técnico.");
+        if (showSapMessageIfNeeded(r)) return;
+
+        Alert.alert(
+          "Error",
+          r.error || r.message || "No se pudo reasignar el técnico."
+        );
+        return;
+      }
+
+      if (r.mode !== "offline" && showSapMessageIfNeeded(r)) {
         return;
       }
 

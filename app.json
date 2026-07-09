@@ -3,7 +3,7 @@
     "name": "Melmex App",
     "slug": "mitsu_frontend",
     "scheme": "mitsuapp",
-    "version": "1.0.0",
+    "version": "1.0.0.6",
     "orientation": "portrait",
     "icon": "./assets/icon_mitsu_prod.png",
     "userInterfaceStyle": "light",

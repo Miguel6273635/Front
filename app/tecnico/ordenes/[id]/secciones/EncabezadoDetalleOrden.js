@@ -286,7 +286,14 @@ export default function EncabezadoDetalleOrden({
         )}
       </View>
 
-      {/*<FormatosOrdenMultiSelect FIORI={FIORI} orderid={orden?.Orderid || id} />*/}
+      
+      {/*
+      <FormatosOrdenMultiSelect
+        FIORI={FIORI}
+        orderid={orden?.Orderid || id}
+      />
+      */}
+      
 
       <Text style={styles?.sectionKicker || local.sectionKicker}>
         Operaciones asignadas

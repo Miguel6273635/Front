@@ -10,7 +10,9 @@ import { isOnline } from "../offline/net";
 const reprogKeys = {
   // lista mensual (o por día) de la vista
   orders: ({ userKey, year, month, dayYmd }) =>
-    `reprog:orders:${userKey}:${year}-${String(month).padStart(2, "0")}:${dayYmd || "MONTH"}`,
+    `reprog:orders:${userKey}:${year}-${String(month).padStart(2, "0")}:${
+      dayYmd || "MONTH"
+    }`,
 
   // mapa de estatus por orden (pendiente/sent/error) para pintar en UI
   statusMap: ({ userKey }) => `reprog:statusMap:${userKey}`,
@@ -29,12 +31,15 @@ const reprogKeys = {
 const pad2 = (n) => String(n).padStart(2, "0");
 
 // Local: para fechas construidas por la app
-const toYMD = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+const toYMD = (d) =>
+  `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 
 // UTC: para timestamps que vienen de SAP OData /Date(...)/
 const toYMD_UTC_FROM_MS = (ms) => {
   const d = new Date(ms);
-  return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())}`;
+  return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(
+    d.getUTCDate()
+  )}`;
 };
 
 function safeStr(v) {
@@ -125,25 +130,84 @@ function extractResults(payload) {
   return [];
 }
 
+/* ======================
+   Mensajes SAP
+   ====================== */
+
+function dedupeSapMessages(messages = []) {
+  const seen = new Set();
+  const unique = [];
+
+  for (const m of messages) {
+    const type = safeStr(m?.type).trim().toUpperCase();
+    const message = safeStr(m?.message).trim();
+
+    if (!message) continue;
+
+    const key = `${type}:${message.toLowerCase()}`;
+    if (seen.has(key)) continue;
+
+    seen.add(key);
+    unique.push({
+      ...m,
+      type,
+      message,
+    });
+  }
+
+  return unique;
+}
+
 function extractSapMessages(data) {
   const ret =
     data?.d?.ReturnSet?.results ||
     data?.d?.Return?.results ||
     data?.ReturnSet?.results ||
     data?.Return?.results ||
+    data?.response?.d?.ReturnSet?.results ||
+    data?.raw?.d?.ReturnSet?.results ||
     [];
 
   if (!Array.isArray(ret)) return [];
 
-  return ret.map((r) => ({
-    type: safeStr(r?.Type || r?.type),
-    message: safeStr(r?.Message || r?.message),
+  const messages = ret.map((r) => ({
+    type: safeStr(r?.Type || r?.type).trim().toUpperCase(),
+    message: safeStr(r?.Message || r?.message).trim(),
+    id: safeStr(r?.Id || r?.id),
+    number: safeStr(r?.Number || r?.number),
     code: safeStr(r?.Code || r?.code),
+    messageV1: safeStr(r?.MessageV1 || r?.messageV1),
+    messageV2: safeStr(r?.MessageV2 || r?.messageV2),
+    messageV3: safeStr(r?.MessageV3 || r?.messageV3),
+    messageV4: safeStr(r?.MessageV4 || r?.messageV4),
   }));
+
+  return dedupeSapMessages(messages);
 }
 
-function hasSapError(messages = []) {
-  return messages.some((m) => safeStr(m?.type).toUpperCase() === "E");
+function getSapIssueMessages(messages = []) {
+  return dedupeSapMessages(messages).filter((m) => {
+    const type = safeStr(m?.type).toUpperCase();
+
+    /*
+      E = Error
+      A/X = errores fuertes
+      W = Warning/Aviso de SAP
+
+      En este flujo SAP puede mandar W cuando algo no debe considerarse éxito,
+      por ejemplo:
+      "Persona 00006927 no pertenece a puesto de trabajo TEC_ELEV"
+    */
+    return ["E", "A", "X", "W"].includes(type);
+  });
+}
+
+function buildSapIssueMessage(messages = []) {
+  const issues = getSapIssueMessages(messages);
+
+  if (!issues.length) return "";
+
+  return issues.map((m) => m.message).filter(Boolean).join(" | ");
 }
 
 /* ======================
@@ -152,7 +216,8 @@ function hasSapError(messages = []) {
 async function readStatusMap(userKey) {
   const key = reprogKeys.statusMap({ userKey });
   const cached = await cacheGet(key);
-  const obj = cached?.value && typeof cached.value === "object" ? cached.value : {};
+  const obj =
+    cached?.value && typeof cached.value === "object" ? cached.value : {};
   return obj;
 }
 
@@ -162,8 +227,9 @@ async function writeStatusMap(userKey, mapObj) {
 }
 
 function setOrderStatus(mapObj, orderId, patch) {
-  const prev = mapObj[orderId] || {};
-  mapObj[orderId] = { ...prev, ...patch };
+  const cleanOrderId = safeStr(orderId);
+  const prev = mapObj[cleanOrderId] || {};
+  mapObj[cleanOrderId] = { ...prev, ...patch };
   return mapObj;
 }
 
@@ -179,7 +245,7 @@ async function outboxRead(userKey) {
 
 async function outboxWrite(userKey, arr) {
   const key = reprogKeys.outbox({ userKey });
-  await cacheSet(key, arr);
+  await cacheSet(key, Array.isArray(arr) ? arr : []);
 }
 
 function makeId() {
@@ -197,7 +263,12 @@ async function outboxEnqueue(userKey, item) {
 /* ======================
    API: Fetch órdenes (con cache)
    ====================== */
-export async function fetchReprogramacionesOrders({ year, month, dayYmd, supervisorEmail }) {
+export async function fetchReprogramacionesOrders({
+  year,
+  month,
+  dayYmd,
+  supervisorEmail,
+}) {
   const userKey = await getUserKeyFromStorage();
   const cacheKey = reprogKeys.orders({ userKey, year, month, dayYmd });
 
@@ -221,22 +292,35 @@ export async function fetchReprogramacionesOrders({ year, month, dayYmd, supervi
 
     const token = await getToken();
 
-    const res = await api.get("/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet", {
-      headers: { Authorization: `Bearer ${token}` },
-      params: { $filter: filter, $format: "json" },
-    });
+    const res = await api.get(
+      "/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet",
+      {
+        headers: { Authorization: `Bearer ${token}` },
+        params: { $filter: filter, $format: "json" },
+      }
+    );
 
-    const results = Array.isArray(res.data?.d?.results) ? res.data.d.results : [];
+    const results = Array.isArray(res.data?.d?.results)
+      ? res.data.d.results
+      : [];
 
     const mapped = results
       .map((x) => {
-        const id = safeStr(x.Orderid || x.OrderId || x.OrderID || x.NotifNo || x.Notification || x.id);
+        const id = safeStr(
+          x.Orderid ||
+            x.OrderId ||
+            x.OrderID ||
+            x.NotifNo ||
+            x.Notification ||
+            x.id
+        );
 
         const startFromWorkOrder = odataDateToYMD(x.StartDate);
         const finishFromWorkOrder = odataDateToYMD(x.FinishDate);
 
-        const notifDate =
-          safeStr(x.NotifDate).includes("/Date(") ? odataDateToYMD(x.NotifDate) : safeStr(x.NotifDate || "");
+        const notifDate = safeStr(x.NotifDate).includes("/Date(")
+          ? odataDateToYMD(x.NotifDate)
+          : safeStr(x.NotifDate || "");
 
         const finalStart = startFromWorkOrder || notifDate;
         const finalFinish = finishFromWorkOrder || notifDate || finalStart;
@@ -263,31 +347,48 @@ export async function fetchReprogramacionesOrders({ year, month, dayYmd, supervi
     }));
 
     await cacheSet(cacheKey, withStatus);
-    return { ok: true, from: "network", orders: withStatus };
+
+    return {
+      ok: true,
+      from: "network",
+      orders: withStatus,
+    };
   } catch (e) {
-    return { ok: false, from: "cache", orders: cachedArr || [], error: e?.message || String(e) };
+    return {
+      ok: false,
+      from: "cache",
+      orders: cachedArr || [],
+      error: e?.message || String(e),
+    };
   }
 }
 
 /* ======================
    API: Reprogramar (1 o varias)
    ====================== */
-export async function rescheduleWorkorders({
-  supervisorEmail,
-  items,
-}) {
+export async function rescheduleWorkorders({ supervisorEmail, items }) {
   const userKey = await getUserKeyFromStorage();
   const online = await isOnline();
 
   if (!Array.isArray(items) || items.length === 0) {
-    return { ok: false, reason: "no_items" };
+    return { ok: false, reason: "no_items", error: "No hay órdenes para reprogramar." };
   }
+
   for (const it of items) {
     if (!it?.orderId || !it?.startYmd || !it?.endYmd) {
-      return { ok: false, reason: "missing_fields" };
+      return {
+        ok: false,
+        reason: "missing_fields",
+        error: "Faltan datos para reprogramar.",
+      };
     }
+
     if (ymdToDate(it.endYmd) < ymdToDate(it.startYmd)) {
-      return { ok: false, reason: "invalid_range" };
+      return {
+        ok: false,
+        reason: "invalid_range",
+        error: "La fecha fin no puede ser menor a la fecha inicio.",
+      };
     }
   }
 
@@ -317,17 +418,34 @@ export async function rescheduleWorkorders({
       });
 
       const messages = extractSapMessages(res?.data);
-      if (hasSapError(messages)) {
+      const sapIssueMessage = buildSapIssueMessage(messages);
+
+      if (sapIssueMessage) {
+        let mapObj = await readStatusMap(userKey);
+
+        for (const it of items) {
+          mapObj = setOrderStatus(mapObj, it.orderId, {
+            state: "error",
+            startYmd: it.startYmd,
+            endYmd: it.endYmd,
+            updatedAt: Date.now(),
+            lastError: sapIssueMessage,
+          });
+        }
+
+        await writeStatusMap(userKey, mapObj);
+
         return {
           ok: false,
           mode: "online",
-          error: messages.map((m) => m.message).filter(Boolean).join(" | ") || "SAP devolvió error",
+          error: sapIssueMessage,
           sapMessages: messages,
           response: res?.data || null,
         };
       }
 
       let mapObj = await readStatusMap(userKey);
+
       for (const it of items) {
         mapObj = setOrderStatus(mapObj, it.orderId, {
           state: "sent",
@@ -337,6 +455,7 @@ export async function rescheduleWorkorders({
           lastError: "",
         });
       }
+
       await writeStatusMap(userKey, mapObj);
 
       return {
@@ -346,7 +465,31 @@ export async function rescheduleWorkorders({
         sapMessages: messages,
       };
     } catch (e) {
-      return { ok: false, mode: "online", error: e?.message || String(e) };
+      const errMsg =
+        e?.response?.data?.error?.message?.value ||
+        e?.response?.data?.message ||
+        e?.message ||
+        String(e);
+
+      let mapObj = await readStatusMap(userKey);
+
+      for (const it of items) {
+        mapObj = setOrderStatus(mapObj, it.orderId, {
+          state: "error",
+          startYmd: it.startYmd,
+          endYmd: it.endYmd,
+          updatedAt: Date.now(),
+          lastError: errMsg,
+        });
+      }
+
+      await writeStatusMap(userKey, mapObj);
+
+      return {
+        ok: false,
+        mode: "online",
+        error: errMsg,
+      };
     }
   }
 
@@ -364,6 +507,7 @@ export async function rescheduleWorkorders({
   const outboxId = await outboxEnqueue(userKey, outboxItem);
 
   let mapObj = await readStatusMap(userKey);
+
   for (const it of items) {
     mapObj = setOrderStatus(mapObj, it.orderId, {
       state: "pending",
@@ -374,9 +518,16 @@ export async function rescheduleWorkorders({
       lastError: "",
     });
   }
+
   await writeStatusMap(userKey, mapObj);
 
-  return { ok: true, mode: "offline", queued: true, outboxId, payload };
+  return {
+    ok: true,
+    mode: "offline",
+    queued: true,
+    outboxId,
+    payload,
+  };
 }
 
 /* ======================
@@ -387,7 +538,11 @@ export async function fetchSupervisorEmployees({ supervisorEmail }) {
   const cacheKey = reprogKeys.technicians({ supervisorEmail: email });
 
   if (!email) {
-    return { ok: false, employees: [], reason: "missing_supervisor_email" };
+    return {
+      ok: false,
+      employees: [],
+      reason: "missing_supervisor_email",
+    };
   }
 
   const cached = await cacheGet(cacheKey);
@@ -395,23 +550,30 @@ export async function fetchSupervisorEmployees({ supervisorEmail }) {
 
   const online = await isOnline();
   if (!online) {
-    return { ok: true, from: "cache", employees: cachedArr };
+    return {
+      ok: true,
+      from: "cache",
+      employees: cachedArr,
+    };
   }
 
   try {
     const token = await getToken();
     const filter = `Email eq '${email}'`;
 
-    const res = await api.get("/api/odata/ZSD_CATALOGOS_SRV/EmployeSupervisorSet", {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: "application/json",
-      },
-      params: {
-        $filter: filter,
-        $format: "json",
-      },
-    });
+    const res = await api.get(
+      "/api/odata/ZSD_CATALOGOS_SRV/EmployeSupervisorSet",
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/json",
+        },
+        params: {
+          $filter: filter,
+          $format: "json",
+        },
+      }
+    );
 
     const rows = extractResults(res?.data);
 
@@ -461,6 +623,7 @@ export async function reassignWorkorderTechnician({
       ok: false,
       reason: "missing_fields",
       message: "Faltan datos para reasignar técnico",
+      error: "Faltan datos para reasignar técnico",
     };
   }
 
@@ -495,31 +658,38 @@ export async function reassignWorkorderTechnician({
       });
 
       const messages = extractSapMessages(res?.data);
-      if (hasSapError(messages)) {
+      const sapIssueMessage = buildSapIssueMessage(messages);
+
+      if (sapIssueMessage) {
         let mapObj = await readStatusMap(userKey);
+
         mapObj = setOrderStatus(mapObj, order, {
           state: "error",
           updatedAt: Date.now(),
-          lastError: messages.map((m) => m.message).filter(Boolean).join(" | ") || "SAP devolvió error",
+          lastError: sapIssueMessage,
+          mecanicoId: mecanico,
         });
+
         await writeStatusMap(userKey, mapObj);
 
         return {
           ok: false,
           mode: "online",
-          error: messages.map((m) => m.message).filter(Boolean).join(" | ") || "SAP devolvió error",
+          error: sapIssueMessage,
           sapMessages: messages,
           response: res?.data || null,
         };
       }
 
       let mapObj = await readStatusMap(userKey);
+
       mapObj = setOrderStatus(mapObj, order, {
         state: "sent",
         updatedAt: Date.now(),
         lastError: "",
         mecanicoId: mecanico,
       });
+
       await writeStatusMap(userKey, mapObj);
 
       return {
@@ -529,19 +699,27 @@ export async function reassignWorkorderTechnician({
         sapMessages: messages,
       };
     } catch (e) {
+      const errMsg =
+        e?.response?.data?.error?.message?.value ||
+        e?.response?.data?.message ||
+        e?.message ||
+        "assign_failed";
+
       let mapObj = await readStatusMap(userKey);
+
       mapObj = setOrderStatus(mapObj, order, {
         state: "error",
         updatedAt: Date.now(),
-        lastError: e?.message || "assign_failed",
+        lastError: errMsg,
         mecanicoId: mecanico,
       });
+
       await writeStatusMap(userKey, mapObj);
 
       return {
         ok: false,
         mode: "online",
-        error: e?.message || String(e),
+        error: errMsg,
       };
     }
   }
@@ -560,6 +738,7 @@ export async function reassignWorkorderTechnician({
   const outboxId = await outboxEnqueue(userKey, outboxItem);
 
   let mapObj = await readStatusMap(userKey);
+
   mapObj = setOrderStatus(mapObj, order, {
     state: "pending",
     updatedAt: Date.now(),
@@ -567,6 +746,7 @@ export async function reassignWorkorderTechnician({
     lastError: "",
     mecanicoId: mecanico,
   });
+
   await writeStatusMap(userKey, mapObj);
 
   return {
@@ -584,21 +764,45 @@ export async function reassignWorkorderTechnician({
 export async function syncReprogramacionesOutboxCache() {
   const userKey = await getUserKeyFromStorage();
   const online = await isOnline();
-  if (!online) return { ok: false, reason: "offline" };
+
+  if (!online) {
+    return {
+      ok: false,
+      reason: "offline",
+    };
+  }
 
   const token = await getToken();
-  if (!token) return { ok: false, reason: "no_token" };
+
+  if (!token) {
+    return {
+      ok: false,
+      reason: "no_token",
+    };
+  }
 
   const queue = await outboxRead(userKey);
-  if (queue.length === 0) return { ok: true, processed: 0 };
+
+  if (queue.length === 0) {
+    return {
+      ok: true,
+      processed: 0,
+      remaining: 0,
+    };
+  }
 
   const remaining = [];
   let processed = 0;
+  let failed = 0;
 
   let statusMap = await readStatusMap(userKey);
 
   for (const item of queue) {
-    if (item?.status !== "queued") continue;
+    if (item?.status !== "queued") {
+      continue;
+    }
+
+    const itemsSet = item?.body?.WorkOrderItemsSet || [];
 
     try {
       processed++;
@@ -615,13 +819,15 @@ export async function syncReprogramacionesOutboxCache() {
       });
 
       const messages = extractSapMessages(res?.data);
-      const itemsSet = item?.body?.WorkOrderItemsSet || [];
+      const sapIssueMessage = buildSapIssueMessage(messages);
 
-      if (hasSapError(messages)) {
-        const errMsg =
-          messages.map((m) => m.message).filter(Boolean).join(" | ") || "SAP devolvió error";
+      if (sapIssueMessage) {
+        failed++;
 
         item.attempts = (item.attempts || 0) + 1;
+        item.status = "error";
+        item.lastError = sapIssueMessage;
+        item.updatedAt = Date.now();
 
         for (const it of itemsSet) {
           const orderId = safeStr(it?.OrderId);
@@ -630,11 +836,15 @@ export async function syncReprogramacionesOutboxCache() {
           statusMap = setOrderStatus(statusMap, orderId, {
             state: "error",
             updatedAt: Date.now(),
-            lastError: errMsg,
+            lastError: sapIssueMessage,
           });
         }
 
-        remaining.push(item);
+        /*
+          Importante:
+          No lo dejamos eternamente como queued porque SAP ya respondió.
+          El supervisor debe corregir el dato y volver a intentar.
+        */
         continue;
       }
 
@@ -649,10 +859,17 @@ export async function syncReprogramacionesOutboxCache() {
         });
       }
     } catch (e) {
-      item.attempts = (item.attempts || 0) + 1;
+      failed++;
 
-      const errMsg = e?.message || "sync_failed";
-      const itemsSet = item?.body?.WorkOrderItemsSet || [];
+      item.attempts = (item.attempts || 0) + 1;
+      item.updatedAt = Date.now();
+
+      const errMsg =
+        e?.response?.data?.error?.message?.value ||
+        e?.response?.data?.message ||
+        e?.message ||
+        "sync_failed";
+
       for (const it of itemsSet) {
         const orderId = safeStr(it?.OrderId);
         if (!orderId) continue;
@@ -664,6 +881,10 @@ export async function syncReprogramacionesOutboxCache() {
         });
       }
 
+      /*
+        Aquí sí se conserva en cola porque pudo ser red, token, timeout,
+        caída temporal del backend o SAP.
+      */
       remaining.push(item);
     }
   }
@@ -671,5 +892,10 @@ export async function syncReprogramacionesOutboxCache() {
   await writeStatusMap(userKey, statusMap);
   await outboxWrite(userKey, remaining);
 
-  return { ok: true, processed, remaining: remaining.length };
+  return {
+    ok: true,
+    processed,
+    failed,
+    remaining: remaining.length,
+  };
 }

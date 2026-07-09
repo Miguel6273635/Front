@@ -119,7 +119,7 @@ const isCausaNoManttoCode = (code) => {
 
   const n = Number(s);
 
-  return n >= 1 && n <= 11;
+  return n >= 1 && n <= 17;
 };
 
 // SAP RESCHEDULE pide YYYYMMDD.
@@ -1416,7 +1416,7 @@ export default function DetallesNoMantenimiento() {
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Selecciona causa para PDF</Text>
+              <Text style={styles.modalTitle}>Selecciona la causa de no mantenimiento</Text>
 
               <Pressable onPress={() => setModal(false)} hitSlop={10}>
                 <Ionicons name="close" size={22} color={COLORS.title} />
@@ -1472,15 +1472,7 @@ export default function DetallesNoMantenimiento() {
                           {item.code} · {item.text}
                         </Text>
 
-                        <Text
-                          style={{
-                            marginTop: 2,
-                            color: COLORS.text,
-                            fontSize: 11,
-                          }}
-                        >
-                          Esta causa solo se imprimirá en el PDF.
-                        </Text>
+                        
                       </View>
 
                       {active ? (
@@ -1528,7 +1520,7 @@ export default function DetallesNoMantenimiento() {
             </View>
 
             <Text style={{ marginTop: 10, color: COLORS.text, fontSize: 11.5 }}>
-              *Estos códigos son causas documentales, no estatus SAP.
+              *La causa únicamente se imprimirá en el PDF
             </Text>
           </View>
         </View>
