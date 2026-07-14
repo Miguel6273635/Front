@@ -48,6 +48,8 @@ import { prefetchOrdenesTecnicoDetalles } from "../../../src/offline/prefetchOrd
 import { useAuth } from "../../../src/context/AuthContext";
 import Header from "../../../src/components/Header";
 import api from "../../../src/services/api";
+import * as FileSystem from "expo-file-system/legacy";
+import { preloadAvisoAveriaCatalogos } from "../../../src/services/avisoAveriaSap";
 
 // ============================
 // Guarda EQUIPO activo para geolocalización
@@ -620,6 +622,42 @@ export default function ListaOrdenesTecnico() {
     return () => unsub();
   }, []);
 
+
+  // Precarga en segundo plano los catálogos del aviso de avería (R, S, T)
+  // para que el formulario pueda mostrar daños, localizaciones y causas offline.
+  useEffect(() => {
+    let alive = true;
+
+    const preloadAvisoCatalogos = async () => {
+      try {
+        const net = await NetInfo.fetch();
+        const online = !!(
+          net?.isConnected && net?.isInternetReachable !== false
+        );
+
+        if (!online) return;
+
+        const okToken = await ensureValidToken();
+        if (!okToken) return;
+
+        if (!alive) return;
+
+        await preloadAvisoAveriaCatalogos(null);
+      } catch (e) {
+        console.log(
+          "[ORDENES][AVISO-AVERIA][PRELOAD] No se pudieron precargar catálogos:",
+          e?.message || e,
+        );
+      }
+    };
+
+    preloadAvisoCatalogos();
+
+    return () => {
+      alive = false;
+    };
+  }, [ensureValidToken]);
+
   /**
    * REGLA CLAVE:
    * - ONLINE: muestra TODO lo que regrese SAP según filtros
@@ -858,7 +896,7 @@ export default function ListaOrdenesTecnico() {
     setShowCheckinModal(true);
   };
 
-  // cámara -> base64
+  // cámara -> archivo local
   const takeCheckinPhoto = async () => {
     try {
       const perm = await ImagePicker.requestCameraPermissionsAsync();
@@ -886,61 +924,41 @@ export default function ListaOrdenesTecnico() {
         return;
       }
 
-      const MAX_BASE64_LENGTH = 4_000_000;
+      const manipulated = await ImageManipulator.manipulateAsync(
+        asset.uri,
+        [{ resize: { width: 850 } }],
+        {
+          compress: 0.5,
+          format: ImageManipulator.SaveFormat.JPEG,
+          base64: false,
+        },
+      );
 
-      const opcionesCompresion = [
-        { width: 1280, compress: 0.7 },
-        { width: 1180, compress: 0.65 },
-        { width: 1080, compress: 0.6 },
-        { width: 960, compress: 0.55 },
-        { width: 850, compress: 0.5 },
-        { width: 720, compress: 0.45 },
-      ];
+      const fileName = `checkin_${Date.now()}.jpg`;
+      const permanentUri = `${FileSystem.documentDirectory}${fileName}`;
 
-      let manipulated = null;
+      await FileSystem.copyAsync({
+        from: manipulated.uri,
+        to: permanentUri,
+      });
 
-      for (const opcion of opcionesCompresion) {
-        manipulated = await ImageManipulator.manipulateAsync(
-          asset.uri,
-          [{ resize: { width: opcion.width } }],
-          {
-            compress: opcion.compress,
-            format: ImageManipulator.SaveFormat.JPEG,
-            base64: true,
-          },
-        );
+      const fileInfo = await FileSystem.getInfoAsync(permanentUri);
 
-        console.log("[CHECKIN][COMPRESION]", {
-          width: opcion.width,
-          compress: opcion.compress,
-          base64Length: manipulated.base64?.length,
-        });
-
-        if (manipulated.base64?.length <= MAX_BASE64_LENGTH) {
-          break;
-        }
-      }
-
-      if (!manipulated?.base64) {
-        Alert.alert("Error", "No se pudo convertir la imagen.");
-        return;
-      }
-
-      if (manipulated.base64.length > MAX_BASE64_LENGTH) {
+      if (!fileInfo.exists) {
         Alert.alert(
-          "Foto muy pesada",
-          "No se pudo reducir a menos de 3 MB. Intenta tomar otra foto.",
+          "Error",
+          "No se pudo guardar la foto en el almacenamiento local.",
         );
         return;
       }
 
-      setCheckinPhotoUri(manipulated.uri);
-      setCheckinPhotoBase64(manipulated.base64);
+      setCheckinPhotoUri(permanentUri);
+      setCheckinPhotoBase64(null);
 
-      console.log("[CHECKIN] FINAL base64 length:", manipulated.base64.length);
+      console.log("[CHECKIN] Foto guardada localmente:", permanentUri);
     } catch (e) {
       console.log("takeCheckinPhoto ERROR:", e);
-      Alert.alert("Error", "No se pudo abrir la cámara.");
+      Alert.alert("Error", "No se pudo abrir la cámara o guardar la foto.");
     }
   };
 
@@ -1058,23 +1076,31 @@ export default function ListaOrdenesTecnico() {
 
       for (const item of ordered) {
         const orderId = String(item?.orderId || "").trim();
-        const b64 = String(item?.photoBase64 || "").trim();
+        const photoUri = String(item?.photoUri || "").trim();
 
-        if (!orderId || !b64) {
+        if (!orderId || !photoUri) {
           await removeFromQueue(userEmail, orderId);
           continue;
         }
 
         try {
+          const b64 = await FileSystem.readAsStringAsync(photoUri, {
+            encoding: FileSystem.EncodingType.Base64,
+          });
+
           console.log("[CHECKIN][SYNC] Enviando:", {
             orderId,
+            photoUri,
             b64len: b64.length,
           });
+
           const statusToSend = normalizeCode(item?.statusCode) || "0100";
 
           await postCheckinEvidence(orderId, b64);
           await postChangeStatusToSap(orderId, statusToSend);
           await removeFromQueue(userEmail, orderId);
+
+          await FileSystem.deleteAsync(photoUri, { idempotent: true });
         } catch (e) {
           console.log(
             "[CHECKIN][SYNC] Error SAP:",
@@ -1107,7 +1133,7 @@ export default function ListaOrdenesTecnico() {
       return;
     }
 
-    if (!checkinPhotoBase64) {
+    if (!checkinPhotoUri) {
       Alert.alert("Falta evidencia", "Primero toma una foto.");
       return;
     }
@@ -1129,7 +1155,7 @@ export default function ListaOrdenesTecnico() {
 
         const nextQueue = await enqueueCheckin(userEmail, {
           orderId,
-          photoBase64: String(checkinPhotoBase64).trim(),
+          photoUri: checkinPhotoUri,
           statusCode: offlineStatus,
           lastValidStatus: offlineStatus,
           createdAt: Date.now(),
@@ -1151,11 +1177,18 @@ export default function ListaOrdenesTecnico() {
 
       const ok = await ensureValidToken();
       if (!ok) return;
+
       const onlineStatus = "0100";
 
-      await postCheckinEvidence(orderId, checkinPhotoBase64);
+      const base64Data = await FileSystem.readAsStringAsync(checkinPhotoUri, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+
+      await postCheckinEvidence(orderId, base64Data);
       await postChangeStatusToSap(orderId, onlineStatus);
       await applyLocalOfflineStatus(orderId, onlineStatus);
+
+      await FileSystem.deleteAsync(checkinPhotoUri, { idempotent: true });
 
       Alert.alert(
         "Check-in",
@@ -1186,7 +1219,7 @@ export default function ListaOrdenesTecnico() {
 
         const nextQueue = await enqueueCheckin(userEmail, {
           orderId,
-          photoBase64: String(checkinPhotoBase64).trim(),
+          photoUri: checkinPhotoUri,
           statusCode: offlineStatus,
           lastValidStatus: offlineStatus,
           createdAt: Date.now(),
@@ -1809,7 +1842,7 @@ export default function ListaOrdenesTecnico() {
                 <Text
                   style={{ marginTop: 6, color: FIORI.textMuted, fontSize: 12 }}
                 >
-                  Base64 listo ✅ ({checkinPhotoBase64?.length || 0})
+                  Foto guardada localmente ✅
                 </Text>
               </View>
             ) : (

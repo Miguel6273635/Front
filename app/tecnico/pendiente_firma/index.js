@@ -683,11 +683,20 @@ function getDeviceModelForBulkId() {
   return sanitizeBulkPart(rawModel).slice(0, 24) || "DISPOSITIVO";
 }
 
-function buildBulkId({ firstOrderId }) {
+function getBulkDateDDMMYYYY(date = new Date()) {
+  const dd = String(date.getDate()).padStart(2, "0");
+  const mm = String(date.getMonth() + 1).padStart(2, "0");
+  const yyyy = String(date.getFullYear());
+
+  return `${dd}${mm}${yyyy}`;
+}
+
+function buildBulkId({ firstOrderId, date = new Date() }) {
+  const cleanDate = getBulkDateDDMMYYYY(date);
   const cleanOrderId = sanitizeBulkPart(firstOrderId || "SIN_ORDEN");
   const cleanDeviceModel = getDeviceModelForBulkId();
 
-  return `PAQUETE_${cleanOrderId}_${cleanDeviceModel}`;
+  return `PAQUETE_${cleanDate}_${cleanOrderId}_${cleanDeviceModel}`;
 }
 
 function buildShortPdfFileName({ tipo, orderId }) {
@@ -1175,7 +1184,13 @@ export default function PendienteFirmaIndex() {
                 firstOrderId,
                 deviceModel: getDeviceModelForBulkId(),
                 totalOrders: toWorkOrders.length,
-});
+              });
+
+              logSapPayload(
+                "[PENDIENTE_FIRMA][BULK_PAYLOAD_FINAL]",
+                bulkPayload,
+                { stripBase64: true }
+              );
 
               if (!online) {
                 await upsertSapQueueItem({ type: "PENDIENTE_FIRMA_BULK_0300", orderId: bulkPayload.BulkId, endpoint: workOrderBulkEndpoint, method: "POST", dedupeKey: `PENDIENTE_FIRMA_BULK_0300:${bulkPayload.BulkId}`, payload: bulkPayload });

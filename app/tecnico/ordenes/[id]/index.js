@@ -44,6 +44,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as FileSystem from "expo-file-system/legacy";
 import * as Sharing from "expo-sharing";
 import * as Print from "expo-print";
+import * as Device from "expo-device";
 
 // ✅ HTML/PDF mantenimiento (plantillas + operaciones)
 import { buildMantenimientoHtml } from "../../../../src/services/templates/buildMantenimientoHtml";
@@ -268,6 +269,53 @@ function buildSequentialWindows(startMs, mins) {
     return win;
   });
 }
+
+/* ====== Bulk helpers: misma estructura que Pendientes de firma ====== */
+function sanitizeBulkPart(value) {
+  return String(value || "")
+    .trim()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^\w.-]/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function getBulkDateDDMMYYYY(date = new Date()) {
+  const dd = String(date.getDate()).padStart(2, "0");
+  const mm = String(date.getMonth() + 1).padStart(2, "0");
+  const yyyy = String(date.getFullYear());
+
+  return `${dd}${mm}${yyyy}`;
+}
+
+function getDeviceModelForBulkId() {
+  const rawModel =
+    Device.modelName ||
+    Device.productName ||
+    Device.manufacturer ||
+    Device.brand ||
+    Platform.OS ||
+    "DISPOSITIVO";
+
+  return sanitizeBulkPart(rawModel).slice(0, 24) || "DISPOSITIVO";
+}
+
+function buildBulkId({ firstOrderId, date = new Date() }) {
+  const cleanDate = getBulkDateDDMMYYYY(date);
+  const cleanOrderId = sanitizeBulkPart(firstOrderId || "SIN_ORDEN");
+  const cleanDeviceModel = getDeviceModelForBulkId();
+
+  return `PAQUETE_${cleanDate}_${cleanOrderId}_${cleanDeviceModel}`;
+}
+
+function buildSingleWorkOrderBulkPayload({ orderId, workOrderPayload }) {
+  return {
+    BulkId: buildBulkId({ firstOrderId: orderId }),
+    WorkOrderSet: [workOrderPayload],
+  };
+}
+
 
 /* ====================== Consumibles -> ConfirmationMaterialSet ====================== */
 function toNum(v) {
@@ -616,23 +664,34 @@ function buildStatus0300Payload({ orderId, email, currentCode }) {
 }
 
 /* ====================== Logs ====================== */
+function maskBase64Deep(value) {
+  if (Array.isArray(value)) return value.map(maskBase64Deep);
+
+  if (value && typeof value === "object") {
+    const next = {};
+    for (const key of Object.keys(value)) {
+      next[key] =
+        key === "Base64"
+          ? `<<base64 omitted: ${String(value[key] || "").length} chars>>`
+          : maskBase64Deep(value[key]);
+    }
+    return next;
+  }
+
+  return value;
+}
+
 function logSapPayload(label, payload, { stripBase64 = false } = {}) {
   try {
     if (!payload) {
       console.log(label, payload);
       return;
     }
-    if (!stripBase64) {
-      console.log(label);
-      console.log(JSON.stringify(payload, null, 2));
-      return;
-    }
-    const cloned = JSON.parse(JSON.stringify(payload));
-    const att = cloned?.Attachments?.[0];
-    if (att?.Base64)
-      att.Base64 = `<<base64 omitted: ${String(att.Base64).length} chars>>`;
+
     console.log(label);
-    console.log(JSON.stringify(cloned, null, 2));
+    console.log(
+      JSON.stringify(stripBase64 ? maskBase64Deep(payload) : payload, null, 2),
+    );
   } catch {
     console.log(label, payload);
   }
@@ -2765,6 +2824,21 @@ export default function DetalleOrden() {
       confirmationPayload,
     } = pendingFinalize;
 
+    const workOrderBulkEndpoint =
+      "/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderBulkSet";
+
+    const change0300BulkPayload = buildSingleWorkOrderBulkPayload({
+      orderId,
+      workOrderPayload: change0300WithPdfPayload,
+    });
+
+    console.log("[DETALLE_ORDEN][BULK_ID]", {
+      BulkId: change0300BulkPayload.BulkId,
+      orderId,
+      deviceModel: getDeviceModelForBulkId(),
+      totalOrders: change0300BulkPayload?.WorkOrderSet?.length || 0,
+    });
+
     try {
       setFinishingOrder(true);
 
@@ -2780,8 +2854,8 @@ export default function DetalleOrden() {
       } catch {}
 
       logSapPayload(
-        "=== SAP PAYLOAD (CHANGE 0300 + PDF) ===",
-        change0300WithPdfPayload,
+        "=== SAP PAYLOAD BULK (CHANGE 0300 + PDF) ===",
+        change0300BulkPayload,
         {
           stripBase64: true,
         },
@@ -2792,16 +2866,24 @@ export default function DetalleOrden() {
       );
       console.log("CONFIRMATIONS alreadySent:", alreadySentConfirmations);
 
+      if (!change0300WithPdfPayload?.Attachments?.[0]?.Base64) {
+        Alert.alert(
+          "No se pudo generar el PDF",
+          "No se pudo generar el PDF en este dispositivo. Intenta de nuevo o revisa permisos/almacenamiento.",
+        );
+        return;
+      }
+
       if (!isOnline) {
         await updateLocalOpsAsFinalizadas(orderId, selectedIds);
         await updateLocalOrderAsFinalizada0300(orderId, finishMs);
 
         await enqueueSap({
-          type: "STATUS",
-          orderId,
-          endpoint: "/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet",
-          payload: change0300WithPdfPayload,
-          dedupeKey: `STATUS:${orderId}`,
+          type: "PENDIENTE_FIRMA_BULK_0300",
+          orderId: change0300BulkPayload.BulkId,
+          endpoint: workOrderBulkEndpoint,
+          payload: change0300BulkPayload,
+          dedupeKey: `PENDIENTE_FIRMA_BULK_0300:${change0300BulkPayload.BulkId}`,
         });
 
         if (!alreadySentConfirmations) {
@@ -2839,14 +2921,6 @@ export default function DetalleOrden() {
         );
 
         router.replace("/tecnico/ordenes");
-        return;
-      }
-
-      if (!change0300WithPdfPayload?.Attachments?.[0]?.Base64) {
-        Alert.alert(
-          "No se pudo generar el PDF",
-          "No se pudo generar el PDF en este dispositivo. Intenta de nuevo o revisa permisos/almacenamiento.",
-        );
         return;
       }
 
@@ -2925,16 +2999,16 @@ export default function DetalleOrden() {
       try {
         statusResult = await postWithBackgroundFallback({
           apiInstance: api,
-          endpoint: "/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet",
-          payload: change0300WithPdfPayload,
+          endpoint: workOrderBulkEndpoint,
+          payload: change0300BulkPayload,
           timeoutMs: BG_TIMEOUT_MS,
           enqueueFn: enqueueSap,
           queueItem: {
-            type: "STATUS",
-            orderId,
-            endpoint: "/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet",
-            payload: change0300WithPdfPayload,
-            dedupeKey: `STATUS:${orderId}:0300`,
+            type: "PENDIENTE_FIRMA_BULK_0300",
+            orderId: change0300BulkPayload.BulkId,
+            endpoint: workOrderBulkEndpoint,
+            payload: change0300BulkPayload,
+            dedupeKey: `PENDIENTE_FIRMA_BULK_0300:${change0300BulkPayload.BulkId}`,
           },
         });
 

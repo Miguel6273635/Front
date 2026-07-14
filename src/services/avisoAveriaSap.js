@@ -95,3 +95,51 @@ export async function crearAvisoAveriaSap(payload, token) {
     throw e;
   }
 }
+
+/**
+ * Precarga en segundo plano los catálogos que usa el aviso de avería.
+ * Esto permite que después se muestren daños, localizaciones y causas
+ * aunque el técnico abra el formulario sin internet.
+ */
+export async function preloadAvisoAveriaCatalogos(token) {
+  const online = await isOnlineNow();
+
+  if (!online) {
+    console.log("[AVISO-AVERIA][PRELOAD] Sin conexión, no se precargan catálogos.");
+    return {
+      ok: false,
+      offline: true,
+      results: {},
+    };
+  }
+
+  const catalogos = ["R", "S", "T"];
+  const results = {};
+
+  await Promise.all(
+    catalogos.map(async (cat) => {
+      try {
+        const data = await fetchCatalogoCircunstancia(cat, token);
+        results[cat] = Array.isArray(data) ? data.length : 0;
+
+        console.log("[AVISO-AVERIA][PRELOAD] Catálogo cargado:", {
+          catalogo: cat,
+          total: results[cat],
+        });
+      } catch (e) {
+        results[cat] = 0;
+
+        console.log("[AVISO-AVERIA][PRELOAD] Error cargando catálogo:", {
+          catalogo: cat,
+          error: e?.message || String(e),
+        });
+      }
+    }),
+  );
+
+  return {
+    ok: true,
+    offline: false,
+    results,
+  };
+}

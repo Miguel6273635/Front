@@ -191,14 +191,14 @@ function getSapIssueMessages(messages = []) {
 
     /*
       E = Error
-      A/X = errores fuertes
-      W = Warning/Aviso de SAP
+      A = Abort / proceso abortado
+      X = Error fuerte / excepción técnica
 
-      En este flujo SAP puede mandar W cuando algo no debe considerarse éxito,
-      por ejemplo:
-      "Persona 00006927 no pertenece a puesto de trabajo TEC_ELEV"
+      W = Warning/Aviso de SAP, no debe bloquear.
+      I = Información, no debe bloquear.
+      S = Éxito, no debe bloquear.
     */
-    return ["E", "A", "X", "W"].includes(type);
+    return ["E", "A", "X"].includes(type);
   });
 }
 

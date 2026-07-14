@@ -228,9 +228,8 @@ function getImportantSapMessage(response) {
 
   // Estos son mensajes que sí deben detener el flujo visual de éxito
   const issues = unique.filter((m) =>
-    ["E", "A", "X", "W"].includes(safeStr(m.type).toUpperCase())
+    ["E", "A", "X"].includes(safeStr(m.type).toUpperCase())
   );
-
   if (!issues.length) return null;
 
   const first = issues[0];
@@ -239,10 +238,7 @@ function getImportantSapMessage(response) {
     type: first.type,
     message: first.message,
     count: issues.length,
-    title:
-      first.type === "W"
-        ? "Aviso de SAP"
-        : "Error de SAP",
+    title: "Error de SAP",
   };
 }
 

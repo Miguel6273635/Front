@@ -1037,8 +1037,12 @@ export default function FormularioRiesgosScreen() {
             `/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet('${orderid}')/ToAddresses?$format=json`,
           );
 
-          const results = addrRes?.data?.d?.results || [];
-          const node = results?.[1] || null;
+          const results =
+            addrRes?.data?.d?.results ||
+            addrRes?.data?.results ||
+            [];
+
+          const node = results?.[0] || null;
 
           if (node && alive) {
             const rs = buildRazonSocial(node);
