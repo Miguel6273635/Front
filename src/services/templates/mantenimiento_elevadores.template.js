@@ -183,8 +183,16 @@ export const HTML_ELEVADORES = `<!DOCTYPE html>
       break-inside: auto;
     }
 
+    .operationsBox {
+      border: 0;
+      border-radius: 0;
+      padding: 0;
+      overflow: visible;
+    }
+
     .opsWrap {
       display: block;
+      width: 100%;
     }
 
     .opsEmpty {
@@ -194,10 +202,10 @@ export const HTML_ELEVADORES = `<!DOCTYPE html>
     }
 
     .ubicCard {
-      border: 1px solid #D0D0D0;
-      border-radius: 5px;
-      padding: 6px;
-      margin-bottom: 5px;
+      border: 0;
+      border-radius: 0;
+      padding: 0;
+      margin-bottom: 7px;
       background: #fff;
       page-break-inside: auto;
       break-inside: auto;
@@ -210,19 +218,37 @@ export const HTML_ELEVADORES = `<!DOCTYPE html>
     .ubicTitle {
       font-size: 9px;
       font-weight: 900;
-      margin-bottom: 4px;
+      margin-bottom: 0;
+      padding: 5px 6px;
       text-transform: uppercase;
       color: #111;
+      background: #F5F7FA;
+      border: 1px solid #D0D0D0;
+      border-radius: 5px 5px 0 0;
       page-break-after: avoid;
       break-after: avoid;
     }
 
     .ubicGrid {
-      display: block;
       width: 100%;
-      column-count: 2;
-      column-gap: 10px;
-      column-fill: auto;
+      border-collapse: collapse;
+      table-layout: fixed;
+    }
+
+    .opRow {
+      page-break-inside: avoid;
+      break-inside: avoid-page;
+    }
+
+    .opCell {
+      width: 50%;
+      vertical-align: top;
+      padding: 5px 6px;
+      border: 1px solid #D0D0D0;
+    }
+
+    .opCellEmpty {
+      background: #FAFAFA;
     }
 
     .opsCol {
@@ -234,10 +260,10 @@ export const HTML_ELEVADORES = `<!DOCTYPE html>
       width: 100%;
       display: table;
       table-layout: fixed;
-      margin-bottom: 4px;
+      margin: 0;
       page-break-inside: avoid;
       break-inside: avoid;
-      -webkit-column-break-inside: avoid;
+      -webkit-column-break-inside: auto;
     }
 
     .opItem:last-child {
@@ -504,7 +530,7 @@ export const HTML_ELEVADORES = `<!DOCTYPE html>
     </div>
 
     <div class="sectionTitle">Operaciones realizadas</div>
-    <div class="box">
+    <div class="box operationsBox">
       {{OPERACIONES_HTML}}
     </div>
 

@@ -124,8 +124,7 @@ export function renderOperacionesAgrupadasHtml({
     .map((ubic) => {
       const ops = sortOps(groups[ubic] || []);
 
-      const renderedItems = ops
-        .map((op, idx) => {
+      const renderedItems = ops.map((op, idx) => {
           const checked = isOpChecked(orderid, op, idx, checkedMap);
 
           const { code, desc } = buildOperacionLine(op);
@@ -159,15 +158,34 @@ export function renderOperacionesAgrupadasHtml({
               </div>
             </div>
           `;
-        })
-        .join("");
+        });
+
+      const renderedRows = [];
+
+      for (let idx = 0; idx < renderedItems.length; idx += 2) {
+        const leftItem = renderedItems[idx] || "";
+        const rightItem = renderedItems[idx + 1] || "";
+
+        renderedRows.push(`
+          <tr class="opRow">
+            <td class="opCell">
+              ${leftItem}
+            </td>
+            <td class="opCell ${rightItem ? "" : "opCellEmpty"}">
+              ${rightItem}
+            </td>
+          </tr>
+        `);
+      }
 
       return `
         <div class="ubicCard">
           <div class="ubicTitle">${escapeHtml(ubic)}</div>
-          <div class="ubicGrid">
-            ${renderedItems}
-          </div>
+          <table class="ubicGrid">
+            <tbody>
+              ${renderedRows.join("")}
+            </tbody>
+          </table>
         </div>
       `;
     })
