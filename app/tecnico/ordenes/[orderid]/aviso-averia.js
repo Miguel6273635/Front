@@ -308,7 +308,7 @@ export default function AvisoAveriaSapScreen() {
       equipment: meta.Equipment,
       docNumber: meta.DocNumber,
       itmNumber: meta.ItmNumber,
-      shortText,
+      shortText: String(shortText || "").trim().slice(0, 40),
       itemDescript,
       piezaDescripcion,
       causaText,
@@ -451,13 +451,19 @@ export default function AvisoAveriaSapScreen() {
         <Text style={styles.section}>Información general</Text>
         <View style={styles.card}>
           <Text style={styles.label}>Descripción breve</Text>
+
           <TextInput
             style={styles.input}
             value={shortText}
-            onChangeText={setShortText}
+            onChangeText={(text) => setShortText(text.slice(0, 40))}
+            maxLength={40}
             placeholder="Escribe una descripción breve"
             placeholderTextColor={FIORI.textMuted}
           />
+
+          <Text style={styles.characterCounter}>
+            {shortText.length}/40 caracteres
+          </Text>
 
           <Text style={styles.label}>Descripción de la pieza</Text>
           <TextInput
@@ -845,4 +851,12 @@ const styles = StyleSheet.create({
   },
 
   btnSecondaryText: { color: "#FFFFFF", fontWeight: "800", fontSize: 14 },
+
+  characterCounter: {
+  marginTop: 5,
+  fontSize: 11,
+  fontWeight: "700",
+  color: FIORI.textMuted,
+  textAlign: "right",
+},
 });

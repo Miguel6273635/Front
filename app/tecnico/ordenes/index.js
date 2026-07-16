@@ -25,6 +25,7 @@ import DateTimePicker from "@react-native-community/datetimepicker";
 import { router } from "expo-router";
 import * as ImagePicker from "expo-image-picker";
 import * as ImageManipulator from "expo-image-manipulator";
+import * as Device from "expo-device";
 import NetInfo from "@react-native-community/netinfo";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useFocusEffect } from "@react-navigation/native";
@@ -62,6 +63,94 @@ const ACTIVE_EQUIP_KEY = (userEmail) =>
     .trim()}`;
 const TBMKY_STATUS_KEY = (orderId) =>
   `tbmky_status_${String(orderId || "").trim()}`;
+
+const WORK_ORDER_BULK_ENDPOINT =
+  "/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderBulkSet";
+
+function sanitizeBulkPart(value) {
+  return String(value ?? "")
+    .trim()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-zA-Z0-9_.-]/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function getDeviceModelForBulkId() {
+  const rawModel =
+    Device.modelName ||
+    Device.productName ||
+    Device.manufacturer ||
+    Device.brand ||
+    Platform.OS ||
+    "DISPOSITIVO";
+
+  return sanitizeBulkPart(rawModel).slice(0, 24) || "DISPOSITIVO";
+}
+
+function buildBulkId(orderId) {
+  const cleanOrderId = sanitizeBulkPart(orderId || "SIN_ORDEN");
+  return `BULK_${cleanOrderId}_${getDeviceModelForBulkId()}`;
+}
+
+function buildCheckinBulkPayload({ orderId, base64 }) {
+  const cleanOrderId = String(orderId || "").trim();
+  const cleanBase64 = String(base64 || "")
+    .replace(/^data:[^;]+;base64,/, "")
+    .replace(/\s/g, "")
+    .trim();
+
+  if (!cleanOrderId) throw new Error("Falta orderId para el check-in.");
+  if (!cleanBase64) throw new Error("La fotografía del check-in está vacía.");
+
+  return {
+    BulkId: buildBulkId(cleanOrderId),
+    WorkOrderSet: [
+      {
+        OrderId: cleanOrderId,
+        WorkOrderHeader: { Orderid: cleanOrderId },
+        WorkOrderUserStatusSet: [
+          { UserStText: "0100", Langu: "ES", Inactive: "" },
+        ],
+        Attachments: [
+          {
+            DocId: cleanOrderId,
+            FileName: `CHECKIN_${cleanOrderId}.jpg`,
+            MimeType: "image/jpeg",
+            Base64: cleanBase64,
+          },
+        ],
+        Return: [],
+      },
+    ],
+  };
+}
+
+function logBulkPayload(label, payload) {
+  try {
+    const payloadParaLog = JSON.parse(
+      JSON.stringify(payload),
+    );
+
+    payloadParaLog.WorkOrderSet?.forEach((order) => {
+      order.Attachments?.forEach((attachment) => {
+        const base64 = String(attachment.Base64 || "");
+
+        attachment.Base64 =
+          `<<BASE64 OMITIDO: ${base64.length} caracteres>>`;
+      });
+    });
+
+    console.log(label);
+    console.log(JSON.stringify(payloadParaLog, null, 2));
+  } catch (error) {
+    console.log(
+      `${label} No se pudo imprimir el payload:`,
+      error,
+    );
+  }
+}
 // ===== Fiori Palette =====
 const FIORI = {
   pageBg: "#F7F7F7",
@@ -962,58 +1051,55 @@ export default function ListaOrdenesTecnico() {
     }
   };
 
-  const postCheckinEvidence = async (orderId, base64) => {
-    const payload = {
-      WorkOrderHeader: { Orderid: orderId },
-      Attachments: [
-        {
-          DocId: orderId,
-          FileName: `CHECKIN_${orderId}.jpg`,
-          MimeType: "image/jpeg",
-          Base64: String(base64).trim(),
-        },
-      ],
-      Return: [],
-    };
-
-    await api.post(
-      `/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet?sap-client=400&sap-language=ES`,
-      payload,
-      {
-        headers: { "Content-Type": "application/json" },
-      },
-    );
-  };
-
-  const postChangeStatusToSap = async (orderId, statusCode = "0100") => {
-    const finalStatus = normalizeCode(statusCode) || "0100";
-
-    const payload = {
-      OrderId: orderId,
-      WorkOrderHeader: { Orderid: orderId },
-      WorkOrderUserStatusSet: [
-        {
-          UserStText: finalStatus,
-          Langu: "ES",
-          Inactive: "",
-        },
-      ],
-      Return: [],
-    };
-
-    console.log("[CHECKIN][STATUS][SAP]", {
+  const postCheckinBulk = async (orderId, base64) => {
+    const bulkPayload = buildCheckinBulkPayload({
       orderId,
-      finalStatus,
-      payload,
+      base64,
     });
 
-    await api.post(
-      `/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet?sap-client=400&sap-language=ES`,
-      payload,
-      {
-        headers: { "Content-Type": "application/json" },
-      },
+    console.log(
+      "[CHECKIN][BULK][URL]",
+      WORK_ORDER_BULK_ENDPOINT,
     );
+
+    logBulkPayload(
+      "[CHECKIN][BULK][PAYLOAD FINAL]",
+      bulkPayload,
+    );
+
+    try {
+      const response = await api.post(
+        WORK_ORDER_BULK_ENDPOINT,
+        bulkPayload,
+        {
+          timeout: 300000,
+          headers: {
+            "Content-Type": "application/json",
+          },
+        },
+      );
+
+      console.log(
+        "[CHECKIN][BULK][RESPUESTA SAP]",
+        JSON.stringify(response?.data, null, 2),
+      );
+
+      return response;
+    } catch (error) {
+      console.log(
+        "[CHECKIN][BULK][ERROR]",
+        JSON.stringify(
+          error?.response?.data || {
+            message: error?.message,
+            code: error?.code,
+          },
+          null,
+          2,
+        ),
+      );
+
+      throw error;
+    }
   };
 
   const applyLocalOfflineStatus = async (orderId, statusCode = "0100") => {
@@ -1094,10 +1180,7 @@ export default function ListaOrdenesTecnico() {
             b64len: b64.length,
           });
 
-          const statusToSend = normalizeCode(item?.statusCode) || "0100";
-
-          await postCheckinEvidence(orderId, b64);
-          await postChangeStatusToSap(orderId, statusToSend);
+          await postCheckinBulk(orderId, b64);
           await removeFromQueue(userEmail, orderId);
 
           await FileSystem.deleteAsync(photoUri, { idempotent: true });
@@ -1184,8 +1267,7 @@ export default function ListaOrdenesTecnico() {
         encoding: FileSystem.EncodingType.Base64,
       });
 
-      await postCheckinEvidence(orderId, base64Data);
-      await postChangeStatusToSap(orderId, onlineStatus);
+      await postCheckinBulk(orderId, base64Data);
       await applyLocalOfflineStatus(orderId, onlineStatus);
 
       await FileSystem.deleteAsync(checkinPhotoUri, { idempotent: true });

@@ -38,7 +38,10 @@ import {
   RIESGOS_POSIBLES,
 } from "../../../../src/constants/catalogosRiesgos";
 
-import { subirPdfOrden } from "../../../../src/services/riesgosSap";
+import {
+  subirPdfOrden,
+  buildTbmkyBulkPayload,
+} from "../../../../src/services/riesgosSap";
 import { buildTbmkyHtml } from "../../../../src/services/templates/tbmkyPdfTemplate";
 
 // ✅ OFFLINE helpers
@@ -68,7 +71,8 @@ const FIORI = {
   success: "#16A34A",
 };
 
-const TBMKY_SUBMIT_ENDPOINT = "/api/formulario-riesgos/submit";
+const WORK_ORDER_BULK_ENDPOINT =
+  "/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderBulkSet";
 
 const TBMKY_JSON_KEY = (orderId) =>
   `tbmky_json_${String(orderId || "").trim()}`;
@@ -1816,17 +1820,19 @@ export default function FormularioRiesgosScreen() {
           console.log("[TBMKY] error patch local offline:", e);
         }
 
+        const tbmkyBulkPayload = buildTbmkyBulkPayload({
+          orderId: payload.orderid,
+          pdfBase64: String(base64Pdf).trim(),
+          fileName,
+        });
+
         await upsertSapQueueItem({
           type: "GENERIC",
           orderId: payload.orderid,
-          endpoint: TBMKY_SUBMIT_ENDPOINT,
+          endpoint: WORK_ORDER_BULK_ENDPOINT,
           method: "POST",
-          payload: {
-            orderId: payload.orderid,
-            pdfBase64: String(base64Pdf).trim(),
-            fileName,
-          },
-          dedupeKey: `TBMKY_SUBMIT:${payload.orderid}`,
+          payload: tbmkyBulkPayload,
+          dedupeKey: `TBMKY_BULK:${payload.orderid}`,
         });
 
         try {
