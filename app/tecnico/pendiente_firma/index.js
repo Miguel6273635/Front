@@ -10,6 +10,7 @@ import Header from "../../../src/components/Header";
 import api from "../../../src/services/api";
 import { router } from "expo-router";
 import { useAuth } from "../../../src/context/AuthContext";
+import { useOrdenesTecnico } from "../../../src/context/OrdenesTecnicoContext";
 import { Ionicons } from "@expo/vector-icons";
 import Signature from "react-native-signature-canvas";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -19,8 +20,7 @@ import * as Sharing from "expo-sharing";
 import * as Device from "expo-device";
 
 import {
-  loadOrdenTecnicoDetail, loadOrdenesTecnicoList, saveOrdenesTecnicoList,
-  buildOfflineWindow, filterOrdenesByWindow,
+  loadOrdenTecnicoDetail, loadOrdenesTecnicoList,
 } from "../../../src/offline/ordenesTecnicoCache";
 import {
   getLocalStatusPatch, setLocalStatusPatch, applyStatusPatchToOrdenes,
@@ -66,11 +66,6 @@ const startOfMonth = (d) => new Date(d.getFullYear(), d.getMonth(), 1, 0, 0, 0, 
 const endOfMonth = (d) => new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59, 999);
 const startOfYear = (y) => new Date(y, 0, 1, 0, 0, 0, 0);
 const endOfYear = (y) => new Date(y, 11, 31, 23, 59, 59, 999);
-
-const formatLocalYmd = (d) => {
-  if (!d) return null;
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-};
 
 const parseSapDate = (value) => {
   if (!value) return null;
@@ -453,10 +448,15 @@ async function getPendingSignForOrder({ apiClient, token, orderId }) {
   return rebuildPendingSignFromSap({ apiClient, token, orderId, previousPending: pending });
 }
 
-async function loadPending0400FromOffline(userEmail) {
+async function loadPending0400FromOffline(userEmail, sourceData = null) {
   try {
-    const cached = await loadOrdenesTecnicoList(userEmail);
-    let data = Array.isArray(cached?.data) ? cached.data : [];
+    let data;
+    if (Array.isArray(sourceData)) {
+      data = sourceData;
+    } else {
+      const cached = await loadOrdenesTecnicoList(userEmail);
+      data = Array.isArray(cached?.data) ? cached.data : [];
+    }
     const patchMap = await getLocalStatusPatch(userEmail);
     data = applyStatusPatchToOrdenes(data, patchMap);
     return data.filter((it) => {
@@ -504,9 +504,9 @@ function mapDireccionLikeBackend(addr) {
   return { cliente, direccion };
 }
 
-function pickSecondAddress(results = []) {
+function pickFirstAddress(results = []) {
   if (!Array.isArray(results) || results.length === 0) return null;
-  return results.length >= 2 ? results[1] : results[0];
+  return results[0];
 }
 
 async function enrichOrdersWithToAddressesCliente({ orders, apiClient, token }) {
@@ -622,7 +622,7 @@ async function fetchOrdenFullForPdf({ apiClient, token, orderId }) {
   try {
     const resAddr = await apiClient.get(`/api/ordenes/sap/${orderId}/addresses`, { headers });
     const results = resAddr?.data?.results || resAddr?.data?.d?.results || [];
-    const mapped = mapDireccionLikeBackend(pickSecondAddress(results));
+    const mapped = mapDireccionLikeBackend(pickFirstAddress(results));
     direccionSap = mapped.direccion || ""; clienteSap = mapped.cliente || "";
   } catch {}
   return {
@@ -778,9 +778,14 @@ async function generateMaintenancePdfFile({ html }) {
 
 export default function PendienteFirmaIndex() {
   const { user, ensureValidToken, token } = useAuth();
+  const {
+    ordenes: ordenesCompartidas,
+    loadingInitial: loading,
+    refreshing,
+    loadLocal,
+    refresh,
+  } = useOrdenesTecnico();
   const userEmail = safeStr(user?.correo || user?.email || user?.upn || user?.username).trim();
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
   const [isOnline, setIsOnline] = useState(true);
   const [allOrdenes, setAllOrdenes] = useState([]);
   const [rows, setRows] = useState([]);
@@ -841,65 +846,52 @@ export default function PendienteFirmaIndex() {
     const s = new Date(); s.setDate(s.getDate() - 365); return { start: atStartOfDay(s), end: atEndOfDay(new Date()) };
   }, [dateMode, dayRef, weekStart, weekEnd, monthYear, yearOnly]);
 
-  const getSapRequestRange = useCallback(() => {
-    if (dateMode === "all") { const e = atEndOfDay(new Date()); const s = new Date(); s.setDate(s.getDate() - 365); const ss = atStartOfDay(s); return { startDate: ss, endDate: e, startStr: formatLocalYmd(ss), endStr: formatLocalYmd(e) }; }
-    if (dateMode === "day") { const s = atStartOfDay(dayRef); const e = atEndOfDay(dayRef); return { startDate: s, endDate: e, startStr: formatLocalYmd(s), endStr: formatLocalYmd(e) }; }
-    if (["weekRange", "month", "year"].includes(dateMode)) { const s = atStartOfDay(start); const e = atEndOfDay(end); return { startDate: s, endDate: e, startStr: formatLocalYmd(s), endStr: formatLocalYmd(e) }; }
-    const e = atEndOfDay(new Date()); const s = new Date(); s.setDate(s.getDate() - 365); const ss = atStartOfDay(s); return { startDate: ss, endDate: e, startStr: formatLocalYmd(ss), endStr: formatLocalYmd(e) };
-  }, [dateMode, dayRef, start, end]);
+  const applySharedPending0400 = useCallback(async (data = []) => {
+    if (!userEmail) {
+      setAllOrdenes([]);
+      return [];
+    }
 
-  const fetchOrdenes0400 = useCallback(async ({ isRefresh = false } = {}) => {
-    try {
-      if (isRefresh) setRefreshing(true); else setLoading(true);
-      if (!userEmail) { Alert.alert("Sin usuario", "No se detectó el correo/usuario del técnico."); setAllOrdenes([]); return; }
-      if (!isRefresh) { const offlineRows = await loadPending0400FromOffline(userEmail); if (offlineRows.length) { setAllOrdenes(offlineRows); setLoading(false); } }
-      const net = await NetInfo.fetch();
-      const online = !!(net?.isConnected && net?.isInternetReachable !== false);
-      setIsOnline(online);
-      if (!online) {
-        const offlineRows = await loadPending0400FromOffline(userEmail);
-        if (!offlineRows.length) Alert.alert("Sin conexión", "No hay internet y no se encontró una lista offline.");
-        else setAllOrdenes(offlineRows);
-        return;
+    const only0400 = await loadPending0400FromOffline(userEmail, data);
+    setAllOrdenes(only0400);
+    setSelectedMap((prev) => {
+      const valid = new Set(only0400.map((x) => getOrderId(x)));
+      const next = {};
+      for (const k of Object.keys(prev)) {
+        if (valid.has(k) && prev[k]) next[k] = true;
       }
-      if (!(await ensureValidToken())) return;
-      const req = getSapRequestRange();
-      const params = new URLSearchParams({ start: req.startStr, end: req.endStr, mode: "range", user: userEmail });
-      const res = await api.get(`/api/ordenes/sap/list?${params.toString()}`);
-      const data = Array.isArray(res.data) ? res.data : [];
-      const only0400 = data.filter((it) => isPending0400(it));
+      return next;
+    });
+    return only0400;
+  }, [userEmail]);
 
-      const only0400WithCliente = await enrichOrdersWithToAddressesCliente({
-        orders: only0400,
-        apiClient: api,
-        token,
-      });
-
-      const offlineWin = buildOfflineWindow(new Date());
-
-      await saveOrdenesTecnicoList(
-        userEmail,
-        filterOrdenesByWindow(
-          only0400WithCliente,
-          offlineWin.start,
-          offlineWin.end
-        ),
-        offlineWin
-      );
-
-      setAllOrdenes(only0400WithCliente);
-      setSelectedMap((prev) => {
-        const valid = new Set(only0400WithCliente.map((x) => getOrderId(x)));
-        const next = {};
-        for (const k of Object.keys(prev)) { if (valid.has(k) && prev[k]) next[k] = true; }
-        return next;
-      });
+  // Relee la caché central sin consultar SAP.
+  const reloadPending0400Local = useCallback(async () => {
+    try {
+      const cached = await loadLocal();
+      const data = Array.isArray(cached?.data) ? cached.data : [];
+      return await applySharedPending0400(data);
     } catch (e) {
-      const offlineRows = await loadPending0400FromOffline(userEmail);
-      if (offlineRows.length) { setAllOrdenes(offlineRows); Alert.alert("Modo offline", "Mostrando órdenes guardadas localmente."); }
-      else { Alert.alert("Error", e?.response?.data?.detail || e?.response?.data?.error || "Error cargando órdenes."); setAllOrdenes([]); }
-    } finally { setLoading(false); setRefreshing(false); }
-  }, [ensureValidToken, userEmail, getSapRequestRange]);
+      console.warn("Error leyendo pendientes 0400 locales:", e?.message || e);
+      return [];
+    }
+  }, [applySharedPending0400, loadLocal]);
+
+  // Solo la recarga manual fuerza la actualización central desde SAP.
+  const refreshOrdenes0400 = useCallback(async () => {
+    try {
+      const result = await refresh();
+      const data = Array.isArray(result?.cached?.data)
+        ? result.cached.data
+        : [];
+      await applySharedPending0400(data);
+      return result;
+    } catch (e) {
+      console.warn("Error actualizando pendientes 0400:", e?.message || e);
+      await reloadPending0400Local();
+      return { ok: false, error: e };
+    }
+  }, [applySharedPending0400, refresh, reloadPending0400Local]);
 
   const processPendingQueue = useCallback(async () => {
     if (queueProcessingRef.current) return;
@@ -910,10 +902,10 @@ export default function PendienteFirmaIndex() {
       setIsOnline(online);
       if (!online || !(await ensureValidToken())) return;
       await processSapQueue({ ensureValidToken, apiInstance: api });
-      await fetchOrdenes0400({ isRefresh: true });
+      await reloadPending0400Local();
     } catch (e) { console.warn("Error procesando cola SAP:", e); }
     finally { queueProcessingRef.current = false; }
-  }, [ensureValidToken, fetchOrdenes0400]);
+  }, [ensureValidToken, reloadPending0400Local]);
 
   const loadFailedPdfs = useCallback(async () => {
     const items = await cleanupOldPdfItems(PENDING_PDFS_INDEX_KEY);
@@ -949,9 +941,15 @@ export default function PendienteFirmaIndex() {
     return () => unsubscribe();
   }, [processPendingQueue]);
 
-  useEffect(() => { fetchOrdenes0400(); }, [fetchOrdenes0400]);
+  useEffect(() => {
+    applySharedPending0400(ordenesCompartidas);
+  }, [applySharedPending0400, ordenesCompartidas]);
   useEffect(() => { loadFailedPdfs(); loadSentPdfs(); }, [loadFailedPdfs, loadSentPdfs]);
-  useFocusEffect(useCallback(() => { fetchOrdenes0400({ isRefresh: true }); loadFailedPdfs(); loadSentPdfs(); }, [fetchOrdenes0400, loadFailedPdfs, loadSentPdfs]));
+  useFocusEffect(useCallback(() => {
+    reloadPending0400Local();
+    loadFailedPdfs();
+    loadSentPdfs();
+  }, [reloadPending0400Local, loadFailedPdfs, loadSentPdfs]));
 
   useEffect(() => {
     setRows((allOrdenes || []).filter((item) => {
@@ -1391,7 +1389,7 @@ export default function PendienteFirmaIndex() {
             </TouchableOpacity>
           ))}
           <TouchableOpacity style={styles.clearChip} onPress={clearFilters}><Text style={styles.clearChipText}>Limpiar</Text></TouchableOpacity>
-          <TouchableOpacity style={styles.reloadChip} onPress={() => fetchOrdenes0400({ isRefresh: true })}><Ionicons name="refresh-outline" size={15} color="#fff" /><Text style={styles.reloadChipText}>Recargar</Text></TouchableOpacity>
+          <TouchableOpacity style={styles.reloadChip} onPress={refreshOrdenes0400}><Ionicons name="refresh-outline" size={15} color="#fff" /><Text style={styles.reloadChipText}>Recargar</Text></TouchableOpacity>
         </ScrollView>
         {showDayPicker && <DateTimePicker value={dayRef ?? new Date()} mode="date" display={Platform.OS === "ios" ? "inline" : "default"} onChange={(e, date) => { if (Platform.OS === "android") { setShowDayPicker(false); if (e.type !== "set") return; } if (date) setDayRef(date); if (Platform.OS === "ios") setShowDayPicker(true); }} />}
         {showWeekStartPicker && <DateTimePicker value={weekStart ?? new Date()} mode="date" display={Platform.OS === "ios" ? "inline" : "default"} onChange={(e, date) => { if (Platform.OS === "android") { setShowWeekStartPicker(false); if (e.type !== "set") return; } if (date) { setWeekStart(date); if (Platform.OS !== "ios") setShowWeekEndPicker(true); } if (Platform.OS === "ios") setShowWeekStartPicker(true); }} />}
@@ -1407,7 +1405,7 @@ export default function PendienteFirmaIndex() {
           renderItem={renderGroupedItem}
           contentContainerStyle={{ paddingHorizontal: 10, paddingTop: 8, paddingBottom: selectMode ? 210 : 90 }}
           refreshing={refreshing}
-          onRefresh={() => fetchOrdenes0400({ isRefresh: true })}
+          onRefresh={refreshOrdenes0400}
           ListEmptyComponent={<View style={styles.emptyBox}><Ionicons name="document-text-outline" size={32} color={FIORI.textMuted} /><Text style={styles.emptyTitle}>Sin órdenes pendientes</Text><Text style={styles.emptySub}>No hay órdenes pendientes con los filtros actuales.</Text></View>}
         />
       )}

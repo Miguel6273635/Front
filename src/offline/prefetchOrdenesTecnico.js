@@ -1,13 +1,19 @@
 import api from "../services/api";
 import {
   saveOrdenTecnicoDetail,
+  loadOrdenTecnicoDetail,
   shouldCacheDetailByOrder,
   buildOfflineWindow,
+  isCacheFresh,
+  ORDENES_CACHE_TTL_MS,
 } from "./ordenesTecnicoCache";
 
-function pickSecondAddress(results = []) {
-  if (!Array.isArray(results) || results.length === 0) return null;
-  return results.length >= 2 ? results[1] : results[0];
+function pickFirstAddress(results = []) {
+  if (!Array.isArray(results) || results.length === 0) {
+    return null;
+  }
+
+  return results[0];
 }
 
 function mapDireccionLikeBackend(addr) {
@@ -146,7 +152,7 @@ async function fetchAddresses(orderIdReal) {
     );
 
     const results = odataResults(resAddr);
-    const chosen = pickSecondAddress(results);
+    const chosen = pickFirstAddress(results);
     const mapped = mapDireccionLikeBackend(chosen);
 
     return {
@@ -264,16 +270,26 @@ async function fetchOperaciones(orderIdReal) {
 export async function prefetchOrdenesTecnicoDetalles({
   orderIds = [],
   concurrency = 3,
+  force = false,
+  ttlMs = ORDENES_CACHE_TTL_MS,
 }) {
   const ids = [
     ...new Set(orderIds.map((x) => String(x).trim()).filter(Boolean)),
   ];
 
-  if (!ids.length) return { ok: 0, skip: 0, fail: 0 };
+  if (!ids.length) {
+    return {
+      ok: 0,
+      fresh: 0,
+      skip: 0,
+      fail: 0,
+    };
+  }
 
   const win = buildOfflineWindow(new Date());
 
   let ok = 0;
+  let fresh = 0;
   let skip = 0;
   let fail = 0;
   let i = 0;
@@ -284,7 +300,35 @@ export async function prefetchOrdenesTecnicoDetalles({
       const orderId = ids[idx];
 
       try {
-        // 1) Header detalle
+        /**
+         * Si no se está forzando una actualización, revisamos primero
+         * si el detalle ya existe y tiene menos de una hora.
+         */
+        if (!force) {
+          const cached = await loadOrdenTecnicoDetail(orderId);
+
+          const hasCachedDetail =
+            cached &&
+            cached.data &&
+            typeof cached.data === "object";
+
+          const cachedDetailIsFresh = isCacheFresh(
+            cached?.updatedAt,
+            ttlMs,
+          );
+
+          if (hasCachedDetail && cachedDetailIsFresh) {
+            console.log("[prefetch][detalle vigente]", {
+              orderId,
+              updatedAt: cached.updatedAt,
+            });
+
+            fresh++;
+            continue;
+          }
+        }
+
+        // El detalle no existe, ya venció o se solicitó force=true.
         const baseOrden = await fetchHeaderDetalle(orderId);
 
         const orderIdReal = String(
@@ -416,12 +460,23 @@ export async function prefetchOrdenesTecnicoDetalles({
     }
   }
 
+  const safeConcurrency = Math.min(
+    3,
+    Math.max(1, Number(concurrency) || 1),
+  );
+
   const workers = Array.from(
-    { length: Math.max(1, Number(concurrency) || 1) },
+    { length: safeConcurrency },
     () => worker(),
   );
 
   await Promise.all(workers);
 
-  return { ok, skip, fail, window: win };
+  return {
+    ok,
+    fresh,
+    skip,
+    fail,
+    window: win,
+  };
 }

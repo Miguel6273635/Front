@@ -1,18 +1,37 @@
 // src/offline/bootstrapSyncTecnico.js
+
 import { isOnline } from "./net";
+
 import {
   buildOfflineWindow,
   filterOrdenesByWindow,
   saveOrdenesTecnicoList,
+  loadOrdenesTecnicoList,
   pruneDetallesNoUsados,
+  isCacheFresh,
+  ORDENES_CACHE_TTL_MS,
 } from "./ordenesTecnicoCache";
+
 import { prefetchOrdenesTecnicoDetalles } from "./prefetchOrdenesTecnico";
+
 import api from "../services/api";
 
+/**
+ * Normaliza las propiedades de cada orden.
+ *
+ * SAP y el backend pueden mandar algunas propiedades con nombres
+ * diferentes. Esta función crea una estructura consistente.
+ */
 function normalizeOrdenFromList(row) {
   if (!row) return null;
 
-  const Orderid = String(row?.Orderid || row?.OrderId || "").trim();
+  const Orderid = String(
+    row?.Orderid ||
+      row?.OrderId ||
+      row?.OrderID ||
+      "",
+  ).trim();
+
   if (!Orderid) return null;
 
   return {
@@ -36,7 +55,6 @@ function normalizeOrdenFromList(row) {
       row?.Plant ||
       null,
 
-    // ✅ La cache y el filtro offline usan start_date / finish_date
     start_date:
       row?.start_date ||
       row?.StartDate ||
@@ -58,6 +76,7 @@ function normalizeOrdenFromList(row) {
     userstatus:
       row?.userstatus ||
       row?.Userstatus ||
+      row?.UserStatus ||
       row?.UserSt ||
       null,
 
@@ -75,79 +94,265 @@ function normalizeOrdenFromList(row) {
   };
 }
 
-export async function bootstrapPrefetchOrdenesTecnico(userEmail) {
-  const online = await isOnline();
-  if (!online) return { ok: false, reason: "offline" };
+/**
+ * Sincroniza las órdenes del técnico.
+ *
+ * force=false:
+ *   Respeta la caché de una hora.
+ *
+ * force=true:
+ *   Intenta consultar SAP aunque la caché sea reciente.
+ *
+ * prefetchDetails=true:
+ *   Precarga direcciones, partners y operaciones en segundo plano.
+ */
+export async function bootstrapPrefetchOrdenesTecnico(
+  userEmail,
+  {
+    force = false,
+    prefetchDetails = true,
+    ttlMs = ORDENES_CACHE_TTL_MS,
+  } = {},
+) {
+  const cleanEmail = String(userEmail || "").trim();
 
-  const win = buildOfflineWindow(new Date());
-  const start = win.startStr;
-  const end = win.endStr;
+  if (!cleanEmail) {
+    return {
+      ok: false,
+      reason: "missing_user",
+      source: "none",
+      data: [],
+    };
+  }
+
+  /**
+   * Primero intentamos obtener la última información guardada.
+   */
+  const cached = await loadOrdenesTecnicoList(cleanEmail);
+
+  const hasCachedList =
+    cached &&
+    Array.isArray(cached.data);
+
+  const cachedData = hasCachedList
+    ? cached.data
+    : [];
+
+  const cachedIsFresh = isCacheFresh(
+    cached?.updatedAt,
+    ttlMs,
+  );
+
+  /**
+   * La lista ya existe y tiene menos de una hora.
+   * No consultamos nuevamente SAP.
+   */
+  if (!force && hasCachedList && cachedIsFresh) {
+    console.log("[BOOTSTRAP TECNICO] Usando caché vigente:", {
+      count: cachedData.length,
+      updatedAt: cached?.updatedAt,
+    });
+
+    /**
+     * Revisamos los detalles en segundo plano.
+     *
+     * prefetchOrdenesTecnicoDetalles ya sabe que no debe volver
+     * a descargar detalles que tengan menos de una hora.
+     */
+    if (prefetchDetails && cachedData.length > 0) {
+      const orderIds = cachedData
+        .map((item) =>
+          String(
+            item?.Orderid ||
+              item?.OrderId ||
+              "",
+          ).trim(),
+        )
+        .filter(Boolean);
+
+      prefetchOrdenesTecnicoDetalles({
+        orderIds,
+        concurrency: 3,
+        force: false,
+        ttlMs,
+      }).catch((error) => {
+        console.log(
+          "[BOOTSTRAP TECNICO] Error revisando detalles:",
+          error?.message || error,
+        );
+      });
+    }
+
+    return {
+      ok: true,
+      reason: "cache_fresh",
+      source: "cache",
+      updatedAt: cached?.updatedAt || null,
+      count: cachedData.length,
+      data: cachedData,
+      window: cached?.window || null,
+    };
+  }
+
+  /**
+   * La caché no existe, está vencida o el usuario solicitó
+   * una actualización manual.
+   */
+  const online = await isOnline();
+
+  /**
+   * Sin conexión no borramos nada.
+   * Regresamos la última lista guardada.
+   */
+  if (!online) {
+    console.log("[BOOTSTRAP TECNICO] Sin conexión:", {
+      hasCachedList,
+      count: cachedData.length,
+    });
+
+    return {
+      ok: hasCachedList,
+      reason: "offline",
+      source: hasCachedList ? "cache" : "none",
+      updatedAt: cached?.updatedAt || null,
+      count: cachedData.length,
+      data: cachedData,
+      window: cached?.window || null,
+    };
+  }
+
+  /**
+   * Ventana que ya maneja tu aplicación:
+   * ocho días anteriores y ocho posteriores.
+   */
+  const window = buildOfflineWindow(new Date());
 
   const params = new URLSearchParams({
-    start,
-    end,
+    start: window.startStr,
+    end: window.endStr,
     mode: "range",
   });
 
-  if (userEmail) {
-    params.set("user", String(userEmail).trim());
+  console.log("[BOOTSTRAP TECNICO] Consultando SAP:", {
+    start: window.startStr,
+    end: window.endStr,
+    force,
+  });
+
+  try {
+    /**
+     * No mandamos user por query.
+     * El backend debe obtener el correo desde el token Azure.
+     */
+    const response = await api.get(
+      `/api/ordenes/sap/list?${params.toString()}`,
+    );
+
+    const rawRows = Array.isArray(response?.data)
+      ? response.data
+      : [];
+
+    const normalizedRows = rawRows
+      .map(normalizeOrdenFromList)
+      .filter(Boolean);
+
+    /**
+     * Segunda validación de fechas del lado de la aplicación.
+     */
+    const ordersInWindow = filterOrdenesByWindow(
+      normalizedRows,
+      window.start,
+      window.end,
+    );
+
+    /**
+     * La respuesta fue correcta.
+     * Ahora sí reemplazamos la lista guardada.
+     */
+    await saveOrdenesTecnicoList(
+      cleanEmail,
+      ordersInWindow,
+      window,
+    );
+
+    const orderIds = ordersInWindow
+      .map((item) =>
+        String(
+          item?.Orderid ||
+            item?.OrderId ||
+            "",
+        ).trim(),
+      )
+      .filter(Boolean);
+
+    /**
+     * Elimina detalles que ya no pertenecen a la ventana actual.
+     */
+    await pruneDetallesNoUsados(orderIds);
+
+    /**
+     * Comienza la precarga de detalles.
+     *
+     * No usamos await porque no queremos bloquear el regreso de la lista.
+     */
+    if (prefetchDetails && orderIds.length > 0) {
+      prefetchOrdenesTecnicoDetalles({
+        orderIds,
+        concurrency: 3,
+        force: false,
+        ttlMs,
+      })
+        .then((result) => {
+          console.log(
+            "[BOOTSTRAP TECNICO] Detalles precargados:",
+            result,
+          );
+        })
+        .catch((error) => {
+          console.log(
+            "[BOOTSTRAP TECNICO] Error precargando detalles:",
+            error?.message || error,
+          );
+        });
+    }
+
+    console.log("[BOOTSTRAP TECNICO] Lista actualizada:", {
+      count: ordersInWindow.length,
+    });
+
+    return {
+      ok: true,
+      reason: "sap_updated",
+      source: "sap",
+      updatedAt: Date.now(),
+      count: ordersInWindow.length,
+      data: ordersInWindow,
+      orderIds,
+      window,
+    };
+  } catch (error) {
+    /**
+     * Si SAP o la API fallan, conservamos la caché anterior.
+     */
+    const errorDetail =
+      error?.response?.data ||
+      error?.message ||
+      String(error);
+
+    console.log(
+      "[BOOTSTRAP TECNICO] Error consultando SAP:",
+      errorDetail,
+    );
+
+    return {
+      ok: hasCachedList,
+      reason: "sap_error",
+      source: hasCachedList ? "cache" : "none",
+      updatedAt: cached?.updatedAt || null,
+      count: cachedData.length,
+      data: cachedData,
+      window: cached?.window || null,
+      error: errorDetail,
+    };
   }
-
-  console.log("[BOOTSTRAP TECNICO] Request list:", {
-    start,
-    end,
-    user: userEmail,
-  });
-
-  // ✅ Usamos el mismo endpoint que usa la vista de órdenes del técnico.
-  // Esto evita filtrar mal por Userstatus = correo.
-  const res = await api.get(`/api/ordenes/sap/list?${params.toString()}`);
-
-  const rowsRaw = Array.isArray(res.data) ? res.data : [];
-
-  const rows = rowsRaw
-    .map(normalizeOrdenFromList)
-    .filter(Boolean);
-
-  // Seguridad: aplica ventana con tu helper por si backend/SAP manda algo fuera.
-  const inWindow = filterOrdenesByWindow(rows, win.start, win.end);
-
-  console.log("[BOOTSTRAP TECNICO] Ordenes en ventana offline:", {
-    totalBackend: rows.length,
-    inWindow: inWindow.length,
-    start,
-    end,
-  });
-
-  // 1) Guarda lista offline
-  await saveOrdenesTecnicoList(userEmail, inWindow, win);
-
-  // 2) Baja y guarda detalle + addresses + partners + operaciones
-  const orderIds = inWindow
-    .map((o) => String(o?.Orderid || "").trim())
-    .filter(Boolean);
-
-  const detailsResult = await prefetchOrdenesTecnicoDetalles({
-    orderIds,
-    concurrency: 3,
-  });
-
-  // 3) Limpia detalles de órdenes que ya no están en la ventana
-  await pruneDetallesNoUsados(orderIds);
-
-  console.log("[BOOTSTRAP TECNICO] Prefetch terminado:", {
-    count: inWindow.length,
-    orderIds: orderIds.length,
-    details: detailsResult,
-  });
-
-  return {
-    ok: true,
-    start,
-    end,
-    count: inWindow.length,
-    orderIds,
-    window: win,
-    details: detailsResult,
-  };
 }

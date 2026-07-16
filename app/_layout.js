@@ -2,16 +2,19 @@
 import React, { useEffect, useState } from "react";
 import { Stack } from "expo-router";
 import { View } from "react-native";
-import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
+import {
+  SafeAreaProvider,
+  SafeAreaView,
+} from "react-native-safe-area-context";
 import * as SplashScreen from "expo-splash-screen";
 
 import { AuthProvider } from "../src/context/AuthContext";
+import { OrdenesTecnicoProvider } from "../src/context/OrdenesTecnicoContext";
 import { UbicacionProvider } from "../src/context/UbicacionContext";
 import { DrawerProvider } from "../src/context/DrawerContext";
 import SideDrawer from "../src/components/SideDrawer";
 import { OfflineProvider } from "../src/offline/OfflineProvider";
 
-// ✅ Nuevo splash con MP4
 import AnimatedSplashVideo from "../src/components/AnimatedSplashVideo";
 
 SplashScreen.preventAutoHideAsync();
@@ -50,19 +53,29 @@ export default function RootLayout() {
     <SafeAreaProvider>
       <OfflineProvider>
         <AuthProvider>
-          <UbicacionProvider>
-            <DrawerProvider>
-              <SafeAreaView
-                style={{ flex: 1, backgroundColor: "#fff" }}
-                edges={["top", "bottom"]}
-              >
-                <View style={{ flex: 1 }}>
-                  <Stack screenOptions={{ headerShown: false }} />
-                  <SideDrawer />
-                </View>
-              </SafeAreaView>
-            </DrawerProvider>
-          </UbicacionProvider>
+          <OrdenesTecnicoProvider>
+            <UbicacionProvider>
+              <DrawerProvider>
+                <SafeAreaView
+                  style={{
+                    flex: 1,
+                    backgroundColor: "#fff",
+                  }}
+                  edges={["top", "bottom"]}
+                >
+                  <View style={{ flex: 1 }}>
+                    <Stack
+                      screenOptions={{
+                        headerShown: false,
+                      }}
+                    />
+
+                    <SideDrawer />
+                  </View>
+                </SafeAreaView>
+              </DrawerProvider>
+            </UbicacionProvider>
+          </OrdenesTecnicoProvider>
         </AuthProvider>
       </OfflineProvider>
     </SafeAreaProvider>

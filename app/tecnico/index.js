@@ -16,9 +16,7 @@ import {
 import { router, useFocusEffect } from "expo-router";
 import Header from "../../src/components/Header";
 
-import { useAuth } from "../../src/context/AuthContext";
 import { useOffline } from "../../src/offline/OfflineProvider";
-import { bootstrapPrefetchOrdenesTecnico } from "../../src/offline/bootstrapSyncTecnico";
 import { bootstrapPrefetchConsumiblesCatalogo } from "../../src/offline/bootstrapConsumiblesCatalogo";
 
 // ====== Datos del menú (tiles) ======
@@ -82,10 +80,7 @@ function FioriTile({ title, icon, badge, onPress, disabled = false }) {
       <View style={styles.tileHeader}>
         <Image
           source={icon}
-          style={[
-            styles.tileIcon,
-            disabled && { opacity: 0.4 },
-          ]}
+          style={[styles.tileIcon, disabled && { opacity: 0.4 }]}
           resizeMode="contain"
         />
 
@@ -97,10 +92,7 @@ function FioriTile({ title, icon, badge, onPress, disabled = false }) {
       </View>
 
       <Text
-        style={[
-          styles.tileTitle,
-          disabled && styles.tileTitleDisabled,
-        ]}
+        style={[styles.tileTitle, disabled && styles.tileTitleDisabled]}
         numberOfLines={2}
       >
         {title}
@@ -110,7 +102,6 @@ function FioriTile({ title, icon, badge, onPress, disabled = false }) {
 }
 
 export default function TecnicoHome() {
-  const { user } = useAuth();
   const { online, dbReady } = useOffline();
 
   /*
@@ -129,33 +120,20 @@ export default function TecnicoHome() {
 
       const subscription = BackHandler.addEventListener(
         "hardwareBackPress",
-        onBackPress
+        onBackPress,
       );
 
       return () => subscription.remove();
-    }, [])
+    }, []),
   );
 
+  /*
+    Las órdenes ya son administradas por OrdenesTecnicoProvider.
+    Aquí únicamente conservamos la precarga independiente del
+    catálogo de consumibles.
+  */
   useEffect(() => {
-    const email =
-      user?.email ||
-      user?.Email ||
-      user?.username ||
-      user?.Userstatus ||
-      null;
-
-    if (!online || !dbReady || !email) return;
-
-    bootstrapPrefetchOrdenesTecnico(String(email).trim())
-      .then((r) => {
-        console.log("[OFFLINE] prefetch tecnico:", r);
-      })
-      .catch((e) => {
-        console.log(
-          "[OFFLINE] prefetch tecnico error:",
-          e?.message || e
-        );
-      });
+    if (!online || !dbReady) return;
 
     bootstrapPrefetchConsumiblesCatalogo()
       .then((r) => {
@@ -164,10 +142,10 @@ export default function TecnicoHome() {
       .catch((e) => {
         console.log(
           "[OFFLINE] prefetch consumibles error:",
-          e?.message || e
+          e?.message || e,
         );
       });
-  }, [online, dbReady, user]);
+  }, [online, dbReady]);
 
   return (
     <View style={styles.container}>

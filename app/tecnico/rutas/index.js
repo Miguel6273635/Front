@@ -14,8 +14,8 @@ import {
 import MapView, { Marker, PROVIDER_GOOGLE, UrlTile } from 'react-native-maps';
 import MapViewDirections from 'react-native-maps-directions';
 import * as Location from 'expo-location';
-import api from '../../../src/services/api';
-import { useAuth } from '../../../src/context/AuthContext';
+import { useOrdenesTecnico } from '../../../src/context/OrdenesTecnicoContext';
+import { loadOrdenTecnicoDetail } from '../../../src/offline/ordenesTecnicoCache';
 import Header from '../../../src/components/Header';
 import { Ionicons } from '@expo/vector-icons';
 
@@ -46,8 +46,22 @@ const toYMD = (d = new Date()) => {
   return `${yyyy}-${mm}-${dd}`;
 };
 
+const parseSapDate = (value) => {
+  if (!value) return null;
+  if (typeof value === 'string' && value.startsWith('/Date(')) {
+    const ms = parseInt(value.replace('/Date(', '').replace(')/', ''), 10);
+    return Number.isNaN(ms) ? null : new Date(ms);
+  }
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d;
+};
+
 export default function RutasTecnico() {
-  const { token } = useAuth();
+  const {
+    ordenes: ordenesCompartidas,
+    loadLocal,
+    refresh,
+  } = useOrdenesTecnico();
 
   const [ordenes, setOrdenes] = useState([]);
   const [ubicacion, setUbicacion] = useState(null);
@@ -68,9 +82,13 @@ export default function RutasTecnico() {
 
   useEffect(() => {
     obtenerUbicacion();
-    fetchOrdenes();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    fetchOrdenes(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ordenesCompartidas]);
 
   const obtenerUbicacion = async () => {
     try {
@@ -88,34 +106,71 @@ export default function RutasTecnico() {
     }
   };
 
-  /**
-   * ✅ AHORA: consumimos SOLO la API BTP
-   * Endpoint esperado en BTP:
-   *   GET /api/rutas-asignadas?start=YYYY-MM-DD&end=YYYY-MM-DD&mode=eq|range
-   * y debe regresar:
-   *   [{ order_id, nombre_orden, direccion, cliente, start_date, ... }]
-   */
-  const fetchOrdenes = async () => {
+  // Construye las rutas desde la misma lista central de órdenes.
+  const fetchOrdenes = async (force = false) => {
     try {
       setLoadingOrdenes(true);
 
       const today = toYMD(new Date());
 
-      const res = await api.get('/api/rutas-asignadas', {
-        // tu api.js normalmente ya mete Authorization con interceptor,
-        // pero lo dejamos también por si acaso:
-        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-        params: { start: today, end: today, mode: 'eq' },
+      let list = Array.isArray(ordenesCompartidas)
+        ? ordenesCompartidas
+        : [];
+
+      if (force) {
+        const result = await refresh();
+        list = Array.isArray(result?.cached?.data)
+          ? result.cached.data
+          : list;
+      } else {
+        const cached = await loadLocal();
+        if (Array.isArray(cached?.data)) list = cached.data;
+      }
+
+      const ordenesDeHoy = list.filter((orden) => {
+        const fecha = parseSapDate(
+          orden?.start_date || orden?.StartDate || orden?.startDate,
+        );
+        return fecha ? toYMD(fecha) === today : false;
       });
 
-      const list = Array.isArray(res.data) ? res.data : [];
-
       const ordenesConCoords = await Promise.all(
-        list.map(async (orden) => {
-          const direccion = orden?.direccion || '';
+        ordenesDeHoy.map(async (orden) => {
+          const orderId = String(
+            orden?.Orderid || orden?.OrderId || orden?.order_id || '',
+          ).trim();
+
+          const cachedDetail = orderId
+            ? await loadOrdenTecnicoDetail(orderId)
+            : null;
+          const detail = cachedDetail?.data || {};
+
+          const direccion = String(
+            detail?.direccion ||
+              detail?.partner_address ||
+              orden?.direccion ||
+              orden?.partner_address ||
+              orden?.address ||
+              '',
+          ).trim();
+
+          const cliente = String(
+            detail?.cliente ||
+              detail?.partner_name ||
+              orden?.cliente ||
+              orden?.partner_name ||
+              orden?.Name1 ||
+              '',
+          ).trim();
+
           const coords = await geocodeDireccion(direccion);
           return {
             ...orden,
+            order_id: orderId,
+            nombre_orden:
+              orden?.nombre_orden || orden?.ShortText || `Orden ${orderId}`,
+            direccion,
+            cliente,
             latitude: coords?.lat ?? null,
             longitude: coords?.lng ?? null,
             _viewport: coords?._viewport ?? null,
@@ -128,8 +183,8 @@ export default function RutasTecnico() {
       // autoexpand si hay algo
       if (ordenesConCoords.length && !sheetExpanded) setSheetExpanded(true);
     } catch (error) {
-      console.error('Error al obtener órdenes:', error?.response?.data || error?.message || error);
-      Alert.alert('Error', 'No se pudieron cargar las rutas asignadas.');
+      console.error('Error al obtener rutas desde caché:', error?.message || error);
+      Alert.alert('Error', 'No se pudieron preparar las rutas guardadas.');
     } finally {
       setLoadingOrdenes(false);
     }
@@ -417,7 +472,7 @@ export default function RutasTecnico() {
             <Ionicons name="locate-outline" size={20} color="#fff" />
           </TouchableOpacity>
 
-          <TouchableOpacity style={styles.fab} onPress={fetchOrdenes} disabled={loadingOrdenes}>
+          <TouchableOpacity style={styles.fab} onPress={() => fetchOrdenes(true)} disabled={loadingOrdenes}>
             <Ionicons name="refresh-outline" size={20} color="#fff" />
           </TouchableOpacity>
 

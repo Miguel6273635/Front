@@ -15,8 +15,8 @@ import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams, router } from "expo-router";
 
 import Header from "../../../src/components/Header";
-import api from "../../../src/services/api";
 import { useAuth } from "../../../src/context/AuthContext";
+import { useOrdenesTecnico } from "../../../src/context/OrdenesTecnicoContext";
 
 /* ===================== Utils ===================== */
 const COLORS = {
@@ -89,6 +89,13 @@ function formatDateTime(value) {
 /* ===================== Screen ===================== */
 export default function TecnicoNoMantenimientoIndex() {
   const { user } = useAuth();
+  const {
+    ordenes: ordenesCompartidas,
+    loadingInitial: loading,
+    refreshing,
+    loadLocal,
+    refresh: refreshCentral,
+  } = useOrdenesTecnico();
 
   const correo = useMemo(() => {
     return safeStr(
@@ -96,51 +103,20 @@ export default function TecnicoNoMantenimientoIndex() {
     ).trim();
   }, [user]);
 
-  const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState([]);
   const [q, setQ] = useState("");
-  const [refreshing, setRefreshing] = useState(false);
 
   const params = useLocalSearchParams();
-  const { refresh } = params;
+  const { refresh: refreshParam } = params;
 
-  const fetchLista = useCallback(async () => {
-    try {
+  const applySharedLista = useCallback((data = []) => {
       if (!correo) {
         setRows([]);
-        setLoading(false);
-        Alert.alert(
-          "Sin correo",
-          "No se detectó el correo del técnico loggeado.",
-        );
-        return;
+        return [];
       }
 
-      setLoading(true);
-
-      // Rango anual ajustable.
-      const from = "2026-01-01T00:00:00";
-      const to = "2026-12-31T23:59:59";
-
-      /**
-       * Se conserva este filtro porque así estás trayendo las órdenes asignadas
-       * al técnico loggeado. Después filtramos localmente por Userstatus 0600.
-       */
-      const filter =
-        `StartDate ge datetime'${from}' and ` +
-        `FinishDate le datetime'${to}' and ` +
-        `Userstatus eq '${correo}'`;
-
-      const url =
-        `/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet` +
-        `?$filter=${encodeURIComponent(filter)}` +
-        `&$format=json`;
-
-      const { data } = await api.get(url);
-
-      const results = Array.isArray(data?.d?.results) ? data.d.results : [];
-
-      const filtradas = results.filter((it) => {
+      const source = Array.isArray(data) ? data : [];
+      const filtradas = source.filter((it) => {
         const us = it?.Userstatus || it?.UserStatus || "";
         const estatusCode =
           it?.estatus_code ||
@@ -175,35 +151,35 @@ export default function TecnicoNoMantenimientoIndex() {
           });
 
       setRows(buscadas);
-    } catch (e) {
-      console.error(
-        "Error Carta No Mantto (técnico):",
-        e?.response?.data || e?.message,
-      );
-
-      setRows([]);
-      Alert.alert("Error", "No se pudo cargar la lista.");
-    } finally {
-      setLoading(false);
-    }
+      return buscadas;
   }, [q, correo]);
 
   useEffect(() => {
-    fetchLista();
-  }, [fetchLista]);
+    applySharedLista(ordenesCompartidas);
+  }, [applySharedLista, ordenesCompartidas]);
+
+  const reloadListaLocal = useCallback(async () => {
+    const cached = await loadLocal();
+    return applySharedLista(cached?.data || []);
+  }, [applySharedLista, loadLocal]);
+
+  const refreshLista = useCallback(async () => {
+    try {
+      const result = await refreshCentral();
+      applySharedLista(result?.cached?.data || []);
+      return result;
+    } catch (e) {
+      console.error("Error actualizando Carta No Mantto:", e?.message || e);
+      await reloadListaLocal();
+      return { ok: false, error: e };
+    }
+  }, [applySharedLista, refreshCentral, reloadListaLocal]);
 
   useEffect(() => {
-    if (refresh) fetchLista();
-  }, [refresh, fetchLista]);
+    if (refreshParam) reloadListaLocal();
+  }, [refreshParam, reloadListaLocal]);
 
-  const onPullRefresh = async () => {
-    try {
-      setRefreshing(true);
-      await fetchLista();
-    } finally {
-      setRefreshing(false);
-    }
-  };
+  const onPullRefresh = refreshLista;
 
   const openDetalle = (item) => {
     const orderId = safeStr(

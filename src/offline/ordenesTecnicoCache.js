@@ -1,8 +1,11 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
-// Ventana requerida: 8 días antes y 8 después
-export const OFFLINE_DAYS_BEFORE = 8;
+// Ventana requerida: 30 días antes y 8 días después
+export const OFFLINE_DAYS_BEFORE = 30;
 export const OFFLINE_DAYS_AFTER = 8;
+// Tiempo durante el cual la información se considera actualizada.
+// 60 minutos × 60 segundos × 1000 milisegundos = 1 hora.
+export const ORDENES_CACHE_TTL_MS = 60 * 60 * 1000;
 
 const LIST_KEY = (userEmail) => `ordenesTecnico:list:${userEmail || "unknown"}`;
 const DETAIL_KEY = (orderId) =>
@@ -138,6 +141,55 @@ export async function getOrdenesTecnicoLastSync(userEmail) {
   }
 }
 
+/**
+ * Indica si una fecha de caché todavía está vigente.
+ *
+ * updatedAt:
+ *   Fecha guardada como milisegundos con Date.now().
+ *
+ * ttlMs:
+ *   Tiempo máximo que puede tener la información.
+ *   Por defecto es una hora.
+ */
+export function isCacheFresh(
+  updatedAt,
+  ttlMs = ORDENES_CACHE_TTL_MS,
+) {
+  const timestamp = Number(updatedAt || 0);
+
+  if (!Number.isFinite(timestamp) || timestamp <= 0) {
+    return false;
+  }
+
+  const cacheAge = Date.now() - timestamp;
+
+  return cacheAge >= 0 && cacheAge < ttlMs;
+}
+
+/**
+ * Revisa si la lista de órdenes de un técnico tiene menos de una hora.
+ */
+export async function isOrdenesTecnicoListFresh(
+  userEmail,
+  ttlMs = ORDENES_CACHE_TTL_MS,
+) {
+  const cached = await loadOrdenesTecnicoList(userEmail);
+
+  return isCacheFresh(cached?.updatedAt, ttlMs);
+}
+
+/**
+ * Revisa si el detalle guardado de una orden tiene menos de una hora.
+ */
+export async function isOrdenTecnicoDetailFresh(
+  orderId,
+  ttlMs = ORDENES_CACHE_TTL_MS,
+) {
+  const cached = await loadOrdenTecnicoDetail(orderId);
+
+  return isCacheFresh(cached?.updatedAt, ttlMs);
+}
+
 /* =========================
    ✅ Detalle (con límite)
    ========================= */
@@ -195,6 +247,9 @@ function sanitizeDetailForCache(detail) {
     plant: detail?.plant ?? detail?.Plant ?? null,
     start_date: detail?.start_date,
     finish_date: detail?.finish_date,
+    ShortText: detail?.ShortText ?? detail?.short_text ?? null,
+    short_text: detail?.short_text ?? detail?.ShortText ?? null,
+    cobertura_tipo: detail?.cobertura_tipo ?? detail?.cobertura ?? null,
     direccion: detail?.direccion,
     cliente: detail?.cliente,
     cliente_email: detail?.cliente_email,
@@ -214,7 +269,8 @@ function sanitizeDetailForCache(detail) {
 
 /**
  * Decide si conviene guardar el detalle en offline:
- * solo si la orden está dentro de hoy ± 8 días
+ * solo si la orden está dentro de los 30 días anteriores
+ * o los 8 días posteriores a la fecha actual.
  */
 export function shouldCacheDetailByOrder(orderLike, baseDate = new Date()) {
   const window = buildOfflineWindow(baseDate);

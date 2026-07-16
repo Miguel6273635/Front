@@ -15,6 +15,12 @@ import { useLocalSearchParams, router } from "expo-router";
 import Header from "../../../src/components/Header";
 import api from "../../../src/services/api";
 import { useAuth } from "../../../src/context/AuthContext";
+import {
+  loadOrdenTecnicoDetail,
+  saveOrdenTecnicoDetail,
+  isCacheFresh,
+  ORDENES_CACHE_TTL_MS,
+} from "../../../src/offline/ordenesTecnicoCache";
 
 import {
   fetchOperacionesSupervisor,
@@ -113,8 +119,32 @@ export default function TecnicoNoMantenimientoDetalle() {
   const fetchDetalle = useCallback(async () => {
     if (!id) return;
 
+    let cachedData = null;
+
     try {
       setLoading(true);
+
+      const cached = await loadOrdenTecnicoDetail(id);
+      cachedData = cached?.data || null;
+
+      if (cachedData) {
+        setWo(cachedData);
+        setOperaciones(
+          Array.isArray(cachedData?.operaciones)
+            ? cachedData.operaciones
+            : [],
+        );
+
+        const cachedIsFresh = isCacheFresh(
+          cached?.updatedAt,
+          ORDENES_CACHE_TTL_MS,
+        );
+
+        if (cachedIsFresh && Array.isArray(cachedData?.operaciones)) {
+          console.log("[NO MANTENIMIENTO][DETALLE] Usando caché vigente:", id);
+          return;
+        }
+      }
 
       const url = `/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet('${encodeURIComponent(
         id,
@@ -126,18 +156,30 @@ export default function TecnicoNoMantenimientoDetalle() {
         },
       });
 
-      setWo(data?.d || null);
+      const header = data?.d || null;
 
       const ops = await fetchOperacionesSupervisor(id);
-      setOperaciones(Array.isArray(ops) ? ops : []);
+      const operacionesSap = Array.isArray(ops) ? ops : [];
+
+      setWo(header);
+      setOperaciones(operacionesSap);
+
+      if (header) {
+        await saveOrdenTecnicoDetail(id, {
+          ...header,
+          operaciones: operacionesSap,
+        });
+      }
     } catch (e) {
       console.error(
         "Error detalle Carta No Mantto (técnico):",
         e?.response?.data || e?.message,
       );
 
-      setWo(null);
-      setOperaciones([]);
+      if (!cachedData) {
+        setWo(null);
+        setOperaciones([]);
+      }
     } finally {
       setLoading(false);
     }

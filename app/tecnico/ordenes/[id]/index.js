@@ -25,6 +25,8 @@ import {
   loadOrdenTecnicoDetail,
   saveOrdenTecnicoDetail,
   shouldCacheDetailByOrder,
+  isCacheFresh,
+  ORDENES_CACHE_TTL_MS,
 } from "../../../../src/offline/ordenesTecnicoCache";
 
 import {
@@ -469,9 +471,9 @@ function mapDireccionLikeBackend(addr) {
 
   return { cliente, direccion };
 }
-function pickSecondAddress(results = []) {
+function pickFirstAddress(results = []) {
   if (!Array.isArray(results) || results.length === 0) return null;
-  return results.length >= 2 ? results[1] : results[0];
+  return results[0];
 }
 
 function mergeOpsWithLocalState(orderId, ops, state) {
@@ -1332,6 +1334,21 @@ export default function DetalleOrden() {
         if (av) setAvisoCliente(av);
       }
 
+      // Si el detalle ya está completo y tiene menos de una hora,
+      // se reutiliza sin volver a consultar SAP.
+      const cachedIsFresh = isCacheFresh(
+        cached?.updatedAt,
+        ORDENES_CACHE_TTL_MS,
+      );
+
+      if (cached?.data && cachedIsFresh) {
+        console.log("[DETALLE ORDEN] Usando detalle vigente de caché:", {
+          orderId: orderIdParam,
+          updatedAt: cached.updatedAt,
+        });
+        return;
+      }
+
       const net = await NetInfo.fetch();
       const isOnline = !!(
         net?.isConnected && net?.isInternetReachable !== false
@@ -1388,7 +1405,7 @@ export default function DetalleOrden() {
         );
         const results =
           resAddr?.data?.results || resAddr?.data?.d?.results || [];
-        const chosen = pickSecondAddress(results);
+        const chosen = pickFirstAddress(results);
         const mapped = mapDireccionLikeBackend(chosen);
         direccionSap = mapped.direccion || "";
         clienteSap = mapped.cliente || "";

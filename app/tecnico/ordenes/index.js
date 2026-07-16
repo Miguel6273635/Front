@@ -29,24 +29,15 @@ import * as Device from "expo-device";
 import NetInfo from "@react-native-community/netinfo";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useFocusEffect } from "@react-navigation/native";
-
-import {
-  loadOrdenesTecnicoList,
-  saveOrdenesTecnicoList,
-  pruneDetallesNoUsados,
-  buildOfflineWindow,
-  filterOrdenesByWindow,
-} from "../../../src/offline/ordenesTecnicoCache";
+import { buildOfflineWindow } from "../../../src/offline/ordenesTecnicoCache";
 
 import {
   setLocalStatusPatch,
   patchCacheOrdenesTecnicoList,
   patchCacheOrdenTecnicoDetail,
 } from "../../../src/offline/ordenesTecnicoLocalPatch";
-// Prefetch de detalles (para no entrar a cada orden)
-import { prefetchOrdenesTecnicoDetalles } from "../../../src/offline/prefetchOrdenesTecnico";
-
 import { useAuth } from "../../../src/context/AuthContext";
+import { useOrdenesTecnico } from "../../../src/context/OrdenesTecnicoContext";
 import Header from "../../../src/components/Header";
 import api from "../../../src/services/api";
 import * as FileSystem from "expo-file-system/legacy";
@@ -212,13 +203,31 @@ const getUtcYmd = (d) => {
 };
 
 const formatLocalYmd = (d) => {
-  if (!d) return null;
-
+  if (!d) return "";
   const yyyy = d.getFullYear();
   const mm = String(d.getMonth() + 1).padStart(2, "0");
   const dd = String(d.getDate()).padStart(2, "0");
-
   return `${yyyy}-${mm}-${dd}`;
+};
+
+const getOrderKey = (item = {}) =>
+  String(item?.Orderid || item?.OrderId || item?.orderid || "").trim();
+
+const mergeOrdersKeepingCache = (cached = [], remote = []) => {
+  const map = new Map();
+
+  for (const item of Array.isArray(remote) ? remote : []) {
+    const key = getOrderKey(item);
+    if (key) map.set(key, item);
+  }
+
+  // La versión local gana para conservar estatus y cambios offline.
+  for (const item of Array.isArray(cached) ? cached : []) {
+    const key = getOrderKey(item);
+    if (key) map.set(key, item);
+  }
+
+  return Array.from(map.values());
 };
 
 const formatDateDMY = (value) => {
@@ -478,13 +487,22 @@ async function removeFromQueue(userEmail, orderId) {
 export default function ListaOrdenesTecnico() {
   const { user, ensureValidToken } = useAuth();
 
+  const {
+    ordenes: ordenesCompartidas,
+    loadingInitial: loading,
+    refreshing: refreshingCentral,
+    loadLocal,
+    refresh,
+  } = useOrdenesTecnico();
+
   const userEmail = user?.correo || user?.email || user?.username || null;
 
   const [allOrdenes, setAllOrdenes] = useState([]);
+  const [historicalOrdenes, setHistoricalOrdenes] = useState([]);
+  const [loadingHistorical, setLoadingHistorical] = useState(false);
   const [ordenes, setOrdenes] = useState([]);
 
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
+  const refreshing = refreshingCentral || loadingHistorical;
 
   const [query, setQuery] = useState("");
   const [dateMode, setDateMode] = useState("day");
@@ -564,49 +582,22 @@ export default function ListaOrdenesTecnico() {
     return { start: atStartOfDay(s), end: atEndOfDay(e) };
   }, [dateMode, dayRef, weekStart, weekEnd, monthYear, yearOnly]);
 
-  // define el rango REAL que le vas a pedir a SAP según el filtro
-  const getSapRequestRange = useCallback(() => {
-    if (
-      dateMode === "all" ||
-      dateMode === "month" ||
-      dateMode === "year" ||
-      dateMode === "weekRange"
-    ) {
-      const s = atStartOfDay(start);
-      const e = atEndOfDay(end);
+  const selectedRangeIsCached = useMemo(() => {
+    const offlineWindow = buildOfflineWindow(new Date());
+    const selectedStart = formatLocalYmd(start);
+    const selectedEnd = formatLocalYmd(end);
 
-      return {
-        startDate: s,
-        endDate: e,
-        startStr: formatLocalYmd(s),
-        endStr: formatLocalYmd(e),
-      };
-    }
+    return (
+      selectedStart >= offlineWindow.startStr &&
+      selectedEnd <= offlineWindow.endStr
+    );
+  }, [start, end]);
 
-    if (dateMode === "day") {
-      const s = atStartOfDay(dayRef);
-      const e = atEndOfDay(dayRef);
+  const selectedRangeKey = useMemo(
+    () => `${formatLocalYmd(start)}:${formatLocalYmd(end)}`,
+    [start, end],
+  );
 
-      return {
-        startDate: s,
-        endDate: e,
-        startStr: formatLocalYmd(s),
-        endStr: formatLocalYmd(e),
-      };
-    }
-
-    const e = atEndOfDay(new Date());
-    const s = new Date();
-    s.setDate(s.getDate() - 90);
-    const ss = atStartOfDay(s);
-
-    return {
-      startDate: ss,
-      endDate: e,
-      startStr: formatLocalYmd(ss),
-      endStr: formatLocalYmd(e),
-    };
-  }, [dateMode, start, end, dayRef]);
   const applyTbmkyOfflineStatuses = useCallback(async (data = []) => {
     try {
       const arr = Array.isArray(data) ? data : [];
@@ -747,153 +738,149 @@ export default function ListaOrdenesTecnico() {
     };
   }, [ensureValidToken]);
 
-  /**
-   * REGLA CLAVE:
-   * - ONLINE: muestra TODO lo que regrese SAP según filtros
-   * - OFFLINE CACHE: guarda SOLO ventana hoy±8 días
-   */
-  const fetchOrdenes = useCallback(
-    async ({ isRefresh = false } = {}) => {
-      try {
-        if (isRefresh) setRefreshing(true);
-        else setLoading(true);
+  const applySharedOrdenes = useCallback(
+    async (data = []) => {
+      const source = Array.isArray(data) ? data : [];
+      const patchedData = await applyTbmkyOfflineStatuses(source);
 
-        // 0) Carga rápida desde cache SOLO si NO es refresh
-        if (!isRefresh) {
-          const cached = await loadOrdenesTecnicoList(userEmail);
-
-          if (cached?.data?.length) {
-            const patchedData = await applyTbmkyOfflineStatuses(cached.data);
-            setAllOrdenes(patchedData);
-            setLoading(false);
-          }
-        }
-
-        // 1) ¿hay internet?
-        const net = await NetInfo.fetch();
-        const online = !!(
-          net?.isConnected && net?.isInternetReachable !== false
-        );
-
-        setIsOnline(online);
-
-        // 2) OFFLINE: usa cache
-        if (!online) {
-          const cached = await loadOrdenesTecnicoList(userEmail);
-
-          if (!cached?.data?.length) {
-            Alert.alert(
-              "Sin conexión",
-              "No hay internet y no hay datos guardados aún.",
-            );
-          } else {
-            const patchedData = await applyTbmkyOfflineStatuses(cached.data);
-            setAllOrdenes(patchedData);
-          }
-
-          return;
-        }
-
-        // 3) ONLINE: pide rango REAL según filtros
-        const req = getSapRequestRange();
-
-        console.log("[ORDENES] Request SAP range:", {
-          dateMode,
-          start: req.startStr,
-          end: req.endStr,
-          user: userEmail,
-        });
-
-        const params = new URLSearchParams({
-          start: req.startStr,
-          end: req.endStr,
-          mode: "range",
-        });
-
-        if (userEmail) params.set("user", userEmail);
-
-        const okToken = await ensureValidToken();
-        if (!okToken) return;
-
-        const res = await api.get(`/api/ordenes/sap/list?${params.toString()}`);
-        const data = Array.isArray(res.data) ? res.data : [];
-
-        // 4) UI: muestra TODO lo de SAP
-        setAllOrdenes(data);
-
-        // 5) OFFLINE CACHE: guarda SOLO ventana hoy±8
-        const offlineWin = buildOfflineWindow(new Date());
-
-        const offlineOnly = filterOrdenesByWindow(
-          data,
-          offlineWin.start,
-          offlineWin.end,
-        );
-
-        await saveOrdenesTecnicoList(userEmail, offlineOnly, offlineWin);
-
-        // 6) Limpieza: conserva detalles solo de órdenes en ventana
-        const keepIds = offlineOnly.map((x) => x?.Orderid).filter(Boolean);
-        await pruneDetallesNoUsados(keepIds);
-
-        // 7) PREFETCH: SOLO ventana y poquitos
-        const MAX_PREFETCH = 12;
-
-        const today = new Date();
-
-        const distToToday = (order) => {
-          const d = parseSapDate(order?.start_date);
-          if (!d) return 999999999;
-          return Math.abs(d.getTime() - today.getTime());
-        };
-
-        const offlineSorted = [...offlineOnly].sort(
-          (a, b) => distToToday(a) - distToToday(b),
-        );
-
-        const idsToPrefetch = offlineSorted
-          .map((x) => x?.Orderid)
-          .filter(Boolean)
-          .slice(0, MAX_PREFETCH);
-
-        prefetchOrdenesTecnicoDetalles({
-          orderIds: idsToPrefetch,
-          token: null,
-          concurrency: 3,
-        }).catch((e) =>
-          console.log("prefetchOrdenesTecnicoDetalles ERROR:", e?.message || e),
-        );
-      } catch (error) {
-        console.error(
-          "Error al cargar órdenes (SAP):",
-          error?.response?.data || error,
-        );
-
-        const cached = await loadOrdenesTecnicoList(userEmail);
-
-        if (cached?.data?.length) {
-          const patchedData = await applyTbmkyOfflineStatuses(cached.data);
-          setAllOrdenes(patchedData);
-        } else {
-          const serverMsg =
-            error?.response?.data?.error ||
-            "No se pudieron cargar las órdenes desde SAP";
-
-          Alert.alert("Error", serverMsg);
-        }
-      } finally {
-        setLoading(false);
-        setRefreshing(false);
-      }
+      setAllOrdenes(patchedData);
+      return patchedData;
     },
-    [
-      ensureValidToken,
-      userEmail,
-      dateMode,
-      getSapRequestRange,
-      applyTbmkyOfflineStatuses,
-    ],
+    [applyTbmkyOfflineStatuses],
   );
+
+  // Consulta temporal para periodos fuera de la ventana offline.
+  // Los resultados se guardan solo en el estado de esta pantalla.
+  const fetchHistoricalOrdenes = useCallback(async () => {
+    if (selectedRangeIsCached) {
+      setHistoricalOrdenes([]);
+      return { ok: true, source: "cache_window", data: [] };
+    }
+
+    try {
+      setLoadingHistorical(true);
+
+      const net = await NetInfo.fetch();
+      const online = !!(
+        net?.isConnected && net?.isInternetReachable !== false
+      );
+      setIsOnline(online);
+
+      if (!online) {
+        setHistoricalOrdenes([]);
+        return { ok: false, reason: "offline", data: [] };
+      }
+
+      const okToken = await ensureValidToken();
+      if (!okToken) {
+        return { ok: false, reason: "invalid_token", data: [] };
+      }
+
+      const params = new URLSearchParams({
+        start: formatLocalYmd(start),
+        end: formatLocalYmd(end),
+        mode: "range",
+      });
+
+      console.log("[ORDENES][HISTORICO] Consulta temporal:", {
+        start: formatLocalYmd(start),
+        end: formatLocalYmd(end),
+      });
+
+      const res = await api.get(
+        `/api/ordenes/sap/list?${params.toString()}`,
+      );
+      const remote = Array.isArray(res?.data) ? res.data : [];
+      const patchedRemote = await applyTbmkyOfflineStatuses(remote);
+
+      setHistoricalOrdenes(patchedRemote);
+
+      return {
+        ok: true,
+        source: "remote_temporary",
+        data: patchedRemote,
+      };
+    } catch (error) {
+      console.log(
+        "[ORDENES][HISTORICO] Error:",
+        error?.response?.data || error?.message || error,
+      );
+
+      setHistoricalOrdenes([]);
+      return { ok: false, reason: "request_error", error, data: [] };
+    } finally {
+      setLoadingHistorical(false);
+    }
+  }, [
+    applyTbmkyOfflineStatuses,
+    ensureValidToken,
+    selectedRangeIsCached,
+    selectedRangeKey,
+    start,
+    end,
+  ]);
+
+  // Relee únicamente AsyncStorage. No consulta SAP.
+  const reloadOrdenesFromLocal = useCallback(async () => {
+    try {
+      const cached = await loadLocal();
+      const data = Array.isArray(cached?.data) ? cached.data : [];
+
+      await applySharedOrdenes(data);
+
+      return { ok: true, data };
+    } catch (error) {
+      console.log(
+        "[ORDENES] No se pudo releer la caché local:",
+        error?.message || error,
+      );
+
+      return { ok: false, error };
+    }
+  }, [applySharedOrdenes, loadLocal]);
+
+  // Solamente la recarga manual obliga a consultar nuevamente SAP.
+  const refreshOrdenes = useCallback(async () => {
+    // Fuera de la ventana offline se actualiza únicamente el periodo
+    // seleccionado y no se escribe nada en AsyncStorage.
+    if (!selectedRangeIsCached) {
+      return fetchHistoricalOrdenes();
+    }
+
+    try {
+      const result = await refresh();
+      const cached = result?.cached;
+      const data = Array.isArray(cached?.data) ? cached.data : [];
+
+      await applySharedOrdenes(data);
+
+      if (!result?.ok && !data.length) {
+        Alert.alert(
+          "Actualización",
+          "No se pudieron actualizar las órdenes y todavía no hay información guardada.",
+        );
+      }
+
+      return result;
+    } catch (error) {
+      console.log(
+        "[ORDENES] Error actualizando órdenes:",
+        error?.response?.data || error?.message || error,
+      );
+
+      Alert.alert(
+        "Actualización",
+        "No se pudieron actualizar las órdenes. Se conservarán los datos guardados.",
+      );
+
+      return { ok: false, error };
+    }
+  }, [
+    applySharedOrdenes,
+    fetchHistoricalOrdenes,
+    refresh,
+    selectedRangeIsCached,
+  ]);
 
   // catálogo una vez
   useEffect(() => {
@@ -901,21 +888,40 @@ export default function ListaOrdenesTecnico() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // órdenes cada vez que cambie filtro
+  // Refleja la lista central compartida cuando cambia.
   useEffect(() => {
-    fetchOrdenes();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fetchOrdenes]);
+    applySharedOrdenes(ordenesCompartidas);
+  }, [applySharedOrdenes, ordenesCompartidas]);
 
+  // Al seleccionar un periodo fuera de caché, lo consulta temporalmente.
+  useEffect(() => {
+    if (selectedRangeIsCached) {
+      setHistoricalOrdenes([]);
+      return;
+    }
+
+    fetchHistoricalOrdenes();
+  }, [
+    fetchHistoricalOrdenes,
+    selectedRangeIsCached,
+    selectedRangeKey,
+  ]);
+
+  // Al volver desde el detalle, relee cambios locales sin consultar SAP.
   useFocusEffect(
     useCallback(() => {
-      fetchOrdenes({ isRefresh: true });
-    }, [fetchOrdenes]),
+      reloadOrdenesFromLocal();
+    }, [reloadOrdenesFromLocal]),
   );
 
   // filtrar en memoria
   useEffect(() => {
-    const filtered = (allOrdenes || []).filter((item) => {
+    const source = mergeOrdersKeepingCache(
+      allOrdenes,
+      historicalOrdenes,
+    );
+
+    const filtered = source.filter((item) => {
       const okQuery = matchesQuery(item, query);
       if (!okQuery) return false;
 
@@ -926,7 +932,7 @@ export default function ListaOrdenesTecnico() {
     });
 
     setOrdenes(filtered);
-  }, [allOrdenes, query, start, end]);
+  }, [allOrdenes, historicalOrdenes, query, start, end]);
 
   // ===========================
   // GUARDAR EQUIPO ACTIVO
@@ -1197,11 +1203,11 @@ export default function ListaOrdenesTecnico() {
       const q2 = await loadCheckinQueue(userEmail);
       setCheckinQueue(q2);
 
-      fetchOrdenes({ isRefresh: true });
+      await refreshOrdenes();
     } finally {
       syncingRef.current = false;
     }
-  }, [ensureValidToken, fetchOrdenes, userEmail]);
+  }, [ensureValidToken, refreshOrdenes, userEmail]);
 
   // Auto-sync cuando regresa internet y hay cola
   useEffect(() => {
@@ -1281,7 +1287,7 @@ export default function ListaOrdenesTecnico() {
       setCheckinPhotoBase64(null);
       setCheckinPhotoUri(null);
 
-      fetchOrdenes({ isRefresh: true });
+      await refreshOrdenes();
     } catch (e) {
       console.log(
         "enviarCheckinCompletoASap ERROR:",
@@ -1685,7 +1691,7 @@ export default function ListaOrdenesTecnico() {
 
           <TouchableOpacity
             style={styles.refreshBtn}
-            onPress={() => fetchOrdenes({ isRefresh: true })}
+            onPress={refreshOrdenes}
             activeOpacity={0.85}
           >
             <Text style={styles.refreshBtnText}>Recargar</Text>
@@ -1998,7 +2004,7 @@ export default function ListaOrdenesTecnico() {
           renderItem={renderItem}
           contentContainerStyle={{ padding: 12, paddingTop: 6 }}
           refreshing={refreshing}
-          onRefresh={() => fetchOrdenes({ isRefresh: true })}
+          onRefresh={refreshOrdenes}
           ListEmptyComponent={
             <Text
               style={{
