@@ -1,4 +1,7 @@
+// src/offline/prefetchOrdenesTecnico.js
+
 import api from "../services/api";
+
 import {
   saveOrdenTecnicoDetail,
   loadOrdenTecnicoDetail,
@@ -8,29 +11,66 @@ import {
   ORDENES_CACHE_TTL_MS,
 } from "./ordenesTecnicoCache";
 
+/*
+ * Evita que varias partes de la aplicación ejecuten
+ * simultáneamente la misma precarga.
+ */
+let activePrefetchPromise = null;
+
 function pickFirstAddress(results = []) {
-  if (!Array.isArray(results) || results.length === 0) {
+  if (
+    !Array.isArray(results) ||
+    results.length === 0
+  ) {
     return null;
   }
 
   return results[0];
 }
 
-function mapDireccionLikeBackend(addr) {
-  if (!addr) return { cliente: "", direccion: "" };
+function mapDireccionLikeBackend(address) {
+  if (!address) {
+    return {
+      cliente: "",
+      direccion: "",
+    };
+  }
 
-  const Name1 = addr.Name1 ?? "";
-  const Name2 = addr.Name2 ?? "";
-  const Street = addr.Street ?? addr.StreetName ?? "";
-  const HouseNum1 = addr.HouseNum1 ?? "";
-  const StrSuppl3 = addr.StrSuppl3 ?? "";
-  const Location = addr.Location ?? "";
-  const City1 = addr.City1 ?? "";
-  const Region = addr.Region ?? "";
-  const PostCode1 = addr.PostCode1 ?? "";
-  const Country = addr.Country ?? "";
+  const Name1 = address.Name1 ?? "";
+  const Name2 = address.Name2 ?? "";
+  const Street =
+    address.Street ??
+    address.StreetName ??
+    "";
 
-  const cliente = [Name1, Name2].filter(Boolean).join(" ").trim();
+  const HouseNum1 =
+    address.HouseNum1 ?? "";
+
+  const StrSuppl3 =
+    address.StrSuppl3 ?? "";
+
+  const Location =
+    address.Location ?? "";
+
+  const City1 =
+    address.City1 ?? "";
+
+  const Region =
+    address.Region ?? "";
+
+  const PostCode1 =
+    address.PostCode1 ?? "";
+
+  const Country =
+    address.Country ?? "";
+
+  const cliente = [
+    Name1,
+    Name2,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
 
   const direccion = [
     `${Street} ${HouseNum1}`.trim(),
@@ -41,240 +81,435 @@ function mapDireccionLikeBackend(addr) {
     PostCode1,
     Country,
   ]
-    .filter((x) => x && String(x).trim().length > 0)
+    .filter(
+      (value) =>
+        value &&
+        String(value).trim().length > 0,
+    )
     .join(", ");
 
-  return { cliente, direccion };
+  return {
+    cliente,
+    direccion,
+  };
 }
 
-function normalizeOpsFromBackend(ops = []) {
-  if (!Array.isArray(ops)) return [];
+function normalizeOpsFromBackend(
+  operations = [],
+) {
+  if (!Array.isArray(operations)) {
+    return [];
+  }
 
-  return ops.map((op) => {
-    const Activity = op.Activity || op.activity || op.Vornr || "";
-    //Cambios agregados por lo del campo de subactivity Miguel Angel 04/06/2026
-    //const SubActivity = op.SubActivity || op.subactivity || op.Uvorn || "";
-    const Description = op.Description || op.description || op.Ltxa1 || "";
-    const StandardTextKey = op.StandardTextKey || op.standardTextKey || "";
+  return operations.map((operation) => {
+    const Activity =
+      operation.Activity ||
+      operation.activity ||
+      operation.Vornr ||
+      "";
+
+    const Description =
+      operation.Description ||
+      operation.description ||
+      operation.Ltxa1 ||
+      "";
+
+    const StandardTextKey =
+      operation.StandardTextKey ||
+      operation.standardTextKey ||
+      "";
 
     return {
-      ...op,
-      id: op.id,
-      activity: String(Activity || ""),
-      //Cambios agregados por lo del campo de subactivity Miguel Angel 04/06/2026
-      // subactivity: String(SubActivity || ""),
-      description: String(Description || ""),
-      standardTextKey: String(StandardTextKey || ""),
-      Activity: String(Activity || ""),
-      //Cambios agregados por lo del campo de subactivity Miguel Angel 04/06/2026
-      //SubActivity: String(SubActivity || ""),
-      Description: String(Description || ""),
-      StandardTextKey: String(StandardTextKey || ""),
+      ...operation,
+
+      id: operation.id,
+
+      activity:
+        String(Activity || ""),
+
+      description:
+        String(Description || ""),
+
+      standardTextKey:
+        String(StandardTextKey || ""),
+
+      Activity:
+        String(Activity || ""),
+
+      Description:
+        String(Description || ""),
+
+      StandardTextKey:
+        String(StandardTextKey || ""),
     };
   });
 }
 
-// id estable para operaciones
-//Cambios agregados por lo del campo de subactivity Miguel Angel 04/06/2026
-/*
-const opKey = (orderId, op) =>
-  `${orderId}-${op.activity || op.Activity || ""}${
-    op.subactivity || op.SubActivity
-      ? `-${op.subactivity || op.SubActivity}`
-      : ""
-  }`;
-*/
+/**
+ * Identificador estable para operaciones.
+ */
+const opKey = (
+  orderId,
+  operation,
+  index,
+) => {
+  const activity = String(
+    operation.activity ||
+      operation.Activity ||
+      "",
+  ).trim();
 
-const opKey = (orderId, op, idx) => {
-  const activity = String(op.activity || op.Activity || "").trim();
-  const usr02 = String(op.Usr02 || op.usr02 || "SIN UBICACIÓN").trim();
-  const desc = String(op.description || op.Description || "").trim();
-  const stk = String(op.standardTextKey || op.StandardTextKey || "").trim();
+  const usr02 = String(
+    operation.Usr02 ||
+      operation.usr02 ||
+      "SIN UBICACIÓN",
+  ).trim();
 
-  return `${orderId}-${activity}-${usr02}-${desc}-${stk}-${idx}`;
+  const description = String(
+    operation.description ||
+      operation.Description ||
+      "",
+  ).trim();
+
+  const standardTextKey = String(
+    operation.standardTextKey ||
+      operation.StandardTextKey ||
+      "",
+  ).trim();
+
+  return [
+    orderId,
+    activity,
+    usr02,
+    description,
+    standardTextKey,
+    index,
+  ].join("-");
 };
-// helper para leer results OData
-function odataResults(res) {
-  return res?.data?.d?.results || res?.data?.results || [];
+
+function odataResults(response) {
+  const results =
+    response?.data?.d?.results ||
+    response?.data?.results ||
+    [];
+
+  return Array.isArray(results)
+    ? results
+    : [];
 }
 
-// helper para leer entidad OData WorkOrderHeaderSet('id')
-function odataEntity(res) {
-  return res?.data?.d || res?.data || {};
+function odataEntity(response) {
+  return (
+    response?.data?.d ||
+    response?.data ||
+    {}
+  );
 }
 
-function detectCoberturaFromShortText(shortText) {
-  const s = String(shortText || "").toUpperCase();
-  const idx = s.indexOf("COBERTURA");
-  if (idx < 0) return null;
+function detectCoberturaFromShortText(
+  shortText,
+) {
+  const value = String(
+    shortText || "",
+  ).toUpperCase();
 
-  const tail = s.slice(idx);
+  const index =
+    value.indexOf("COBERTURA");
 
-  if (tail.includes("COBERTURABASICA")) return "BASICA";
-  if (tail.includes("COBERTURAMEDIA")) return "MEDIA";
-  if (tail.includes("COBERTURASEMI")) return "SEMI";
+  if (index < 0) return null;
+
+  const tail = value.slice(index);
+
+  if (
+    tail.includes("COBERTURABASICA") ||
+    tail.includes("COBERTURA BASICA") ||
+    tail.includes("COBERTURA BÁSICA")
+  ) {
+    return "BASICA";
+  }
+
+  if (
+    tail.includes("COBERTURAMEDIA") ||
+    tail.includes("COBERTURA MEDIA")
+  ) {
+    return "MEDIA";
+  }
+
+  if (
+    tail.includes("COBERTURASEMI") ||
+    tail.includes("COBERTURA SEMI")
+  ) {
+    return "SEMI";
+  }
 
   return null;
 }
 
-function pickStartDate(baseOrden) {
+function pickStartDate(baseOrder) {
   return (
-    baseOrden?.start_date ||
-    baseOrden?.StartDate ||
-    baseOrden?.BasicStartDate ||
-    baseOrden?.BasicStart ||
+    baseOrder?.start_date ||
+    baseOrder?.StartDate ||
+    baseOrder?.BasicStartDate ||
+    baseOrder?.BasicStart ||
     null
   );
 }
 
-function pickFinishDate(baseOrden) {
+function pickFinishDate(baseOrder) {
   return (
-    baseOrden?.finish_date ||
-    baseOrden?.FinishDate ||
-    baseOrden?.BasicFinDate ||
-    baseOrden?.BasicFinish ||
+    baseOrder?.finish_date ||
+    baseOrder?.FinishDate ||
+    baseOrder?.BasicFinDate ||
+    baseOrder?.BasicFinish ||
     null
   );
 }
 
-async function fetchHeaderDetalle(orderId) {
-  const resOrden = await api.get(
+async function fetchHeaderDetalle(
+  orderId,
+) {
+  const response = await api.get(
     `/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet('${orderId}')?$format=json`,
   );
 
-  return odataEntity(resOrden);
+  return odataEntity(response);
 }
 
-async function fetchAddresses(orderIdReal) {
+async function fetchAddresses(
+  orderId,
+) {
   try {
-    const resAddr = await api.get(
-      `/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet('${orderIdReal}')/ToAddresses?$format=json`,
+    const response = await api.get(
+      `/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet('${orderId}')/ToAddresses?$format=json`,
     );
 
-    const results = odataResults(resAddr);
-    const chosen = pickFirstAddress(results);
-    const mapped = mapDireccionLikeBackend(chosen);
+    const results =
+      odataResults(response);
+
+    const selectedAddress =
+      pickFirstAddress(results);
+
+    const mapped =
+      mapDireccionLikeBackend(
+        selectedAddress,
+      );
 
     return {
-      cliente: mapped.cliente || "",
-      direccion: mapped.direccion || "",
+      ok: true,
+      cliente:
+        mapped.cliente || "",
+      direccion:
+        mapped.direccion || "",
     };
-  } catch (e) {
+  } catch (error) {
     console.log(
       "[prefetch][addresses] no se pudieron cargar:",
-      orderIdReal,
-      e?.response?.data || e?.message || e,
+      orderId,
+      error?.response?.data ||
+        error?.message ||
+        error,
     );
 
     return {
+      ok: false,
       cliente: "",
       direccion: "",
     };
   }
 }
 
-async function fetchPartners(orderIdReal) {
+async function fetchPartners(
+  orderId,
+) {
   try {
-    const resPartners = await api.get(
-      `/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet('${orderIdReal}')/ToPartners?$format=json`,
+    const response = await api.get(
+      `/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet('${orderId}')/ToPartners?$format=json`,
     );
 
-    const partners = odataResults(resPartners);
+    const partners =
+      odataResults(response);
 
-    const re = (partners || []).find(
-      (p) => String(p?.PartnRoleOld || "").trim() === "RE",
-    );
+    const rePartner =
+      partners.find(
+        (partner) =>
+          String(
+            partner?.PartnRoleOld ||
+              partner?.PartnRole ||
+              "",
+          ).trim() === "RE",
+      );
 
-    const emailFromPartners = String(re?.Mail1 || re?.Mail2 || "").trim();
+    const emailFromPartners =
+      String(
+        rePartner?.Mail1 ||
+          rePartner?.Mail2 ||
+          "",
+      ).trim();
 
     return {
+      ok: true,
       partners,
       emailFromPartners,
     };
-  } catch (e) {
+  } catch (error) {
     console.log(
       "[prefetch][partners] no se pudieron cargar:",
-      orderIdReal,
-      e?.response?.data || e?.message || e,
+      orderId,
+      error?.response?.data ||
+        error?.message ||
+        error,
     );
 
     return {
+      ok: false,
       partners: [],
       emailFromPartners: "",
     };
   }
 }
 
-async function fetchOperaciones(orderIdReal) {
-  let ops = [];
-
+async function fetchOperaciones(
+  orderId,
+) {
   try {
-    // ✅ Primero usamos el mismo endpoint que usa la pantalla de detalle.
-    const resOps = await api.get(`/api/operaciones/sap/${String(orderIdReal)}`);
+    /*
+     * Primero se utiliza el mismo endpoint
+     * de la pantalla de detalle.
+     */
+    const response = await api.get(
+      `/api/operaciones/sap/${String(
+        orderId,
+      )}`,
+    );
 
-    const rawOps =
-      resOps?.data?.d?.results ||
-      resOps?.data?.results ||
-      resOps?.data?.operaciones ||
-      resOps?.data ||
+    const rawOperations =
+      response?.data?.d?.results ||
+      response?.data?.results ||
+      response?.data?.operaciones ||
+      response?.data ||
       [];
 
-    ops = normalizeOpsFromBackend(rawOps).map((o, idx) => ({
-      ...o,
-      id: o.id || opKey(orderIdReal, o, idx),
-    }));
+    const operations =
+      normalizeOpsFromBackend(
+        Array.isArray(rawOperations)
+          ? rawOperations
+          : [],
+      ).map(
+        (operation, index) => ({
+          ...operation,
 
-    console.log("[prefetch][ops] cargadas desde /api/operaciones/sap:", {
-      orderId: orderIdReal,
-      count: ops.length,
-    });
+          id:
+            operation.id ||
+            opKey(
+              orderId,
+              operation,
+              index,
+            ),
+        }),
+      );
 
-    return ops;
-  } catch (e1) {
+    console.log(
+      "[prefetch][ops] cargadas desde /api/operaciones/sap:",
+      {
+        orderId,
+        count: operations.length,
+      },
+    );
+
+    return {
+      ok: true,
+      operations,
+      source: "api_operaciones",
+    };
+  } catch (firstError) {
     console.log(
       "[prefetch][ops] falló /api/operaciones/sap, intentando ToOperations:",
-      orderIdReal,
-      e1?.response?.data || e1?.message || e1,
+      orderId,
+      firstError?.response?.data ||
+        firstError?.message ||
+        firstError,
     );
   }
 
   try {
-    // ✅ Fallback al OData original
-    const resOps = await api.get(
-      `/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet('${orderIdReal}')/ToOperations?$format=json`,
+    /*
+     * Respaldo directo en OData.
+     */
+    const response = await api.get(
+      `/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet('${orderId}')/ToOperations?$format=json`,
     );
 
-    const rawOps = odataResults(resOps);
-    ops = normalizeOpsFromBackend(rawOps).map((o, idx) => ({
-      ...o,
-      id: o.id || opKey(orderIdReal, o, idx),
-    }));
+    const rawOperations =
+      odataResults(response);
 
-    console.log("[prefetch][ops] cargadas desde ToOperations:", {
-      orderId: orderIdReal,
-      count: ops.length,
-    });
+    const operations =
+      normalizeOpsFromBackend(
+        rawOperations,
+      ).map(
+        (operation, index) => ({
+          ...operation,
 
-    return ops;
-  } catch (e2) {
+          id:
+            operation.id ||
+            opKey(
+              orderId,
+              operation,
+              index,
+            ),
+        }),
+      );
+
+    console.log(
+      "[prefetch][ops] cargadas desde ToOperations:",
+      {
+        orderId,
+        count: operations.length,
+      },
+    );
+
+    return {
+      ok: true,
+      operations,
+      source: "odata_operations",
+    };
+  } catch (secondError) {
     console.log(
       "[prefetch][ops] no se pudieron cargar operaciones:",
-      orderIdReal,
-      e2?.response?.data || e2?.message || e2,
+      orderId,
+      secondError?.response?.data ||
+        secondError?.message ||
+        secondError,
     );
 
-    return [];
+    return {
+      ok: false,
+      operations: [],
+      source: "none",
+    };
   }
 }
 
-export async function prefetchOrdenesTecnicoDetalles({
+/**
+ * Ejecución interna de la precarga.
+ */
+async function runPrefetchOrdenesTecnicoDetalles({
   orderIds = [],
   concurrency = 3,
   force = false,
   ttlMs = ORDENES_CACHE_TTL_MS,
 }) {
   const ids = [
-    ...new Set(orderIds.map((x) => String(x).trim()).filter(Boolean)),
+    ...new Set(
+      (
+        Array.isArray(orderIds)
+          ? orderIds
+          : []
+      )
+        .map((value) =>
+          String(value || "").trim(),
+        )
+        .filter(Boolean),
+    ),
   ];
 
   if (!ids.length) {
@@ -282,177 +517,347 @@ export async function prefetchOrdenesTecnicoDetalles({
       ok: 0,
       fresh: 0,
       skip: 0,
+      partial: 0,
       fail: 0,
+      total: 0,
     };
   }
 
-  const win = buildOfflineWindow(new Date());
+  const window =
+    buildOfflineWindow(new Date());
 
   let ok = 0;
   let fresh = 0;
   let skip = 0;
+  let partial = 0;
   let fail = 0;
-  let i = 0;
+
+  let currentIndex = 0;
 
   async function worker() {
-    while (i < ids.length) {
-      const idx = i++;
-      const orderId = ids[idx];
+    while (
+      currentIndex < ids.length
+    ) {
+      const index = currentIndex;
+      currentIndex += 1;
+
+      const orderId = ids[index];
 
       try {
-        /**
-         * Si no se está forzando una actualización, revisamos primero
-         * si el detalle ya existe y tiene menos de una hora.
+        /*
+         * Si el detalle está vigente y completo,
+         * no se descarga otra vez.
          */
         if (!force) {
-          const cached = await loadOrdenTecnicoDetail(orderId);
+          const cached =
+            await loadOrdenTecnicoDetail(
+              orderId,
+            );
 
           const hasCachedDetail =
             cached &&
             cached.data &&
-            typeof cached.data === "object";
+            typeof cached.data ===
+              "object";
 
-          const cachedDetailIsFresh = isCacheFresh(
-            cached?.updatedAt,
-            ttlMs,
-          );
+          const cachedIsFresh =
+            isCacheFresh(
+              cached?.updatedAt,
+              ttlMs,
+            );
 
-          if (hasCachedDetail && cachedDetailIsFresh) {
-            console.log("[prefetch][detalle vigente]", {
-              orderId,
-              updatedAt: cached.updatedAt,
-            });
+          const cachedIsComplete =
+            cached?.data
+              ?._prefetch_complete !==
+            false;
+
+          if (
+            hasCachedDetail &&
+            cachedIsFresh &&
+            cachedIsComplete
+          ) {
+            console.log(
+              "[prefetch][detalle vigente]",
+              {
+                orderId,
+                updatedAt:
+                  cached.updatedAt,
+              },
+            );
 
             fresh++;
             continue;
           }
         }
 
-        // El detalle no existe, ya venció o se solicitó force=true.
-        const baseOrden = await fetchHeaderDetalle(orderId);
+        /*
+         * El detalle no existe, venció o
+         * anteriormente quedó incompleto.
+         */
+        const baseOrder =
+          await fetchHeaderDetalle(
+            orderId,
+          );
 
-        const orderIdReal = String(
-          baseOrden?.Orderid || baseOrden?.OrderId || orderId,
+        const realOrderId = String(
+          baseOrder?.Orderid ||
+            baseOrder?.OrderId ||
+            orderId,
         ).trim();
 
-        const startDate = pickStartDate(baseOrden);
-        const finishDate = pickFinishDate(baseOrden);
+        if (!realOrderId) {
+          throw new Error(
+            `No se pudo resolver la orden ${orderId}`,
+          );
+        }
 
-        const orderLikeForWindow = {
-          Orderid: orderIdReal,
+        const startDate =
+          pickStartDate(baseOrder);
+
+        const finishDate =
+          pickFinishDate(baseOrder);
+
+        const orderForWindow = {
+          Orderid: realOrderId,
           start_date: startDate,
         };
 
-        if (!shouldCacheDetailByOrder(orderLikeForWindow, new Date())) {
-          console.log("[prefetch][skip fuera ventana]", {
-            orderId: orderIdReal,
-            start_date: startDate,
-          });
+        if (
+          !shouldCacheDetailByOrder(
+            orderForWindow,
+            new Date(),
+          )
+        ) {
+          console.log(
+            "[prefetch][skip fuera ventana]",
+            {
+              orderId: realOrderId,
+              start_date: startDate,
+            },
+          );
 
           skip++;
           continue;
         }
 
-        // 2) ShortText / cobertura
         const shortTextValue =
-          baseOrden?.ShortText ??
-          baseOrden?.shorttext ??
-          baseOrden?.Shorttext ??
-          baseOrden?.shortText ??
+          baseOrder?.ShortText ??
+          baseOrder?.shorttext ??
+          baseOrder?.Shorttext ??
+          baseOrder?.shortText ??
           "";
 
-        const coberturaDetectada = detectCoberturaFromShortText(shortTextValue);
+        const coverage =
+          detectCoberturaFromShortText(
+            shortTextValue,
+          );
 
-        // 3) Addresses
-        const { cliente, direccion } = await fetchAddresses(orderIdReal);
+        /*
+         * Estas consultas se mantienen secuenciales
+         * para no saturar una conexión lenta.
+         */
+        const addressResult =
+          await fetchAddresses(
+            realOrderId,
+          );
 
-        // 4) Partners
-        const { partners, emailFromPartners } =
-          await fetchPartners(orderIdReal);
+        const partnersResult =
+          await fetchPartners(
+            realOrderId,
+          );
 
-        // 5) Operaciones
-        const ops = await fetchOperaciones(orderIdReal);
+        const operationsResult =
+          await fetchOperaciones(
+            realOrderId,
+          );
 
-        const userstatusRaw = String(
-          baseOrden?.Userstatus ??
-            baseOrden?.userstatus ??
-            baseOrden?.UserSt ??
-            baseOrden?.userSt ??
+        const rawUserStatus = String(
+          baseOrder?.Userstatus ??
+            baseOrder?.userstatus ??
+            baseOrder?.UserSt ??
+            baseOrder?.userSt ??
             "",
         ).trim();
 
-        const estatusCodeRaw = String(
-          baseOrden?.estatus_code ??
-            baseOrden?.EstatusCode ??
-            baseOrden?.StatusCode ??
+        const rawStatusCode = String(
+          baseOrder?.estatus_code ??
+            baseOrder?.EstatusCode ??
+            baseOrder?.StatusCode ??
             "",
         ).trim();
 
-        const estatusLabelRaw = String(
-          baseOrden?.estatus_label ??
-            baseOrden?.EstatusLabel ??
-            baseOrden?.StatusText ??
+        const rawStatusLabel = String(
+          baseOrder?.estatus_label ??
+            baseOrder?.EstatusLabel ??
+            baseOrder?.StatusText ??
             "",
         ).trim();
+
+        const prefetchComplete =
+          addressResult.ok &&
+          partnersResult.ok &&
+          operationsResult.ok;
 
         const detail = {
-          Orderid: orderIdReal,
+          Orderid: realOrderId,
 
           order_type:
-            baseOrden?.order_type ||
-            baseOrden?.OrderType ||
-            baseOrden?.OrderTypeTxt ||
+            baseOrder?.order_type ||
+            baseOrder?.OrderType ||
+            baseOrder?.OrderTypeTxt ||
             null,
 
-          equipment: baseOrden?.equipment || baseOrden?.Equipment || null,
+          equipment:
+            baseOrder?.equipment ||
+            baseOrder?.Equipment ||
+            null,
 
-          plant: baseOrden?.plant || baseOrden?.Plant || null,
+          plant:
+            baseOrder?.plant ||
+            baseOrder?.Plant ||
+            null,
 
-          // ✅ Importante para que el cache offline lo acepte
-          start_date: startDate,
-          finish_date: finishDate,
+          start_date:
+            startDate,
 
-          // ✅ ShortText consistente
-          ShortText: shortTextValue || null,
-          short_text: shortTextValue || null,
+          finish_date:
+            finishDate,
 
-          // ✅ Cobertura offline
-          cobertura_tipo: coberturaDetectada || null,
+          ShortText:
+            shortTextValue || null,
 
-          userstatus: userstatusRaw || null,
-          estatus_code: estatusCodeRaw || userstatusRaw || null,
-          estatus_label: estatusLabelRaw || null,
-          estatus_tipo: baseOrden?.estatus_tipo ?? null,
-          checkin_done: !!baseOrden?.checkin_done,
+          short_text:
+            shortTextValue || null,
 
-          cliente: cliente || "",
-          direccion: direccion || "",
-          cliente_email: emailFromPartners || "",
+          cobertura_tipo:
+            coverage || null,
 
-          partners: Array.isArray(partners) ? partners : [],
-          operaciones: Array.isArray(ops) ? ops : [],
+          userstatus:
+            rawUserStatus || null,
 
-          _raw: baseOrden,
+          estatus_code:
+            rawStatusCode ||
+            rawUserStatus ||
+            null,
+
+          estatus_label:
+            rawStatusLabel || null,
+
+          estatus_tipo:
+            baseOrder?.estatus_tipo ??
+            null,
+
+          checkin_done:
+            !!baseOrder?.checkin_done,
+
+          cliente:
+            addressResult.cliente ||
+            "",
+
+          direccion:
+            addressResult.direccion ||
+            "",
+
+          cliente_email:
+            partnersResult
+              .emailFromPartners ||
+            "",
+
+          partners:
+            Array.isArray(
+              partnersResult.partners,
+            )
+              ? partnersResult.partners
+              : [],
+
+          operaciones:
+            Array.isArray(
+              operationsResult.operations,
+            )
+              ? operationsResult.operations
+              : [],
+
+          _prefetch_complete:
+            prefetchComplete,
+
+          _prefetch_status: {
+            header: true,
+            addresses:
+              addressResult.ok,
+            partners:
+              partnersResult.ok,
+            operaciones:
+              operationsResult.ok,
+          },
+
+          _prefetch_updated_at:
+            Date.now(),
         };
 
-        const saved = await saveOrdenTecnicoDetail(orderIdReal, detail);
+        const saved =
+          await saveOrdenTecnicoDetail(
+            realOrderId,
+            detail,
+          );
 
-        console.log("[prefetch][detail saved]", {
-          orderId: orderIdReal,
-          saved,
-          operaciones: Array.isArray(detail?.operaciones)
-            ? detail.operaciones.length
-            : "NO_ARRAY",
-          start_date: detail?.start_date,
-          finish_date: detail?.finish_date,
-        });
+        console.log(
+          "[prefetch][detail saved]",
+          {
+            orderId: realOrderId,
+            saved,
+            complete:
+              prefetchComplete,
 
-        ok++;
-      } catch (e) {
+            operaciones:
+              detail.operaciones.length,
+
+            start_date:
+              detail.start_date,
+
+            finish_date:
+              detail.finish_date,
+          },
+        );
+
+        if (saved === true) {
+          if (prefetchComplete) {
+            ok++;
+          } else {
+            partial++;
+
+            console.log(
+              "[prefetch][detalle parcial]",
+              {
+                orderId:
+                  realOrderId,
+
+                status:
+                  detail
+                    ._prefetch_status,
+              },
+            );
+          }
+        } else {
+          fail++;
+
+          console.log(
+            "[prefetch][detail NOT saved]",
+            {
+              orderId:
+                realOrderId,
+
+              reason:
+                "saveOrdenTecnicoDetail returned false",
+            },
+          );
+        }
+      } catch (error) {
         console.log(
           "[prefetch] fail order:",
           orderId,
-          e?.response?.data || e?.message || e,
+          error?.response?.data ||
+            error?.message ||
+            error,
         );
 
         fail++;
@@ -462,11 +867,19 @@ export async function prefetchOrdenesTecnicoDetalles({
 
   const safeConcurrency = Math.min(
     3,
-    Math.max(1, Number(concurrency) || 1),
+    Math.max(
+      1,
+      Number(concurrency) || 1,
+    ),
   );
 
   const workers = Array.from(
-    { length: safeConcurrency },
+    {
+      length: Math.min(
+        safeConcurrency,
+        ids.length,
+      ),
+    },
     () => worker(),
   );
 
@@ -476,7 +889,50 @@ export async function prefetchOrdenesTecnicoDetalles({
     ok,
     fresh,
     skip,
+    partial,
     fail,
-    window: win,
+    total: ids.length,
+    window,
   };
+}
+
+/**
+ * Esta es la función pública que importa bootstrapSyncTecnico.js.
+ */
+export function prefetchOrdenesTecnicoDetalles(
+  options = {},
+) {
+  if (activePrefetchPromise) {
+    console.log(
+      "[prefetch] Ya existe una precarga activa. Se reutiliza.",
+    );
+
+    return activePrefetchPromise;
+  }
+
+  activePrefetchPromise =
+    runPrefetchOrdenesTecnicoDetalles(
+      options,
+    )
+      .then((result) => {
+        console.log(
+          "[prefetch] Precarga terminada:",
+          result,
+        );
+
+        return result;
+      })
+      .catch((error) => {
+        console.log(
+          "[prefetch] Error general:",
+          error?.message || error,
+        );
+
+        throw error;
+      })
+      .finally(() => {
+        activePrefetchPromise = null;
+      });
+
+  return activePrefetchPromise;
 }

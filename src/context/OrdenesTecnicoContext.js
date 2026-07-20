@@ -1,3 +1,5 @@
+// src/context/OrdenesTecnicoContext.js
+
 import React, {
   createContext,
   useCallback,
@@ -7,6 +9,7 @@ import React, {
   useRef,
   useState,
 } from "react";
+
 import { AppState } from "react-native";
 
 import { useAuth } from "./AuthContext";
@@ -17,6 +20,11 @@ import {
   ORDENES_CACHE_TTL_MS,
   isCacheFresh,
 } from "../offline/ordenesTecnicoCache";
+
+import {
+  getLocalStatusPatch,
+  applyStatusPatchToOrdenes,
+} from "../offline/ordenesTecnicoLocalPatch";
 
 import { bootstrapPrefetchOrdenesTecnico } from "../offline/bootstrapSyncTecnico";
 
@@ -54,10 +62,17 @@ export function OrdenesTecnicoProvider({ children }) {
     mountedRef.current = true;
 
     return () => {
-        mountedRef.current = false;
+      mountedRef.current = false;
     };
-    }, []);
+  }, []);
 
+  /**
+   * Carga la lista local y después aplica los cambios
+   * de estatus guardados localmente.
+   *
+   * El estatus local tiene prioridad sobre una respuesta
+   * atrasada de SAP.
+   */
   const loadLocal = useCallback(async () => {
     if (!userEmail) {
       if (mountedRef.current) {
@@ -68,16 +83,71 @@ export function OrdenesTecnicoProvider({ children }) {
       return null;
     }
 
-    const cached = await loadOrdenesTecnicoList(userEmail);
+    try {
+      const [cached, patchMap] = await Promise.all([
+        loadOrdenesTecnicoList(userEmail),
+        getLocalStatusPatch(userEmail),
+      ]);
 
-    if (mountedRef.current && Array.isArray(cached?.data)) {
-      setOrdenes(cached.data);
-      setLastUpdatedAt(cached.updatedAt || null);
+      const cachedData = Array.isArray(cached?.data)
+        ? cached.data
+        : [];
+
+      const effectiveData = applyStatusPatchToOrdenes(
+        cachedData,
+        patchMap,
+      );
+
+      if (mountedRef.current) {
+        setOrdenes(effectiveData);
+        setLastUpdatedAt(cached?.updatedAt || null);
+      }
+
+      if (cached) {
+        return {
+          ...cached,
+          data: effectiveData,
+        };
+      }
+
+      return {
+        updatedAt: null,
+        window: null,
+        data: effectiveData,
+      };
+    } catch (error) {
+      console.log(
+        "[OrdenesTecnicoContext] Error aplicando estatus locales:",
+        error?.message || error,
+      );
+
+      const cached = await loadOrdenesTecnicoList(userEmail);
+
+      const cachedData = Array.isArray(cached?.data)
+        ? cached.data
+        : [];
+
+      if (mountedRef.current) {
+        setOrdenes(cachedData);
+        setLastUpdatedAt(cached?.updatedAt || null);
+      }
+
+      return cached;
     }
-
-    return cached;
   }, [userEmail]);
 
+  /**
+   * Permite que otras pantallas vuelvan a leer inmediatamente
+   * los cambios locales sin consultar nuevamente SAP.
+   */
+  const reloadLocalStatus = useCallback(async () => {
+    return loadLocal();
+  }, [loadLocal]);
+
+  /**
+   * Sincroniza la lista principal y comienza/reanuda la
+   * precarga de detalles en segundo plano.
+   */
   const synchronize = useCallback(
     async ({ force = false, manual = false } = {}) => {
       if (!userEmail) {
@@ -107,18 +177,21 @@ export function OrdenesTecnicoProvider({ children }) {
       }
 
       try {
-        const result = await bootstrapPrefetchOrdenesTecnico(userEmail, {
-          force,
-          prefetchDetails: true,
-          ttlMs: ORDENES_CACHE_TTL_MS,
-        });
+        const result = await bootstrapPrefetchOrdenesTecnico(
+          userEmail,
+          {
+            force,
+            prefetchDetails: true,
+            ttlMs: ORDENES_CACHE_TTL_MS,
+          },
+        );
 
         /*
          * Siempre volvemos a leer la caché.
          *
-         * Esto permite actualizar el contexto tanto si llegaron datos
-         * nuevos desde SAP como si bootstrap utilizó la información
-         * que ya estaba guardada localmente.
+         * loadLocal aplica los estatus locales pendientes,
+         * por lo que SAP no puede hacer retroceder visualmente
+         * una orden que ya avanzó.
          */
         const cached = await loadLocal();
 
@@ -141,8 +214,8 @@ export function OrdenesTecnicoProvider({ children }) {
         }
 
         /*
-         * Si SAP o la conexión fallan, intentamos mantener visible
-         * la información que ya estaba guardada.
+         * Si SAP o la conexión fallan, conservamos visible
+         * la información guardada localmente.
          */
         const cached = await loadLocal();
 
@@ -164,6 +237,11 @@ export function OrdenesTecnicoProvider({ children }) {
     [loadLocal, userEmail],
   );
 
+  /**
+   * Actualización manual.
+   *
+   * force=true obliga a consultar nuevamente la lista de SAP.
+   */
   const refresh = useCallback(async () => {
     return synchronize({
       force: true,
@@ -171,6 +249,17 @@ export function OrdenesTecnicoProvider({ children }) {
     });
   }, [synchronize]);
 
+  /**
+   * Revisa la lista y la precarga.
+   *
+   * Si la lista está vigente:
+   * - No se descarga nuevamente desde SAP.
+   * - Sí se revisan y precargan los detalles faltantes.
+   *
+   * Si la lista está vencida:
+   * - Se actualiza desde SAP.
+   * - Después se revisan los detalles.
+   */
   const refreshIfNeeded = useCallback(async () => {
     if (!userEmail) {
       return {
@@ -186,25 +275,29 @@ export function OrdenesTecnicoProvider({ children }) {
       ORDENES_CACHE_TTL_MS,
     );
 
-    if (cacheIsFresh) {
-      return {
-        ok: true,
-        source: "cache",
-        fresh: true,
-        data: cached?.data || [],
-      };
-    }
-
+    /*
+     * Sin internet solamente mostramos la información local.
+     * No intentamos ejecutar la precarga.
+     */
     if (online === false) {
       return {
         ok: true,
         source: "cache",
-        fresh: false,
+        fresh: cacheIsFresh,
         offline: true,
         data: cached?.data || [],
       };
     }
 
+    /*
+     * Siempre ejecutamos bootstrap si existe conexión:
+     *
+     * - Si cacheIsFresh=true, bootstrap utiliza la lista local
+     *   y solamente revisa los detalles.
+     *
+     * - Si cacheIsFresh=false, bootstrap consulta la lista SAP
+     *   y después revisa los detalles.
+     */
     return synchronize({
       force: false,
       manual: false,
@@ -213,9 +306,12 @@ export function OrdenesTecnicoProvider({ children }) {
 
   /*
    * Carga inicial:
-   * 1. Muestra primero lo que exista localmente.
-   * 2. Revisa si la caché todavía es válida.
-   * 3. Si está vencida, actualiza en segundo plano.
+   *
+   * 1. Muestra primero la información local.
+   * 2. Aplica los estatus locales pendientes.
+   * 3. Revisa si la lista todavía está vigente.
+   * 4. Si hay internet, inicia o reanuda la sincronización.
+   * 5. La interfaz no espera a que termine la precarga.
    */
   useEffect(() => {
     let cancelled = false;
@@ -243,10 +339,35 @@ export function OrdenesTecnicoProvider({ children }) {
           ORDENES_CACHE_TTL_MS,
         );
 
-        if (!cacheIsFresh && online !== false) {
+        console.log(
+          "[OrdenesTecnicoContext] Estado de caché inicial:",
+          {
+            cacheIsFresh,
+            online,
+            totalOrdenes: Array.isArray(cached?.data)
+              ? cached.data.length
+              : 0,
+          },
+        );
+
+        /*
+         * Si existe conexión, siempre ejecutamos bootstrap:
+         *
+         * - Lista vencida: consulta SAP y precarga detalles.
+         * - Lista vigente: no consulta la lista SAP; solamente
+         *   revisa y completa los detalles que falten.
+         *
+         * No usamos await para mostrar inmediatamente la interfaz.
+         */
+        if (online !== false) {
           synchronize({
             force: false,
             manual: false,
+          }).catch((error) => {
+            console.log(
+              "[OrdenesTecnicoContext] Error iniciando sincronización:",
+              error?.message || error,
+            );
           });
         }
       } catch (error) {
@@ -270,26 +391,40 @@ export function OrdenesTecnicoProvider({ children }) {
   }, [loadLocal, online, synchronize, userEmail]);
 
   /*
-   * Cuando vuelve la conexión, revisa si hace falta actualizar.
+   * Cuando vuelve la conexión, revisa la lista y reanuda
+   * la precarga de detalles.
    */
   useEffect(() => {
     if (!userEmail || online !== true) {
       return;
     }
 
-    refreshIfNeeded();
+    refreshIfNeeded().catch((error) => {
+      console.log(
+        "[OrdenesTecnicoContext] Error al regresar la conexión:",
+        error?.message || error,
+      );
+    });
   }, [online, refreshIfNeeded, userEmail]);
 
   /*
-   * Cuando la aplicación vuelve del segundo plano,
-   * revisa si la caché ya superó una hora.
+   * Cuando la aplicación vuelve desde segundo plano:
+   *
+   * - Vuelve a leer los parches locales.
+   * - Revisa si la lista necesita actualizarse.
+   * - Reanuda los detalles faltantes.
    */
   useEffect(() => {
     const subscription = AppState.addEventListener(
       "change",
       (nextAppState) => {
         if (nextAppState === "active") {
-          refreshIfNeeded();
+          refreshIfNeeded().catch((error) => {
+            console.log(
+              "[OrdenesTecnicoContext] Error al volver a la app:",
+              error?.message || error,
+            );
+          });
         }
       },
     );
@@ -311,6 +446,7 @@ export function OrdenesTecnicoProvider({ children }) {
       online,
 
       loadLocal,
+      reloadLocalStatus,
       synchronize,
       refresh,
       refreshIfNeeded,
@@ -325,6 +461,7 @@ export function OrdenesTecnicoProvider({ children }) {
       userEmail,
       online,
       loadLocal,
+      reloadLocalStatus,
       synchronize,
       refresh,
       refreshIfNeeded,

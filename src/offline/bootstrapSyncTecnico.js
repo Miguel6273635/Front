@@ -12,6 +12,11 @@ import {
   ORDENES_CACHE_TTL_MS,
 } from "./ordenesTecnicoCache";
 
+import {
+  getLocalStatusPatch,
+  applyStatusPatchToOrdenes,
+} from "./ordenesTecnicoLocalPatch";
+
 import { prefetchOrdenesTecnicoDetalles } from "./prefetchOrdenesTecnico";
 
 import api from "../services/api";
@@ -19,8 +24,8 @@ import api from "../services/api";
 /**
  * Normaliza las propiedades de cada orden.
  *
- * SAP y el backend pueden mandar algunas propiedades con nombres
- * diferentes. Esta función crea una estructura consistente.
+ * SAP y el backend pueden mandar propiedades con nombres distintos.
+ * Esta función crea una estructura consistente.
  */
 function normalizeOrdenFromList(row) {
   if (!row) return null;
@@ -95,16 +100,110 @@ function normalizeOrdenFromList(row) {
 }
 
 /**
+ * Obtiene todos los OrderId válidos de una lista.
+ */
+function getOrderIds(orders = []) {
+  return Array.from(
+    new Set(
+      (Array.isArray(orders) ? orders : [])
+        .map((item) =>
+          String(
+            item?.Orderid ||
+              item?.OrderId ||
+              item?.orderid ||
+              "",
+          ).trim(),
+        )
+        .filter(Boolean),
+    ),
+  );
+}
+
+/**
+ * Aplica los cambios locales pendientes a una lista.
+ *
+ * Esto evita que una respuesta atrasada de SAP haga retroceder:
+ *
+ * 0300 -> 0200
+ * 0300 -> 0100
+ * 0400 -> 0200
+ * 0200 -> 0100
+ */
+async function applyLocalStatuses(userEmail, orders = []) {
+  try {
+    const patchMap = await getLocalStatusPatch(userEmail);
+
+    return applyStatusPatchToOrdenes(
+      Array.isArray(orders) ? orders : [],
+      patchMap,
+    );
+  } catch (error) {
+    console.log(
+      "[BOOTSTRAP TECNICO] No se pudieron aplicar parches locales:",
+      error?.message || error,
+    );
+
+    return Array.isArray(orders) ? orders : [];
+  }
+}
+
+/**
+ * Inicia la precarga de detalles sin detener la carga de la lista.
+ *
+ * La función de precarga revisa cuáles detalles ya existen y solamente
+ * descarga los faltantes o vencidos.
+ */
+function startDetailsPrefetch({
+  orderIds,
+  ttlMs,
+  reason,
+}) {
+  if (!Array.isArray(orderIds) || !orderIds.length) {
+    return;
+  }
+
+  console.log("[BOOTSTRAP TECNICO] Iniciando precarga:", {
+    reason,
+    total: orderIds.length,
+  });
+
+  prefetchOrdenesTecnicoDetalles({
+    orderIds,
+    concurrency: 3,
+    force: false,
+    ttlMs,
+  })
+    .then((result) => {
+      console.log(
+        "[BOOTSTRAP TECNICO] Resultado precarga:",
+        {
+          reason,
+          ...result,
+        },
+      );
+    })
+    .catch((error) => {
+      console.log(
+        "[BOOTSTRAP TECNICO] Error precargando detalles:",
+        {
+          reason,
+          error: error?.message || error,
+        },
+      );
+    });
+}
+
+/**
  * Sincroniza las órdenes del técnico.
  *
  * force=false:
- *   Respeta la caché de una hora.
+ *   Respeta la caché de una hora para la lista.
  *
  * force=true:
- *   Intenta consultar SAP aunque la caché sea reciente.
+ *   Consulta SAP aunque la lista sea reciente.
  *
  * prefetchDetails=true:
- *   Precarga direcciones, partners y operaciones en segundo plano.
+ *   Revisa y precarga los detalles faltantes en segundo plano.
  */
 export async function bootstrapPrefetchOrdenesTecnico(
   userEmail,
@@ -114,7 +213,9 @@ export async function bootstrapPrefetchOrdenesTecnico(
     ttlMs = ORDENES_CACHE_TTL_MS,
   } = {},
 ) {
-  const cleanEmail = String(userEmail || "").trim();
+  const cleanEmail = String(userEmail || "")
+    .trim()
+    .toLowerCase();
 
   if (!cleanEmail) {
     return {
@@ -125,8 +226,8 @@ export async function bootstrapPrefetchOrdenesTecnico(
     };
   }
 
-  /**
-   * Primero intentamos obtener la última información guardada.
+  /*
+   * Primero obtenemos la lista guardada.
    */
   const cached = await loadOrdenesTecnicoList(cleanEmail);
 
@@ -134,52 +235,45 @@ export async function bootstrapPrefetchOrdenesTecnico(
     cached &&
     Array.isArray(cached.data);
 
-  const cachedData = hasCachedList
+  const rawCachedData = hasCachedList
     ? cached.data
     : [];
+
+  /*
+   * Incluso la caché debe combinarse con los parches locales.
+   */
+  const cachedData = await applyLocalStatuses(
+    cleanEmail,
+    rawCachedData,
+  );
 
   const cachedIsFresh = isCacheFresh(
     cached?.updatedAt,
     ttlMs,
   );
 
-  /**
-   * La lista ya existe y tiene menos de una hora.
-   * No consultamos nuevamente SAP.
+  /*
+   * Si la lista tiene menos de una hora, no consultamos SAP.
+   *
+   * Sin embargo, sí revisamos todos los detalles. Esto permite
+   * continuar una precarga que haya quedado incompleta.
    */
   if (!force && hasCachedList && cachedIsFresh) {
-    console.log("[BOOTSTRAP TECNICO] Usando caché vigente:", {
-      count: cachedData.length,
-      updatedAt: cached?.updatedAt,
-    });
+    console.log(
+      "[BOOTSTRAP TECNICO] Usando caché vigente:",
+      {
+        count: cachedData.length,
+        updatedAt: cached?.updatedAt,
+      },
+    );
 
-    /**
-     * Revisamos los detalles en segundo plano.
-     *
-     * prefetchOrdenesTecnicoDetalles ya sabe que no debe volver
-     * a descargar detalles que tengan menos de una hora.
-     */
-    if (prefetchDetails && cachedData.length > 0) {
-      const orderIds = cachedData
-        .map((item) =>
-          String(
-            item?.Orderid ||
-              item?.OrderId ||
-              "",
-          ).trim(),
-        )
-        .filter(Boolean);
+    const orderIds = getOrderIds(cachedData);
 
-      prefetchOrdenesTecnicoDetalles({
+    if (prefetchDetails) {
+      startDetailsPrefetch({
         orderIds,
-        concurrency: 3,
-        force: false,
         ttlMs,
-      }).catch((error) => {
-        console.log(
-          "[BOOTSTRAP TECNICO] Error revisando detalles:",
-          error?.message || error,
-        );
+        reason: "cache_fresh",
       });
     }
 
@@ -190,25 +284,30 @@ export async function bootstrapPrefetchOrdenesTecnico(
       updatedAt: cached?.updatedAt || null,
       count: cachedData.length,
       data: cachedData,
+      orderIds,
       window: cached?.window || null,
     };
   }
 
-  /**
-   * La caché no existe, está vencida o el usuario solicitó
+  /*
+   * La lista no existe, está vencida o el usuario solicitó
    * una actualización manual.
    */
   const online = await isOnline();
 
-  /**
+  /*
    * Sin conexión no borramos nada.
-   * Regresamos la última lista guardada.
+   *
+   * Regresamos la lista guardada con los estatus locales aplicados.
    */
   if (!online) {
-    console.log("[BOOTSTRAP TECNICO] Sin conexión:", {
-      hasCachedList,
-      count: cachedData.length,
-    });
+    console.log(
+      "[BOOTSTRAP TECNICO] Sin conexión:",
+      {
+        hasCachedList,
+        count: cachedData.length,
+      },
+    );
 
     return {
       ok: hasCachedList,
@@ -217,13 +316,14 @@ export async function bootstrapPrefetchOrdenesTecnico(
       updatedAt: cached?.updatedAt || null,
       count: cachedData.length,
       data: cachedData,
+      orderIds: getOrderIds(cachedData),
       window: cached?.window || null,
     };
   }
 
-  /**
-   * Ventana que ya maneja tu aplicación:
-   * ocho días anteriores y ocho posteriores.
+  /*
+   * Ventana offline:
+   * 30 días anteriores y 8 días posteriores.
    */
   const window = buildOfflineWindow(new Date());
 
@@ -233,16 +333,19 @@ export async function bootstrapPrefetchOrdenesTecnico(
     mode: "range",
   });
 
-  console.log("[BOOTSTRAP TECNICO] Consultando SAP:", {
-    start: window.startStr,
-    end: window.endStr,
-    force,
-  });
+  console.log(
+    "[BOOTSTRAP TECNICO] Consultando SAP:",
+    {
+      start: window.startStr,
+      end: window.endStr,
+      force,
+    },
+  );
 
   try {
-    /**
-     * No mandamos user por query.
-     * El backend debe obtener el correo desde el token Azure.
+    /*
+     * No enviamos el usuario por query.
+     * El backend obtiene el correo desde el token Azure.
      */
     const response = await api.get(
       `/api/ordenes/sap/list?${params.toString()}`,
@@ -256,83 +359,81 @@ export async function bootstrapPrefetchOrdenesTecnico(
       .map(normalizeOrdenFromList)
       .filter(Boolean);
 
-    /**
-     * Segunda validación de fechas del lado de la aplicación.
+    /*
+     * Segunda validación de fechas en la aplicación.
      */
-    const ordersInWindow = filterOrdenesByWindow(
+    const sapOrdersInWindow = filterOrdenesByWindow(
       normalizedRows,
       window.start,
       window.end,
     );
 
-    /**
-     * La respuesta fue correcta.
-     * Ahora sí reemplazamos la lista guardada.
+    /*
+     * Paso importante:
+     *
+     * La respuesta de SAP se combina con los cambios locales
+     * antes de guardarse.
+     *
+     * Si SAP todavía devuelve 0200, pero localmente existe un
+     * cambio pendiente a 0300, se conserva 0300.
+     */
+    const effectiveOrders = await applyLocalStatuses(
+      cleanEmail,
+      sapOrdersInWindow,
+    );
+
+    /*
+     * Guardamos la lista ya protegida por los parches locales.
      */
     await saveOrdenesTecnicoList(
       cleanEmail,
-      ordersInWindow,
+      effectiveOrders,
       window,
     );
 
-    const orderIds = ordersInWindow
-      .map((item) =>
-        String(
-          item?.Orderid ||
-            item?.OrderId ||
-            "",
-        ).trim(),
-      )
-      .filter(Boolean);
+    const orderIds = getOrderIds(effectiveOrders);
 
-    /**
+    /*
      * Elimina detalles que ya no pertenecen a la ventana actual.
      */
     await pruneDetallesNoUsados(orderIds);
 
-    /**
-     * Comienza la precarga de detalles.
+    /*
+     * Precarga detalles en segundo plano.
      *
-     * No usamos await porque no queremos bloquear el regreso de la lista.
+     * No usamos await porque la lista debe aparecer inmediatamente.
      */
-    if (prefetchDetails && orderIds.length > 0) {
-      prefetchOrdenesTecnicoDetalles({
+    if (prefetchDetails) {
+      startDetailsPrefetch({
         orderIds,
-        concurrency: 3,
-        force: false,
         ttlMs,
-      })
-        .then((result) => {
-          console.log(
-            "[BOOTSTRAP TECNICO] Detalles precargados:",
-            result,
-          );
-        })
-        .catch((error) => {
-          console.log(
-            "[BOOTSTRAP TECNICO] Error precargando detalles:",
-            error?.message || error,
-          );
-        });
+        reason: "sap_updated",
+      });
     }
 
-    console.log("[BOOTSTRAP TECNICO] Lista actualizada:", {
-      count: ordersInWindow.length,
-    });
+    console.log(
+      "[BOOTSTRAP TECNICO] Lista actualizada:",
+      {
+        count: effectiveOrders.length,
+        start: window.startStr,
+        end: window.endStr,
+      },
+    );
 
     return {
       ok: true,
       reason: "sap_updated",
       source: "sap",
       updatedAt: Date.now(),
-      count: ordersInWindow.length,
-      data: ordersInWindow,
+      count: effectiveOrders.length,
+      data: effectiveOrders,
       orderIds,
       window,
     };
   } catch (error) {
-    /**
-     * Si SAP o la API fallan, conservamos la caché anterior.
+    /*
+     * Si SAP o la API fallan, conservamos la lista anterior
+     * y también conservamos sus estatus locales.
      */
     const errorDetail =
       error?.response?.data ||
@@ -344,6 +445,20 @@ export async function bootstrapPrefetchOrdenesTecnico(
       errorDetail,
     );
 
+    /*
+     * Aunque la lista SAP falle, intentamos continuar la precarga
+     * de los detalles que todavía falten si existe conexión parcial.
+     */
+    const orderIds = getOrderIds(cachedData);
+
+    if (prefetchDetails && orderIds.length > 0) {
+      startDetailsPrefetch({
+        orderIds,
+        ttlMs,
+        reason: "sap_error_cached_list",
+      });
+    }
+
     return {
       ok: hasCachedList,
       reason: "sap_error",
@@ -351,6 +466,7 @@ export async function bootstrapPrefetchOrdenesTecnico(
       updatedAt: cached?.updatedAt || null,
       count: cachedData.length,
       data: cachedData,
+      orderIds,
       window: cached?.window || null,
       error: errorDetail,
     };
