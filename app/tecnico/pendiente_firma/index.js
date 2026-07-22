@@ -28,6 +28,11 @@ import {
 import { upsertSapQueueItem, processSapQueue } from "../../../src/offline/sapQueue";
 import { buildMantenimientoHtml } from "../../../src/services/templates/buildMantenimientoHtml";
 import { addPageNumbersToPdfBase64 } from "../../../src/services/pdf/addPageNumbersToPdf";
+import {
+  fetchEquipmentType,
+  getEquipmentTypeFromOrder,
+  normalizeEquipmentType,
+} from "../../../src/services/equipmentType";
 
 const FIORI = {
   pageBg: "#F7F7F7",
@@ -54,6 +59,8 @@ const MONTHS = [
 const safeStr = (v) => (v == null ? "" : String(v));
 const safeTrim = (v) => String(v ?? "").trim();
 const PENDING_SIGN_KEY = (orderId) => `pendingSign:${orderId}`;
+const TBMKY_JSON_KEY = (orderId) =>
+  `tbmky_json_${String(orderId || "").trim()}`;
 const DEFAULT_RECOVERY_ELAPSED_MS = 2.5 * 60 * 60 * 1000;
 const PENDING_PDFS_DIR = `${FileSystem.documentDirectory}pdfs_no_enviados/`;
 const PENDING_PDFS_INDEX_KEY = "pendingFailedSignaturePdfs:index";
@@ -468,12 +475,69 @@ async function loadPending0400FromOffline(userEmail, sourceData = null) {
   } catch { return []; }
 }
 
-function detectTipoMantenimiento(orden) {
-  const raw = [
-    orden?.tipo_equipo, orden?.EquipmentType, orden?.equipment_type, orden?.equipo_tipo,
-    orden?.tipo, orden?.Type, orden?.DescripcionEquipo, orden?.description,
-  ].map(safeTrim).filter(Boolean).join(" | ").toLowerCase();
-  return raw.includes("escal") ? "escalera" : "elevador";
+async function loadTbmkyEquipmentType(orderId) {
+  try {
+    const raw = await AsyncStorage.getItem(TBMKY_JSON_KEY(orderId));
+    const saved = raw ? JSON.parse(raw) : null;
+
+    return normalizeEquipmentType(
+      saved?.tipo_equipo ||
+        saved?.equipoSeleccionado ||
+        saved?.equipoId ||
+        saved?.equipoLabel,
+    );
+  } catch (error) {
+    console.log(
+      "[PENDIENTE_FIRMA] No se pudo leer el tipo guardado por TBMK:",
+      error?.message || error,
+    );
+    return null;
+  }
+}
+
+async function resolveEquipmentTypeForPdf({ orderId, pending, ordenFull }) {
+  const id = String(orderId || "").trim();
+
+  const pendingType = normalizeEquipmentType(
+    pending?.tipo_equipo ||
+      pending?.EquipmentType ||
+      pending?.equipoSeleccionado,
+  );
+  const orderType = getEquipmentTypeFromOrder(ordenFull);
+  const tbmkyType = id ? await loadTbmkyEquipmentType(id) : null;
+
+  let resolvedType = pendingType || orderType || tbmkyType;
+
+  if (!resolvedType) {
+    const equipmentNumber = String(
+      ordenFull?.Equipment ||
+        ordenFull?.equipment ||
+        ordenFull?.EQUIPMENT ||
+        "",
+    ).trim();
+
+    if (equipmentNumber) {
+      const sapResult = await fetchEquipmentType(equipmentNumber);
+      resolvedType = normalizeEquipmentType(sapResult?.type);
+    }
+  }
+
+  if (!resolvedType) {
+    throw new Error(
+      `No se pudo identificar el tipo de equipo de la orden ${id}. ` +
+        "Abre el TBMK de la orden y selecciona Elevador o Escalera.",
+    );
+  }
+
+  if (id && pendingType !== resolvedType) {
+    await savePendingSign(id, {
+      ...(pending || {}),
+      tipo_equipo: resolvedType,
+      EquipmentType: resolvedType,
+    });
+  }
+
+  return resolvedType;
 }
 
 function detectCoberturaFromShortText(shortText) {
@@ -999,7 +1063,12 @@ export default function PendienteFirmaIndex() {
           if (!elapsedMs || elapsedMs <= 0) throw new Error("Tiempo total inválido.");
           const ordenFull = await fetchOrdenFullForPdf({ apiClient: api, token, orderId });
           if (!(Array.isArray(ordenFull?.operaciones) ? ordenFull.operaciones : []).length) throw new Error("Sin operaciones de SAP.");
-          results.push({ orderId, ok: true, msg: "Orden lista para firma.", tipo: detectTipoMantenimiento(ordenFull), cobertura: String(ordenFull?.cobertura_tipo || ordenFull?.coberturaTipo || detectCoberturaFromShortText(ordenFull?.ShortText || "") || "SIN COBERTURA").trim(), operaciones: checkedCount, consumibles: Array.isArray(pending?.consumibles) ? pending.consumibles.length : 0 });
+          const tipo = await resolveEquipmentTypeForPdf({
+            orderId,
+            pending,
+            ordenFull,
+          });
+          results.push({ orderId, ok: true, msg: "Orden lista para firma.", tipo, cobertura: String(ordenFull?.cobertura_tipo || ordenFull?.coberturaTipo || detectCoberturaFromShortText(ordenFull?.ShortText || "") || "SIN COBERTURA").trim(), operaciones: checkedCount, consumibles: Array.isArray(pending?.consumibles) ? pending.consumibles.length : 0 });
         } catch (err) {
           results.push({ orderId, ok: false, msg: getSapErrorDetail(err, "No se pudo validar.") });
         }
@@ -1052,7 +1121,11 @@ export default function PendienteFirmaIndex() {
         const orderId = String(orderIdRaw || "").trim();
         const pending = await getPendingSignForOrder({ apiClient: api, token, orderId });
         const ordenFull = await fetchOrdenFullForPdf({ apiClient: api, token, orderId });
-        const tipo = detectTipoMantenimiento(ordenFull);
+        const tipo = await resolveEquipmentTypeForPdf({
+          orderId,
+          pending,
+          ordenFull,
+        });
         const tecnicoNombreFinal = String(user?.nombre || user?.name || user?.fullName || user?.displayName || user?.username || "").trim();
 
         const html = await buildMantenimientoHtml({
@@ -1126,7 +1199,11 @@ export default function PendienteFirmaIndex() {
                 try {
                   const pending = await getPendingSignForOrder({ apiClient: api, token, orderId });
                   const ordenFull = await fetchOrdenFullForPdf({ apiClient: api, token, orderId });
-                  const tipo = detectTipoMantenimiento(ordenFull);
+                  const tipo = await resolveEquipmentTypeForPdf({
+                    orderId,
+                    pending,
+                    ordenFull,
+                  });
                   const tecnicoNombreFinal = String(user?.nombre || user?.name || user?.fullName || user?.displayName || user?.username || "").trim();
 
                   const html = await buildMantenimientoHtml({

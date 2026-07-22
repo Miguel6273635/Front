@@ -1,6 +1,11 @@
 // src/offline/prefetchOrdenesTecnico.js
 
 import api from "../services/api";
+import {
+  fetchEquipmentType,
+  getEquipmentTypeFromOrder,
+  normalizeEquipmentType,
+} from "../services/equipmentType";
 
 import {
   saveOrdenTecnicoDetail,
@@ -16,6 +21,8 @@ import {
  * simultáneamente la misma precarga.
  */
 let activePrefetchPromise = null;
+let activePrefetchIds = new Set();
+let activePrefetchForce = false;
 
 function pickFirstAddress(results = []) {
   if (
@@ -489,6 +496,85 @@ async function fetchOperaciones(
   }
 }
 
+async function fetchEquipmentInfo(equipment, baseOrder, cachedDetail) {
+  const cachedType = normalizeEquipmentType(
+    cachedDetail?.tipo_equipo ||
+      cachedDetail?.equipment_type ||
+      getEquipmentTypeFromOrder(cachedDetail),
+  );
+  const cachedSource = String(
+    cachedDetail?.tipo_equipo_source ||
+      cachedDetail?.equipment_type_source ||
+      "",
+  ).trim();
+
+  if (cachedType && cachedSource === "manual") {
+    return {
+      ok: true,
+      type: cachedType,
+      eqart: cachedDetail?.Eqart || cachedDetail?.eqart || "",
+      source: "manual",
+    };
+  }
+
+  const orderType = normalizeEquipmentType(
+    getEquipmentTypeFromOrder(baseOrder),
+  );
+
+  if (orderType) {
+    return {
+      ok: true,
+      type: orderType,
+      eqart: baseOrder?.Eqart || baseOrder?.eqart || "",
+      source: "order",
+    };
+  }
+
+  const equipmentId = String(equipment || "").trim();
+
+  if (!equipmentId) {
+    return {
+      ok: false,
+      type: cachedType || null,
+      eqart: cachedDetail?.Eqart || cachedDetail?.eqart || "",
+      source: cachedType ? cachedSource || "cache" : "missing_equipment",
+    };
+  }
+
+  try {
+    const info = await fetchEquipmentType(equipmentId);
+    const type = normalizeEquipmentType(info?.type);
+
+    return {
+      ok: !!type,
+      type: type || cachedType || null,
+      eqart:
+        info?.eqart ||
+        cachedDetail?.Eqart ||
+        cachedDetail?.eqart ||
+        "",
+      source: type
+        ? "sap"
+        : cachedType
+          ? cachedSource || "cache"
+          : "not_identified",
+    };
+  } catch (error) {
+    console.log(
+      "[prefetch][equipment] no se pudo identificar:",
+      equipmentId,
+      error?.message || error,
+    );
+
+    return {
+      ok: false,
+      type: cachedType || null,
+      eqart: cachedDetail?.Eqart || cachedDetail?.eqart || "",
+      source: cachedType ? cachedSource || "cache" : "error",
+    };
+  }
+}
+
 /**
  * Ejecución interna de la precarga.
  */
@@ -544,15 +630,15 @@ async function runPrefetchOrdenesTecnicoDetalles({
       const orderId = ids[index];
 
       try {
+        const cachedBeforeFetch =
+          await loadOrdenTecnicoDetail(orderId);
+
         /*
          * Si el detalle está vigente y completo,
          * no se descarga otra vez.
          */
         if (!force) {
-          const cached =
-            await loadOrdenTecnicoDetail(
-              orderId,
-            );
+          const cached = cachedBeforeFetch;
 
           const hasCachedDetail =
             cached &&
@@ -567,9 +653,8 @@ async function runPrefetchOrdenesTecnicoDetalles({
             );
 
           const cachedIsComplete =
-            cached?.data
-              ?._prefetch_complete !==
-            false;
+            cached?.data?._prefetch_complete ===
+            true;
 
           if (
             hasCachedDetail &&
@@ -671,6 +756,18 @@ async function runPrefetchOrdenesTecnicoDetalles({
             realOrderId,
           );
 
+        const equipment =
+          baseOrder?.equipment ||
+          baseOrder?.Equipment ||
+          null;
+
+        const equipmentResult =
+          await fetchEquipmentInfo(
+            equipment,
+            baseOrder,
+            cachedBeforeFetch?.data,
+          );
+
         const rawUserStatus = String(
           baseOrder?.Userstatus ??
             baseOrder?.userstatus ??
@@ -696,7 +793,8 @@ async function runPrefetchOrdenesTecnicoDetalles({
         const prefetchComplete =
           addressResult.ok &&
           partnersResult.ok &&
-          operationsResult.ok;
+          operationsResult.ok &&
+          equipmentResult.ok;
 
         const detail = {
           Orderid: realOrderId,
@@ -707,9 +805,22 @@ async function runPrefetchOrdenesTecnicoDetalles({
             baseOrder?.OrderTypeTxt ||
             null,
 
-          equipment:
-            baseOrder?.equipment ||
-            baseOrder?.Equipment ||
+          equipment,
+
+          tipo_equipo:
+            equipmentResult.type ||
+            null,
+
+          tipo_equipo_source:
+            equipmentResult.source ||
+            null,
+
+          Eqart:
+            equipmentResult.eqart ||
+            null,
+
+          eqart:
+            equipmentResult.eqart ||
             null,
 
           plant:
@@ -788,6 +899,9 @@ async function runPrefetchOrdenesTecnicoDetalles({
               partnersResult.ok,
             operaciones:
               operationsResult.ok,
+
+            equipment:
+              equipmentResult.ok,
           },
 
           _prefetch_updated_at:
@@ -902,13 +1016,67 @@ async function runPrefetchOrdenesTecnicoDetalles({
 export function prefetchOrdenesTecnicoDetalles(
   options = {},
 ) {
+  const requestedIds = [
+    ...new Set(
+      (
+        Array.isArray(options?.orderIds)
+          ? options.orderIds
+          : []
+      )
+        .map((id) =>
+          String(id || "").trim(),
+        )
+        .filter(Boolean),
+    ),
+  ];
+
   if (activePrefetchPromise) {
+    /*
+     * Una recarga manual no debe reutilizar como resultado final
+     * una precarga normal que comenzó con force=false.
+     * Esperamos a que termine y después ejecutamos la forzada.
+     */
+    const missingIds =
+      requestedIds.filter(
+        (id) =>
+          !activePrefetchIds.has(id),
+      );
+
+    const needsForcedRun =
+      options?.force === true &&
+      !activePrefetchForce;
+
+    if (
+      needsForcedRun ||
+      missingIds.length > 0
+    ) {
+      return activePrefetchPromise
+        .catch(() => null)
+        .then(() =>
+          prefetchOrdenesTecnicoDetalles({
+            ...options,
+            orderIds: needsForcedRun
+              ? requestedIds
+              : missingIds,
+            force:
+              needsForcedRun ||
+              options?.force === true,
+          }),
+        );
+    }
+
     console.log(
       "[prefetch] Ya existe una precarga activa. Se reutiliza.",
     );
 
     return activePrefetchPromise;
   }
+
+  activePrefetchIds =
+    new Set(requestedIds);
+
+  activePrefetchForce =
+    options?.force === true;
 
   activePrefetchPromise =
     runPrefetchOrdenesTecnicoDetalles(
@@ -932,6 +1100,10 @@ export function prefetchOrdenesTecnicoDetalles(
       })
       .finally(() => {
         activePrefetchPromise = null;
+        activePrefetchIds =
+          new Set();
+        activePrefetchForce =
+          false;
       });
 
   return activePrefetchPromise;

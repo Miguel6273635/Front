@@ -15,6 +15,7 @@ import {
 import {
   getLocalStatusPatch,
   applyStatusPatchToOrdenes,
+  reconcileStatusPatchesWithSap,
 } from "./ordenesTecnicoLocalPatch";
 
 import { prefetchOrdenesTecnicoDetalles } from "./prefetchOrdenesTecnico";
@@ -157,6 +158,7 @@ function startDetailsPrefetch({
   orderIds,
   ttlMs,
   reason,
+  force = false,
 }) {
   if (!Array.isArray(orderIds) || !orderIds.length) {
     return;
@@ -170,7 +172,7 @@ function startDetailsPrefetch({
   prefetchOrdenesTecnicoDetalles({
     orderIds,
     concurrency: 3,
-    force: false,
+    force,
     ttlMs,
   })
     .then((result) => {
@@ -371,19 +373,17 @@ export async function bootstrapPrefetchOrdenesTecnico(
     /*
      * Paso importante:
      *
-     * La respuesta de SAP se combina con los cambios locales
-     * antes de guardarse.
-     *
-     * Si SAP todavía devuelve 0200, pero localmente existe un
-     * cambio pendiente a 0300, se conserva 0300.
+     * La respuesta de SAP se reconcilia contra la cola real.
+     * Solo un cambio todavía pendiente o dentro de la breve gracia
+     * posterior al envío puede conservar prioridad sobre SAP.
      */
-    const effectiveOrders = await applyLocalStatuses(
+    const effectiveOrders = await reconcileStatusPatchesWithSap(
       cleanEmail,
       sapOrdersInWindow,
     );
 
     /*
-     * Guardamos la lista ya protegida por los parches locales.
+     * Guardamos la lista ya reconciliada.
      */
     await saveOrdenesTecnicoList(
       cleanEmail,
@@ -408,6 +408,7 @@ export async function bootstrapPrefetchOrdenesTecnico(
         orderIds,
         ttlMs,
         reason: "sap_updated",
+        force,
       });
     }
 

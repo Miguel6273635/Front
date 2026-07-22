@@ -50,6 +50,11 @@ import * as Device from "expo-device";
 
 // ✅ HTML/PDF mantenimiento (plantillas + operaciones)
 import { buildMantenimientoHtml } from "../../../../src/services/templates/buildMantenimientoHtml";
+import {
+  fetchEquipmentType,
+  getEquipmentTypeFromOrder,
+  normalizeEquipmentType,
+} from "../../../../src/services/equipmentType";
 
 // ✅ Secciones (segmentación)
 import EncabezadoDetalleOrden from "./secciones/EncabezadoDetalleOrden";
@@ -81,6 +86,8 @@ const ORDER_FINISH_KEY = (orderId) => `orderFinish:${orderId}`;
 const ORDER_ELAPSED_KEY = (orderId) => `orderElapsed:${orderId}`;
 const PENDING_SIGN_KEY = (orderId) => `pendingSign:${orderId}`;
 const OPSTATE_KEY = (orderId) => `opState:${orderId}`;
+const TBMKY_JSON_KEY = (orderId) =>
+  `tbmky_json_${String(orderId || "").trim()}`;
 
 /* ====================== Utils tiempo ====================== */
 function msToHMS(ms) {
@@ -580,24 +587,24 @@ function normalizeOpsFromBackend(ops = []) {
 
 const safeStr = (v) => String(v ?? "").trim();
 
-function detectTipoMantenimiento(orden) {
-  const raw = [
-    orden?.tipo_equipo,
-    orden?.EquipmentType,
-    orden?.equipment_type,
-    orden?.equipo_tipo,
-    orden?.tipo,
-    orden?.Type,
-    orden?.DescripcionEquipo,
-    orden?.description,
-  ]
-    .map((x) => safeStr(x))
-    .filter(Boolean)
-    .join(" | ")
-    .toLowerCase();
+async function loadTbmkyEquipmentType(orderId) {
+  try {
+    const raw = await AsyncStorage.getItem(TBMKY_JSON_KEY(orderId));
+    const saved = raw ? JSON.parse(raw) : null;
 
-  if (raw.includes("escal")) return "escalera";
-  return "elevador";
+    return normalizeEquipmentType(
+      saved?.tipo_equipo ||
+        saved?.equipoSeleccionado ||
+        saved?.equipoId ||
+        saved?.equipoLabel,
+    );
+  } catch (error) {
+    console.log(
+      "[DETALLE] No se pudo leer el tipo guardado por TBMK:",
+      error?.message || error,
+    );
+    return null;
+  }
 }
 
 function detectCoberturaFromShortText(shortText) {
@@ -993,6 +1000,65 @@ export default function DetalleOrden() {
     await saveOrdenTecnicoDetail(orderId, detailObj);
   };
 
+  const resolveEquipmentTypeForCurrentOrder = async (pendingData = null) => {
+    const orderId = String(orden?.Orderid || id || "").trim();
+
+    const pendingType = normalizeEquipmentType(
+      pendingData?.tipo_equipo ||
+        pendingData?.EquipmentType ||
+        pendingData?.equipoSeleccionado,
+    );
+    const orderType = getEquipmentTypeFromOrder(orden);
+    const tbmkyType = orderId
+      ? await loadTbmkyEquipmentType(orderId)
+      : null;
+
+    let resolvedType = pendingType || orderType || tbmkyType;
+
+    if (!resolvedType) {
+      const equipmentNumber = String(
+        orden?.Equipment || orden?.equipment || orden?.EQUIPMENT || "",
+      ).trim();
+
+      if (equipmentNumber) {
+        const sapResult = await fetchEquipmentType(equipmentNumber);
+        resolvedType = normalizeEquipmentType(sapResult?.type);
+      }
+    }
+
+    if (!resolvedType || !orderId) {
+      return resolvedType || null;
+    }
+
+    const nextOrder = {
+      ...(orden || {}),
+      tipo_equipo: resolvedType,
+      EquipmentType: resolvedType,
+    };
+
+    setOrden((prev) => ({
+      ...(prev || {}),
+      tipo_equipo: resolvedType,
+      EquipmentType: resolvedType,
+    }));
+
+    try {
+      const cached = await loadOrdenTecnicoDetail(orderId);
+      await safeSaveDetailIfWindow(orderId, {
+        ...(cached?.data || nextOrder),
+        tipo_equipo: resolvedType,
+        EquipmentType: resolvedType,
+      });
+    } catch (error) {
+      console.log(
+        "[DETALLE] No se pudo guardar localmente el tipo de equipo:",
+        error?.message || error,
+      );
+    }
+
+    return resolvedType;
+  };
+
   const applyLocalOrderStatus = async (orderId, code) => {
     const statusCodeStr = normalizeCode(code);
     const statusLabelStr = resolveStatusLabelFromCode(statusCodeStr);
@@ -1334,21 +1400,9 @@ export default function DetalleOrden() {
         if (av) setAvisoCliente(av);
       }
 
-      // Si el detalle ya está completo y tiene menos de una hora,
-      // se reutiliza sin volver a consultar SAP.
-      const cachedIsFresh = isCacheFresh(
-        cached?.updatedAt,
-        ORDENES_CACHE_TTL_MS,
-      );
-
-      if (cached?.data && cachedIsFresh) {
-        console.log("[DETALLE ORDEN] Usando detalle vigente de caché:", {
-          orderId: orderIdParam,
-          updatedAt: cached.updatedAt,
-        });
-        return;
-      }
-
+      // El caché se muestra primero para que la pantalla abra rápido,
+      // pero no debe impedir validar cambios hechos directamente en SAP.
+      // Solo se usa como resultado final cuando no hay conexión.
       const net = await NetInfo.fetch();
       const isOnline = !!(
         net?.isConnected && net?.isInternetReachable !== false
@@ -1363,6 +1417,12 @@ export default function DetalleOrden() {
         }
         return;
       }
+
+      console.log("[DETALLE ORDEN] Validando detalle actual en SAP:", {
+        orderId: orderIdParam,
+        hasCachedDetail: !!cached?.data,
+        cachedUpdatedAt: cached?.updatedAt || null,
+      });
 
       const resOrden = await api.get(`/api/ordenes/sap/${orderIdParam}`);
       const baseOrden = resOrden.data || {};
@@ -2020,6 +2080,15 @@ export default function DetalleOrden() {
     try {
       setSavingPending0400(true);
 
+      const tipoEquipo = await resolveEquipmentTypeForCurrentOrder();
+      if (!tipoEquipo) {
+        Alert.alert(
+          "Tipo de equipo pendiente",
+          "No se pudo identificar el tipo de equipo. Abre el TBM/KY y selecciona Elevador o Escalera antes de continuar.",
+        );
+        return;
+      }
+
       const finishMs = Date.now();
       const elapsedMs = Math.max(0, finishMs - orderStartedAtMs);
 
@@ -2076,6 +2145,8 @@ export default function DetalleOrden() {
 
         cobertura_tipo: coberturaTipo || orden?.cobertura_tipo || "SIN COBERTURA",
         ShortText: orden?.ShortText || "",
+        tipo_equipo: tipoEquipo,
+        EquipmentType: tipoEquipo,
 
         orderStartedAtMs: Number.isFinite(orderStartedAtMs)
           ? orderStartedAtMs
@@ -2445,7 +2516,15 @@ export default function DetalleOrden() {
       setMantPdfUri(null);
       setShowMantPreview(true);
 
-      const tipo = detectTipoMantenimiento(orden);
+      const tipo = await resolveEquipmentTypeForCurrentOrder();
+      if (!tipo) {
+        setShowMantPreview(false);
+        Alert.alert(
+          "Tipo de equipo pendiente",
+          "No se pudo identificar el tipo de equipo. Abre el TBM/KY y selecciona Elevador o Escalera antes de generar el PDF.",
+        );
+        return;
+      }
       const opsAll = Array.isArray(orden?.operaciones) ? orden.operaciones : [];
 
       const html = await buildMantenimientoHtml({
@@ -2521,6 +2600,15 @@ export default function DetalleOrden() {
       ? Math.max(0, draftFinishMs - orderStartedAtMs)
       : null;
 
+    const tipoEquipo = await resolveEquipmentTypeForCurrentOrder();
+    if (!tipoEquipo) {
+      Alert.alert(
+        "Tipo de equipo pendiente",
+        "No se pudo identificar el tipo de equipo. Abre el TBM/KY y selecciona Elevador o Escalera antes de solicitar la firma.",
+      );
+      return;
+    }
+
     await savePendingSign(orderId, {
       checkedMap,
       savedAt: Date.now(),
@@ -2532,6 +2620,8 @@ export default function DetalleOrden() {
 
       cobertura_tipo: coberturaTipo || orden?.cobertura_tipo || "SIN COBERTURA",
       ShortText: orden?.ShortText || "",
+      tipo_equipo: tipoEquipo,
+      EquipmentType: tipoEquipo,
 
       orderStartedAtMs: Number.isFinite(orderStartedAtMs)
         ? orderStartedAtMs
@@ -2704,7 +2794,14 @@ export default function DetalleOrden() {
         Return: [],
       };
 
-      const tipo = detectTipoMantenimiento(orden);
+      const tipo = await resolveEquipmentTypeForCurrentOrder(pendingDraft);
+      if (!tipo) {
+        Alert.alert(
+          "Tipo de equipo pendiente",
+          "No se pudo identificar el tipo de equipo. Abre el TBM/KY y selecciona Elevador o Escalera antes de finalizar.",
+        );
+        return;
+      }
 
       const html = await buildMantenimientoHtml({
         tipo,

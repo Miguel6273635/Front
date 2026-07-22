@@ -244,6 +244,12 @@ function sanitizeDetailForCache(detail) {
     Orderid: String(detail?.Orderid ?? detail?.OrderId ?? "").trim(),
     order_type: detail?.order_type,
     equipment: detail?.equipment,
+    tipo_equipo:
+      detail?.tipo_equipo ?? detail?.equipment_type ?? null,
+    tipo_equipo_source:
+      detail?.tipo_equipo_source ?? detail?.equipment_type_source ?? null,
+    Eqart: detail?.Eqart ?? detail?.eqart ?? null,
+    eqart: detail?.eqart ?? detail?.Eqart ?? null,
     plant: detail?.plant ?? detail?.Plant ?? null,
     start_date: detail?.start_date,
     finish_date: detail?.finish_date,
@@ -264,6 +270,12 @@ function sanitizeDetailForCache(detail) {
 
     // ✅ NUEVO
     partners: partnersSlim,
+    _prefetch_complete: detail?._prefetch_complete === true,
+    _prefetch_status:
+      detail?._prefetch_status && typeof detail._prefetch_status === "object"
+        ? detail._prefetch_status
+        : null,
+    _prefetch_updated_at: detail?._prefetch_updated_at ?? null,
   };
 }
 

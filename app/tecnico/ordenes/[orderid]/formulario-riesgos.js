@@ -23,6 +23,12 @@ import { MaterialCommunityIcons, Ionicons } from "@expo/vector-icons";
 import { Dropdown, MultiSelect } from "react-native-element-dropdown";
 import Signature from "react-native-signature-canvas";
 import api from "../../../../src/services/api";
+import {
+  fetchEquipmentType,
+  getEquipmentTypeFromOrder,
+  getTbmkyEquipmentType,
+  normalizeEquipmentType,
+} from "../../../../src/services/equipmentType";
 import { useAuth } from "../../../../src/context/AuthContext";
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -52,7 +58,10 @@ import {
   patchCacheOrdenesTecnicoList,
   patchCacheOrdenTecnicoDetail,
 } from "../../../../src/offline/ordenesTecnicoLocalPatch";
-import { loadOrdenTecnicoDetail } from "../../../../src/offline/ordenesTecnicoCache";
+import {
+  loadOrdenTecnicoDetail,
+  saveOrdenTecnicoDetail,
+} from "../../../../src/offline/ordenesTecnicoCache";
 
 // ===== Paleta Fiori / Horizon =====
 const FIORI = {
@@ -218,30 +227,6 @@ function safeStr(v) {
   return String(v ?? "").trim();
 }
 
-function mapCachedOrSapTipoEquipo(ord) {
-  const raw = [
-    ord?.tipo_equipo,
-    ord?.EquipmentType,
-    ord?.equipment_type,
-    ord?.equipo_tipo,
-    ord?.tipo,
-    ord?.Type,
-    ord?.DescripcionEquipo,
-    ord?.description,
-    ord?.short_text,
-  ]
-    .map((x) => safeStr(x))
-    .filter(Boolean)
-    .join(" | ")
-    .toLowerCase();
-
-  if (raw.includes("escal")) {
-    return { tipo: "escaleras", label: "ESCALERAS" };
-  }
-
-  return { tipo: "elevadores", label: "ELEVADORES" };
-}
-
 function getCachedNominasFromPartners(partners = []) {
   const z1 = normalizeNomina(pickPartnerOldByRole(partners, "Z1"));
   const z2 = normalizeNomina(pickPartnerOldByRole(partners, "Z2"));
@@ -328,9 +313,12 @@ export default function FormularioRiesgosScreen() {
   const [rutinaria, setRutinaria] = useState(false);
 
   // ✅ Equipo dinámico
-  const [equipoSeleccionado, setEquipoSeleccionado] = useState("elevadores");
-  const [equipoLabel, setEquipoLabel] = useState("ELEVADORES");
+  // null significa que todavía no se ha podido identificar.
+  const [equipoSeleccionado, setEquipoSeleccionado] = useState(null);
+  const [equipoLabel, setEquipoLabel] = useState("");
+  const [equipoTipoSource, setEquipoTipoSource] = useState(null);
   const [loadingEquipoTipo, setLoadingEquipoTipo] = useState(false);
+  const equipoTipoSourceRef = useRef(null);
 
   // ✅ Trabajadores
   // índice 0 = técnico principal
@@ -412,49 +400,57 @@ export default function FormularioRiesgosScreen() {
   const toDataUrl = (b64) => `data:image/png;base64,${b64}`;
 
   const sanitize = (s) => (s || "").replace(/\s/g, "");
+  const applyEquipmentType = (type, source) => {
+    const normalized = normalizeEquipmentType(type);
+    const tbmkyType = getTbmkyEquipmentType(normalized);
 
-  const EQUIPO_TIPO_URL_BASE =
-    "https://my-node-api-qas-01.cfapps.us10-001.hana.ondemand.com";
+    setEquipoSeleccionado(tbmkyType.tipo);
+    setEquipoLabel(tbmkyType.label);
+    setEquipoTipoSource(normalized ? source : null);
+    equipoTipoSourceRef.current = normalized ? source : null;
+  };
 
-  function mapEqartToTipo(eqartRaw) {
-    const v = String(eqartRaw || "")
-      .toUpperCase()
-      .trim();
+  const clearEquipmentType = () => {
+    setEquipoSeleccionado(null);
+    setEquipoLabel("");
+    setEquipoTipoSource(null);
+    equipoTipoSourceRef.current = null;
+  };
 
-    if (v.includes("ELEV")) {
-      return { tipo: "elevadores", label: "ELEVADORES" };
+  const selectEquipmentTypeManually = async (type) => {
+    if (lockedAfterPdf) return;
+
+    applyEquipmentType(type, "manual");
+
+    try {
+      const normalized = normalizeEquipmentType(type);
+      const cached = await loadOrdenTecnicoDetail(orderid);
+
+      const baseOfflineDetail =
+        cached?.data ||
+        orden;
+
+      if (normalized && baseOfflineDetail) {
+        await saveOrdenTecnicoDetail(orderid, {
+          ...baseOfflineDetail,
+          tipo_equipo: normalized,
+          tipo_equipo_source: "manual",
+          _prefetch_complete:
+            baseOfflineDetail?._prefetch_complete === true,
+          _prefetch_status:
+            baseOfflineDetail?._prefetch_status || null,
+          _prefetch_updated_at:
+            baseOfflineDetail?._prefetch_updated_at || Date.now(),
+        });
+      }
+    } catch (error) {
+      console.log(
+        "[TBMKY] No se pudo guardar el tipo manual en el detalle offline:",
+        error?.message || error,
+      );
     }
+  };
 
-    if (v.includes("ESCAL")) {
-      return { tipo: "escaleras", label: "ESCALERAS" };
-    }
-
-    return { tipo: "elevadores", label: "ELEVADORES" };
-  }
-
-  async function fetchTipoEquipoFromEquipment(equipmentMx) {
-    const eq = String(equipmentMx || "").trim();
-
-    if (!eq) return null;
-
-    const url = `${EQUIPO_TIPO_URL_BASE}/api/odata/ZCS_GET_EQUIPMENT_SRV/EquipmentHeaderSet('${encodeURIComponent(
-      eq,
-    )}')?$format=json`;
-
-    const r = await fetch(url);
-
-    if (!r.ok) {
-      throw new Error(`EquipmentHeaderSet HTTP ${r.status}`);
-    }
-
-    const j = await r.json();
-    const eqart = j?.d?.Eqart;
-
-    return {
-      eqart,
-      ...mapEqartToTipo(eqart),
-    };
-  }
 
   const [modalFirma, setModalFirma] = useState({
     open: false,
@@ -725,12 +721,23 @@ export default function FormularioRiesgosScreen() {
         if (typeof d.fecha === "string") setFecha(d.fecha);
         if (typeof d.rutinaria === "boolean") setRutinaria(d.rutinaria);
 
-        if (typeof d.equipoSeleccionado === "string") {
-          setEquipoSeleccionado(d.equipoSeleccionado);
-        }
+        const validEquipmentSources = ["sap", "order", "manual"];
 
-        if (typeof d.equipoLabel === "string") {
-          setEquipoLabel(d.equipoLabel);
+        const draftEquipmentType = normalizeEquipmentType(
+          d.equipoSeleccionado,
+        );
+
+        const draftEquipmentSource = validEquipmentSources.includes(
+          d.equipoTipoSource,
+        )
+          ? d.equipoTipoSource
+          : null;
+
+        if (draftEquipmentType && draftEquipmentSource) {
+          applyEquipmentType(
+            draftEquipmentType,
+            draftEquipmentSource,
+          );
         }
 
         if (Array.isArray(d.trabajadores)) {
@@ -930,10 +937,16 @@ export default function FormularioRiesgosScreen() {
             return copy;
           });
 
-          const tipoLocal = mapCachedOrSapTipoEquipo(cachedData);
+          const cachedEquipmentType =
+            getEquipmentTypeFromOrder(cachedData);
 
-          setEquipoSeleccionado(tipoLocal.tipo);
-          setEquipoLabel(tipoLocal.label);
+          if (equipoTipoSourceRef.current !== "manual") {
+            if (cachedEquipmentType) {
+              applyEquipmentType(cachedEquipmentType, "order");
+            } else {
+              clearEquipmentType();
+            }
+          }
         }
 
         const onlineNow = await isOnline();
@@ -958,38 +971,59 @@ export default function FormularioRiesgosScreen() {
         setCentroTrabajo("TLP1");
 
         try {
-          const equipmentMx =
-            ord?.Equipment || ord?.equipment || ord?.EQUIPMENT || "";
+          const equipmentMx = String(
+            ord?.Equipment ||
+              ord?.equipment ||
+              ord?.EQUIPMENT ||
+              "",
+          ).trim();
 
-          if (equipmentMx) {
+          // Primero revisamos si la propia orden ya contiene un tipo válido.
+          const orderEquipmentType = getEquipmentTypeFromOrder(ord);
+
+          if (equipoTipoSourceRef.current === "manual") {
+            console.log(
+              "[TBMKY] Se conserva el tipo seleccionado manualmente.",
+            );
+          } else if (orderEquipmentType) {
+            if (alive) {
+              applyEquipmentType(orderEquipmentType, "order");
+            }
+          } else if (equipmentMx) {
             setLoadingEquipoTipo(true);
 
-            const info = await fetchTipoEquipoFromEquipment(equipmentMx);
+            const info = await fetchEquipmentType(equipmentMx);
 
-            if (info?.tipo && alive) {
-              setEquipoSeleccionado(info.tipo);
-              setEquipoLabel(info.label);
+            if (!alive) return;
 
-              console.log("[TBMKY] Tipo equipo por Eqart:", {
+            if (equipoTipoSourceRef.current === "manual") {
+              console.log(
+                "[TBMKY] Se conserva el tipo seleccionado manualmente.",
+              );
+            } else if (info?.type) {
+              applyEquipmentType(info.type, "sap");
+
+              console.log("[TBMKY] Tipo de equipo identificado:", {
                 equipmentMx,
                 eqart: info.eqart,
-                tipo: info.tipo,
+                tipo: info.type,
+                source: "sap",
+              });
+            } else {
+              clearEquipmentType();
+
+              console.log("[TBMKY] Tipo de equipo sin identificar:", {
+                equipmentMx,
+                eqart: info?.eqart || "",
+                reason: info?.reason || "unknown",
               });
             }
           } else {
-            const tipoFallback = mapCachedOrSapTipoEquipo(ord);
-
-            if (alive) {
-              setEquipoSeleccionado(tipoFallback.tipo);
-              setEquipoLabel(tipoFallback.label);
-            }
+            clearEquipmentType();
           }
         } catch (e) {
-          const tipoFallback = mapCachedOrSapTipoEquipo(ord);
-
           if (alive) {
-            setEquipoSeleccionado(tipoFallback.tipo);
-            setEquipoLabel(tipoFallback.label);
+            clearEquipmentType();
           }
 
           console.log(
@@ -997,7 +1031,9 @@ export default function FormularioRiesgosScreen() {
             e?.message || e,
           );
         } finally {
-          if (alive) setLoadingEquipoTipo(false);
+          if (alive) {
+            setLoadingEquipoTipo(false);
+          }
         }
 
         const startIso =
@@ -1231,10 +1267,16 @@ export default function FormularioRiesgosScreen() {
               return copy;
             });
 
-            const tipoLocal = mapCachedOrSapTipoEquipo(cachedData);
+            const cachedEquipmentType =
+              getEquipmentTypeFromOrder(cachedData);
 
-            setEquipoSeleccionado(tipoLocal.tipo);
-            setEquipoLabel(tipoLocal.label);
+            if (equipoTipoSourceRef.current !== "manual") {
+              if (cachedEquipmentType) {
+                applyEquipmentType(cachedEquipmentType, "order");
+              } else {
+                clearEquipmentType();
+              }
+            }
           } else {
             Alert.alert(
               "Error",
@@ -1269,6 +1311,7 @@ export default function FormularioRiesgosScreen() {
 
       equipoSeleccionado,
       equipoLabel,
+      equipoTipoSource,
 
       trabajadores: normalizeTrabajadoresForState(trabajadores),
 
@@ -1304,6 +1347,7 @@ export default function FormularioRiesgosScreen() {
       rutinaria,
       equipoSeleccionado,
       equipoLabel,
+      equipoTipoSource,
       trabajadores,
       nominaTecnico,
       centroTrabajo,
@@ -1587,13 +1631,23 @@ export default function FormularioRiesgosScreen() {
   // ✅ Validaciones por paso
   // ==========================
   const paso1Ok = useMemo(() => {
+    const equipmentOk =
+      equipoSeleccionado === "elevadores" ||
+      equipoSeleccionado === "escaleras";
+
     const t1ok = !!trabajadores?.[0]?.nombre?.trim();
     const areaOk = Array.isArray(selectedAreas) && selectedAreas.length > 0;
     const jefeOk = !!jefeInmediato?.trim();
     const actOk = !!actividadDia?.trim();
 
-    return t1ok && areaOk && jefeOk && actOk;
-  }, [trabajadores, selectedAreas, jefeInmediato, actividadDia]);
+    return equipmentOk && t1ok && areaOk && jefeOk && actOk;
+  }, [
+    equipoSeleccionado,
+    trabajadores,
+    selectedAreas,
+    jefeInmediato,
+    actividadDia,
+  ]);
 
   const paso2Ok = useMemo(() => true, []);
 
@@ -2139,27 +2193,115 @@ export default function FormularioRiesgosScreen() {
             <View>
               <SectionTitle title="1. Identificación del área de trabajo" />
 
-              <SectionSubTitle text="Tipo de equipo fijo" />
+              <SectionSubTitle text="Tipo de equipo" />
 
-              <View style={[styles.fixedTile, { borderColor: FIORI.accent }]}>
-                <MaterialCommunityIcons
-                  name={
-                    equipoSeleccionado === "escaleras"
-                      ? "escalator"
-                      : "elevator-passenger"
-                  }
-                  size={22}
-                  color={FIORI.accent}
-                />
+              {loadingEquipoTipo ? (
+                <View style={[styles.fixedTile, { borderColor: FIORI.accent }]}>
+                  <ActivityIndicator size="small" color={FIORI.accent} />
 
-                <Text style={{ fontWeight: "900", color: FIORI.ink }}>
-                  {loadingEquipoTipo ? "Consultando…" : equipoLabel || "EQUIPO"}
-                </Text>
+                  <Text style={{ fontWeight: "900", color: FIORI.ink }}>
+                    Consultando tipo de equipo…
+                  </Text>
 
-                <Text style={{ color: FIORI.textMuted, fontSize: 12 }}>
-                  {loadingEquipoTipo ? "Leyendo tipo en SAP…" : "No editable"}
-                </Text>
-              </View>
+                  <Text style={{ color: FIORI.textMuted, fontSize: 12 }}>
+                    Leyendo información en SAP
+                  </Text>
+                </View>
+              ) : equipoSeleccionado ? (
+                <View style={[styles.fixedTile, { borderColor: FIORI.accent }]}>
+                  <MaterialCommunityIcons
+                    name={
+                      equipoSeleccionado === "escaleras"
+                        ? "escalator"
+                        : "elevator-passenger"
+                    }
+                    size={22}
+                    color={FIORI.accent}
+                  />
+
+                  <Text style={{ fontWeight: "900", color: FIORI.ink }}>
+                    {equipoLabel}
+                  </Text>
+
+                  <Text style={{ color: FIORI.textMuted, fontSize: 12 }}>
+                    {equipoTipoSource === "manual"
+                      ? "Seleccionado por el técnico"
+                      : "Identificado automáticamente"}
+                  </Text>
+                </View>
+              ) : (
+                <View style={styles.card}>
+                  <Text
+                    style={{
+                      color: FIORI.ink,
+                      fontSize: 14,
+                      fontWeight: "800",
+                      marginBottom: 6,
+                    }}
+                  >
+                    No se pudo identificar el tipo de equipo
+                  </Text>
+
+                  <Text
+                    style={{
+                      color: FIORI.textMuted,
+                      fontSize: 12,
+                      marginBottom: 12,
+                    }}
+                  >
+                    Selecciona el tipo correcto para esta orden. Esta selección
+                    se guardará en el borrador del TBM/KY.
+                  </Text>
+
+                  <View style={{ flexDirection: "row", gap: 10 }}>
+                    <TouchableOpacity
+                      style={[
+                        styles.fixedTile,
+                        {
+                          flex: 1,
+                          marginBottom: 0,
+                          borderColor: FIORI.accent,
+                        },
+                      ]}
+                      onPress={() => selectEquipmentTypeManually("elevador")}
+                      disabled={lockedAfterPdf}
+                    >
+                      <MaterialCommunityIcons
+                        name="elevator-passenger"
+                        size={24}
+                        color={FIORI.accent}
+                      />
+
+                      <Text style={{ fontWeight: "900", color: FIORI.ink }}>
+                        ELEVADOR
+                      </Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={[
+                        styles.fixedTile,
+                        {
+                          flex: 1,
+                          marginBottom: 0,
+                          borderColor: FIORI.accent,
+                        },
+                      ]}
+                      onPress={() => selectEquipmentTypeManually("escalera")}
+                      disabled={lockedAfterPdf}
+                    >
+                      <MaterialCommunityIcons
+                        name="escalator"
+                        size={24}
+                        color={FIORI.accent}
+                      />
+
+                      <Text style={{ fontWeight: "900", color: FIORI.ink }}>
+                        ESCALERA
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              )}
 
               <SectionSubTitle text="Técnico asignado no editable" />
 
@@ -2489,8 +2631,8 @@ export default function FormularioRiesgosScreen() {
                     marginTop: 6,
                   }}
                 >
-                  Completa: Área, Jefe inmediato y Actividad del día para
-                  continuar.
+                  Completa: Tipo de equipo, Área, Jefe inmediato y Actividad del
+                  día para continuar.
                 </Text>
               )}
             </View>

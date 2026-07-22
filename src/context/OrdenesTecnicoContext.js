@@ -187,13 +187,33 @@ export function OrdenesTecnicoProvider({ children }) {
         );
 
         /*
-         * Siempre volvemos a leer la caché.
+         * Si SAP respondió correctamente, usamos directamente la lista
+         * que bootstrap acaba de reconciliar y guardar. Así una recarga
+         * manual no vuelve a cubrir la respuesta nueva con una lectura
+         * anterior del caché.
          *
-         * loadLocal aplica los estatus locales pendientes,
-         * por lo que SAP no puede hacer retroceder visualmente
-         * una orden que ya avanzó.
+         * Si se trabajó sin conexión o falló SAP, conservamos la carga local.
          */
-        const cached = await loadLocal();
+        let cached = null;
+
+        if (
+          result?.ok &&
+          result?.source === "sap" &&
+          Array.isArray(result?.data)
+        ) {
+          cached = {
+            updatedAt: result?.updatedAt || Date.now(),
+            window: result?.window || null,
+            data: result.data,
+          };
+
+          if (mountedRef.current) {
+            setOrdenes(result.data);
+            setLastUpdatedAt(cached.updatedAt);
+          }
+        } else {
+          cached = await loadLocal();
+        }
 
         if (mountedRef.current && result?.error) {
           setLastError(result.error);

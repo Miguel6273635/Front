@@ -1,27 +1,10 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import NetInfo from "@react-native-community/netinfo";
 
-/**
- * ✅ Cola SAP con "dedupeKey" para pisar estatus:
- * - Estatus (0400 / 0300 / etc) deben usar dedupeKey = `STATUS:<orderId>`
- * - Confirmaciones NO deben pisarse normalmente (dedupeKey opcional)
- * - PENDIENTE_FIRMA_0300 guarda:
- *    1) attachment
- *    2) status 0300
- *   y al procesarse los envía en ese orden
- *
- * Uso recomendado:
- *   upsertSapQueueItem({
- *     type: "STATUS",
- *     orderId,
- *     endpoint: "/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet",
- *     payload,
- *     dedupeKey: `STATUS:${orderId}`,
- *   })
- */
-
 const QUEUE_KEY = "sapQueue:v3";
+const STATUS_ACK_KEY = "sapQueue:statusAck:v1";
 const MAX_TRIES = 8;
+export const STATUS_ACK_GRACE_MS = 2 * 60 * 1000;
 
 function nowMs() {
   return Date.now();
@@ -29,6 +12,10 @@ function nowMs() {
 
 function uid() {
   return `${Date.now()}_${Math.random().toString(16).slice(2)}`;
+}
+
+function safeStr(value) {
+  return String(value ?? "").trim();
 }
 
 async function loadQueue() {
@@ -47,13 +34,29 @@ async function saveQueue(items) {
   } catch {}
 }
 
+async function loadStatusAcks() {
+  try {
+    const raw = await AsyncStorage.getItem(STATUS_ACK_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+async function saveStatusAcks(acks) {
+  try {
+    await AsyncStorage.setItem(STATUS_ACK_KEY, JSON.stringify(acks || {}));
+  } catch {}
+}
+
 function normalizeMethod(method) {
-  const m = String(method || "POST").toUpperCase();
-  return ["POST", "PATCH", "PUT"].includes(m) ? m : "POST";
+  const value = String(method || "POST").toUpperCase();
+  return ["POST", "PATCH", "PUT"].includes(value) ? value : "POST";
 }
 
 function normalizeType(type) {
-  const t = String(type || "GENERIC").toUpperCase();
+  const value = String(type || "GENERIC").toUpperCase();
   const allowed = [
     "STATUS",
     "CONFIRMATIONS",
@@ -61,129 +64,196 @@ function normalizeType(type) {
     "PDF",
     "GENERIC",
     "PENDIENTE_FIRMA_0300",
+    "PENDIENTE_FIRMA_BULK_0300",
   ];
-  return allowed.includes(t) ? t : "GENERIC";
+  return allowed.includes(value) ? value : "GENERIC";
 }
 
-function safeStr(v) {
-  return String(v ?? "").trim();
+function addOrderId(target, value) {
+  const clean = safeStr(value);
+  if (clean) target.add(clean);
 }
 
-/**
- * ✅ Inserta o reemplaza item
- * Reglas:
- * - Si viene dedupeKey (o key legacy), se busca item existente con:
- *    same orderId + same dedupeKey
- *   y se REEMPLAZA el payload/endpoint/method manteniendo id/createdAt/tries.
- * - Si no viene dedupeKey, solo hace append.
- */
+function collectOrderIdsFromValue(value, target, depth = 0) {
+  if (depth > 8 || value === null || value === undefined) return;
+
+  if (Array.isArray(value)) {
+    value.forEach((item) => collectOrderIdsFromValue(item, target, depth + 1));
+    return;
+  }
+
+  if (typeof value !== "object") return;
+
+  Object.entries(value).forEach(([key, child]) => {
+    const normalizedKey = String(key).replace(/[^a-z0-9]/gi, "").toLowerCase();
+
+    if (normalizedKey === "orderid") {
+      addOrderId(target, child);
+      return;
+    }
+
+    collectOrderIdsFromValue(child, target, depth + 1);
+  });
+}
+
+export function getQueueItemOrderIds(item) {
+  const result = new Set();
+  const type = normalizeType(item?.type);
+  const dedupeKey = safeStr(item?.dedupeKey || item?.key);
+
+  if (type === "STATUS" || type.includes("PENDIENTE_FIRMA")) {
+    addOrderId(result, item?.orderId);
+  }
+
+  if (dedupeKey.startsWith("STATUS:")) {
+    addOrderId(result, dedupeKey.slice("STATUS:".length));
+  }
+
+  collectOrderIdsFromValue(item?.payload, result);
+  return Array.from(result);
+}
+
+function isStatusQueueItem(item) {
+  const type = normalizeType(item?.type);
+  const dedupeKey = safeStr(item?.dedupeKey || item?.key);
+  return type === "STATUS" || type.includes("PENDIENTE_FIRMA") || dedupeKey.startsWith("STATUS:");
+}
+
+async function registerSuccessfulStatusItem(item) {
+  if (!isStatusQueueItem(item)) return;
+
+  const orderIds = getQueueItemOrderIds(item);
+  if (!orderIds.length) return;
+
+  const acks = await loadStatusAcks();
+  const sentAt = nowMs();
+
+  orderIds.forEach((orderId) => {
+    acks[orderId] = sentAt;
+  });
+
+  await saveStatusAcks(acks);
+}
+
+export async function getSapQueueStatusState() {
+  const [queue, storedAcks] = await Promise.all([loadQueue(), loadStatusAcks()]);
+  const pendingOrderIds = new Set();
+
+  queue.forEach((item) => {
+    if (!isStatusQueueItem(item)) return;
+    getQueueItemOrderIds(item).forEach((orderId) => pendingOrderIds.add(orderId));
+  });
+
+  const cutoff = nowMs() - STATUS_ACK_GRACE_MS;
+  const recentAcks = {};
+  let changed = false;
+
+  Object.entries(storedAcks || {}).forEach(([orderId, sentAt]) => {
+    const timestamp = Number(sentAt || 0);
+    if (timestamp >= cutoff) recentAcks[orderId] = timestamp;
+    else changed = true;
+  });
+
+  if (changed) await saveStatusAcks(recentAcks);
+
+  return { pendingOrderIds, recentAcks };
+}
+
+export async function clearSapStatusAck(orderId) {
+  const cleanOrderId = safeStr(orderId);
+  if (!cleanOrderId) return false;
+
+  const acks = await loadStatusAcks();
+  if (!acks[cleanOrderId]) return true;
+
+  delete acks[cleanOrderId];
+  await saveStatusAcks(acks);
+  return true;
+}
+
 export async function upsertSapQueueItem({
   type,
   orderId,
   endpoint,
   method = "POST",
   payload,
-
-  // ✅ NUEVO
   dedupeKey,
-
-  // 🔁 legacy (compat)
   key,
 }) {
   const orderIdNorm = safeStr(orderId);
   const finalKey = safeStr(dedupeKey) || safeStr(key) || undefined;
-
   const item = {
     id: uid(),
     dedupeKey: finalKey,
     key: finalKey,
-
     type: normalizeType(type),
     orderId: orderIdNorm,
     endpoint: safeStr(endpoint),
     method: normalizeMethod(method),
     payload,
-
     createdAt: nowMs(),
     updatedAt: nowMs(),
     tries: 0,
     lastError: null,
   };
 
-  const q = await loadQueue();
+  const queue = await loadQueue();
 
-  // ✅ Dedupe/replace
   if (item.dedupeKey) {
-    const idx = q.findIndex(
-      (x) =>
-        x &&
-        safeStr(x.orderId) === item.orderId &&
-        safeStr(x.dedupeKey || x.key) === item.dedupeKey,
+    const index = queue.findIndex(
+      (queued) =>
+        queued &&
+        safeStr(queued.orderId) === item.orderId &&
+        safeStr(queued.dedupeKey || queued.key) === item.dedupeKey,
     );
 
-    if (idx >= 0) {
-      const prev = q[idx];
-
-      q[idx] = {
-        ...prev,
+    if (index >= 0) {
+      const previous = queue[index];
+      queue[index] = {
+        ...previous,
         ...item,
-        id: prev.id,
-        createdAt: prev.createdAt,
-        tries: Number(prev.tries || 0),
+        id: previous.id,
+        createdAt: previous.createdAt,
+        tries: Number(previous.tries || 0),
         lastError: null,
       };
-
-      await saveQueue(q);
-      return q[idx];
+      await saveQueue(queue);
+      return queue[index];
     }
   }
 
-  q.push(item);
-  await saveQueue(q);
+  queue.push(item);
+  await saveQueue(queue);
   return item;
 }
 
-/**
- * ✅ Útil si quieres limpiar estatus viejos manualmente (opcional)
- */
 export async function removeSapQueueItemsByKey({ orderId, dedupeKey }) {
   const orderIdNorm = safeStr(orderId);
-  const k = safeStr(dedupeKey);
-  if (!orderIdNorm || !k) return { ok: false, removed: 0 };
+  const key = safeStr(dedupeKey);
+  if (!orderIdNorm || !key) return { ok: false, removed: 0 };
 
-  const q = await loadQueue();
-  const before = q.length;
-
-  const next = q.filter(
-    (x) =>
-      !(
-        safeStr(x.orderId) === orderIdNorm &&
-        safeStr(x.dedupeKey || x.key) === k
-      ),
+  const queue = await loadQueue();
+  const next = queue.filter(
+    (item) =>
+      !(safeStr(item.orderId) === orderIdNorm && safeStr(item.dedupeKey || item.key) === key),
   );
 
   await saveQueue(next);
-  return { ok: true, removed: before - next.length };
+  return { ok: true, removed: queue.length - next.length };
 }
 
-/**
- * Procesa la cola en orden FIFO.
- * - Solo intenta items con tries < MAX_TRIES.
- * - Si falla, incrementa tries y conserva item.
- * - Si éxito, lo elimina.
- */
 export async function processSapQueue({ ensureValidToken, apiInstance } = {}) {
   const net = await NetInfo.fetch();
-  const isOnline = !!(net?.isConnected && net?.isInternetReachable !== false);
+  const online = !!(net?.isConnected && net?.isInternetReachable !== false);
 
-  if (!isOnline) return { ok: false, reason: "offline" };
+  if (!online) return { ok: false, reason: "offline" };
   if (!apiInstance) return { ok: false, reason: "missing_apiInstance" };
 
-  let q = await loadQueue();
-  if (!q.length) return { ok: true, processed: 0, remaining: 0 };
+  let queue = await loadQueue();
+  if (!queue.length) return { ok: true, processed: 0, remaining: 0 };
 
-  q = q.filter(
-    (x) => x && (safeStr(x.endpoint) || x.type === "PENDIENTE_FIRMA_0300"),
+  queue = queue.filter(
+    (item) => item && (safeStr(item.endpoint) || normalizeType(item.type).includes("PENDIENTE_FIRMA")),
   );
 
   const keep = [];
@@ -194,7 +264,7 @@ export async function processSapQueue({ ensureValidToken, apiInstance } = {}) {
     await ensureValidToken?.();
   } catch {}
 
-  for (const item of q) {
+  for (const item of queue) {
     const tries = Number(item?.tries || 0);
 
     if (tries >= MAX_TRIES) {
@@ -204,25 +274,9 @@ export async function processSapQueue({ ensureValidToken, apiInstance } = {}) {
     }
 
     try {
-      // =========================
-      // ✅ Caso especial:
-      // Pendiente de firma offline
-      // - primero attachment
-      // - luego status 0300
-      // =========================
-      if (item.type === "PENDIENTE_FIRMA_0300") {
+      if (normalizeType(item.type) === "PENDIENTE_FIRMA_0300") {
         const endpoint = safeStr(item.endpoint);
 
-        console.log("[SAP QUEUE] Procesando PENDIENTE_FIRMA_0300:", {
-          orderId: item.orderId,
-          endpoint,
-          hasPayload: !!item.payload,
-          hasHeader: !!item.payload?.WorkOrderHeader,
-          hasStatus: Array.isArray(item.payload?.WorkOrderUserStatusSet),
-          hasAttachments: Array.isArray(item.payload?.Attachments),
-        });
-
-        // NUEVO FLUJO: un solo JSON con PDF + estatus 0300
         if (
           endpoint &&
           item.payload?.WorkOrderHeader &&
@@ -230,85 +284,48 @@ export async function processSapQueue({ ensureValidToken, apiInstance } = {}) {
           Array.isArray(item.payload?.Attachments)
         ) {
           await apiInstance.post(endpoint, item.payload);
+        } else {
+          const attachmentEndpoint = safeStr(item?.payload?.attachmentEndpoint);
+          const statusEndpoint = safeStr(item?.payload?.statusEndpoint);
+          const attachmentPayload = item?.payload?.attachmentPayload;
+          const statusPayload = item?.payload?.statusPayload;
 
-          console.log("[SAP QUEUE] OK PENDIENTE_FIRMA_0300 payload único:", {
-            orderId: item.orderId,
-          });
+          if (!attachmentEndpoint || !attachmentPayload || !statusEndpoint || !statusPayload) {
+            throw new Error(`Queue item PENDIENTE_FIRMA_0300 inválido para orden ${item.orderId}`);
+          }
 
-          processed++;
-          continue;
-        }
-
-        // FLUJO VIEJO: compatibilidad por si tienes órdenes anteriores en cola
-        const attachmentEndpoint = safeStr(item?.payload?.attachmentEndpoint);
-        const statusEndpoint = safeStr(item?.payload?.statusEndpoint);
-
-        const attachmentPayload = item?.payload?.attachmentPayload;
-        const statusPayload = item?.payload?.statusPayload;
-
-        if (
-          attachmentEndpoint &&
-          attachmentPayload &&
-          statusEndpoint &&
-          statusPayload
-        ) {
           await apiInstance.post(attachmentEndpoint, attachmentPayload);
           await apiInstance.post(statusEndpoint, statusPayload);
-
-          console.log("[SAP QUEUE] OK PENDIENTE_FIRMA_0300 payload viejo:", {
-            orderId: item.orderId,
-          });
-
-          processed++;
-          continue;
         }
-
-        throw new Error(
-          `Queue item PENDIENTE_FIRMA_0300 inválido para orden ${item.orderId}`,
-        );
-      }
-
-      const method = normalizeMethod(item.method).toLowerCase();
-      const endpoint = safeStr(item.endpoint);
-
-      if (!endpoint) throw new Error("Queue item sin endpoint");
-
-      if (method === "post") {
-        await apiInstance.post(endpoint, item.payload);
-      } else if (method === "patch") {
-        await apiInstance.patch(endpoint, item.payload);
-      } else if (method === "put") {
-        await apiInstance.put(endpoint, item.payload);
       } else {
-        throw new Error("Método no soportado");
+        const method = normalizeMethod(item.method).toLowerCase();
+        const endpoint = safeStr(item.endpoint);
+        if (!endpoint) throw new Error("Queue item sin endpoint");
+
+        if (method === "post") await apiInstance.post(endpoint, item.payload);
+        else if (method === "patch") await apiInstance.patch(endpoint, item.payload);
+        else if (method === "put") await apiInstance.put(endpoint, item.payload);
+        else throw new Error("Método no soportado");
       }
 
+      await registerSuccessfulStatusItem(item);
       processed++;
-    } catch (e) {
+    } catch (error) {
       keep.push({
         ...item,
         tries: tries + 1,
         updatedAt: nowMs(),
-        lastError: e?.message || "error",
+        lastError: error?.message || "error",
       });
     }
   }
 
   await saveQueue(keep);
-
-  return {
-    ok: true,
-    processed,
-    remaining: keep.length,
-    skippedMaxTries,
-  };
+  return { ok: true, processed, remaining: keep.length, skippedMaxTries };
 }
 
-/**
- * Helpers opcionales
- */
 export async function getSapQueue() {
-  return await loadQueue();
+  return loadQueue();
 }
 
 export async function clearSapQueue() {

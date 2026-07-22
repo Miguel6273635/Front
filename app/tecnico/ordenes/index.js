@@ -216,15 +216,23 @@ const getOrderKey = (item = {}) =>
 const mergeOrdersKeepingCache = (cached = [], remote = []) => {
   const map = new Map();
 
-  for (const item of Array.isArray(remote) ? remote : []) {
-    const key = getOrderKey(item);
-    if (key) map.set(key, item);
-  }
-
-  // La versión local gana para conservar estatus y cambios offline.
+  // Primero se conserva lo que ya existe localmente.
   for (const item of Array.isArray(cached) ? cached : []) {
     const key = getOrderKey(item);
-    if (key) map.set(key, item);
+
+    if (key) {
+      map.set(key, item);
+    }
+  }
+
+  // La respuesta más reciente de SAP reemplaza únicamente
+  // las órdenes que hayan sido consultadas nuevamente.
+  for (const item of Array.isArray(remote) ? remote : []) {
+    const key = getOrderKey(item);
+
+    if (key) {
+      map.set(key, item);
+    }
   }
 
   return Array.from(map.values());
@@ -357,14 +365,47 @@ function resolveUserstatus(
   _catalogMap = {},
   itemFromApi = null,
 ) {
+  /*
+   * estatus_code ya representa el estatus efectivo normalizado.
+   * Si está presente, debe utilizarse directamente.
+   *
+   * No debe combinarse con userstatus porque este último puede
+   * contener códigos anteriores o inactivos.
+   */
+  const effectiveCode = normalizeCode(itemFromApi?.estatus_code);
+
+  if (effectiveCode) {
+    const metadata = STATUS_META[effectiveCode];
+
+    if (metadata) {
+      return {
+        code: effectiveCode,
+        ...metadata,
+        rawCodes: [effectiveCode],
+      };
+    }
+
+    return {
+      code: effectiveCode,
+      label:
+        itemFromApi?.estatus_label ||
+        _catalogMap?.[effectiveCode] ||
+        `Estatus ${effectiveCode}`,
+      type: "unknown",
+      color: "#6A7381",
+      lockActions: false,
+      allowCheckin: false,
+      isNoMantto: false,
+      rawCodes: [effectiveCode],
+    };
+  }
+
+  /*
+   * Compatibilidad para órdenes que todavía no tengan estatus_code.
+   */
   const rawCodes = extractCodes(rawUserstatus);
-  const apiCode = normalizeCode(itemFromApi?.estatus_code);
 
-  const codes = Array.from(
-    new Set([...(rawCodes || []), ...(apiCode ? [apiCode] : [])]),
-  );
-
-  if (!codes.length) {
+  if (!rawCodes.length) {
     return {
       code: "",
       label: "Sin empezar",
@@ -377,25 +418,32 @@ function resolveUserstatus(
     };
   }
 
-  for (const p of PRIORITY) {
-    if (codes.includes(p)) {
-      return {
-        code: p,
-        ...STATUS_META[p],
-        rawCodes: codes,
-      };
-    }
+  /*
+   * En el valor recibido de SAP normalmente el último código
+   * corresponde al estatus más reciente.
+   */
+  const fallbackCode = rawCodes[rawCodes.length - 1];
+  const metadata = STATUS_META[fallbackCode];
+
+  if (metadata) {
+    return {
+      code: fallbackCode,
+      ...metadata,
+      rawCodes,
+    };
   }
 
   return {
-    code: codes[0],
-    label: `Estatus ${codes.join(", ")}`,
+    code: fallbackCode,
+    label:
+      _catalogMap?.[fallbackCode] ||
+      `Estatus ${fallbackCode}`,
     type: "unknown",
     color: "#6A7381",
     lockActions: false,
     allowCheckin: false,
     isNoMantto: false,
-    rawCodes: codes,
+    rawCodes,
   };
 }
 
