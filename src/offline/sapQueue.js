@@ -214,7 +214,9 @@ export async function upsertSapQueueItem({
         ...item,
         id: previous.id,
         createdAt: previous.createdAt,
-        tries: Number(previous.tries || 0),
+        // Es una acción nueva que sustituye a la anterior, por lo tanto
+        // también recibe una nueva oportunidad completa de sincronización.
+        tries: 0,
         lastError: null,
       };
       await saveQueue(queue);
@@ -259,6 +261,7 @@ export async function processSapQueue({ ensureValidToken, apiInstance } = {}) {
   const keep = [];
   let processed = 0;
   let skippedMaxTries = 0;
+  let discardedMaxTries = 0;
 
   try {
     await ensureValidToken?.();
@@ -268,8 +271,8 @@ export async function processSapQueue({ ensureValidToken, apiInstance } = {}) {
     const tries = Number(item?.tries || 0);
 
     if (tries >= MAX_TRIES) {
-      keep.push(item);
       skippedMaxTries++;
+      discardedMaxTries++;
       continue;
     }
 
@@ -311,17 +314,36 @@ export async function processSapQueue({ ensureValidToken, apiInstance } = {}) {
       await registerSuccessfulStatusItem(item);
       processed++;
     } catch (error) {
-      keep.push({
-        ...item,
-        tries: tries + 1,
-        updatedAt: nowMs(),
-        lastError: error?.message || "error",
-      });
+      const nextTries = tries + 1;
+
+      if (nextTries >= MAX_TRIES) {
+        discardedMaxTries++;
+        console.warn("[SAP QUEUE] Elemento descartado por máximo de intentos:", {
+          id: item?.id,
+          type: item?.type,
+          orderId: item?.orderId,
+          tries: nextTries,
+          lastError: error?.message || "error",
+        });
+      } else {
+        keep.push({
+          ...item,
+          tries: nextTries,
+          updatedAt: nowMs(),
+          lastError: error?.message || "error",
+        });
+      }
     }
   }
 
   await saveQueue(keep);
-  return { ok: true, processed, remaining: keep.length, skippedMaxTries };
+  return {
+    ok: true,
+    processed,
+    remaining: keep.length,
+    skippedMaxTries,
+    discardedMaxTries,
+  };
 }
 
 export async function getSapQueue() {

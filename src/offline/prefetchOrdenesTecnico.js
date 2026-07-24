@@ -24,6 +24,56 @@ let activePrefetchPromise = null;
 let activePrefetchIds = new Set();
 let activePrefetchForce = false;
 
+function normalizeStatusCode(value) {
+  const text = String(value ?? "").trim();
+  if (!text) return "";
+
+  const matches = text.match(/(?:^|\D)(0?[1-6]00)(?=\D|$)/g);
+  if (matches?.length) {
+    const last = matches[matches.length - 1].match(/0?[1-6]00/);
+    if (last?.[0]) return last[0].padStart(4, "0");
+  }
+
+  const number = Number.parseInt(text, 10);
+  return Number.isNaN(number) ? text : String(number).padStart(4, "0");
+}
+
+function resolveStatusLabel(code, fallback = "") {
+  const labels = {
+    "0100": "PENDIENTE",
+    "0200": "EN PROCESO",
+    "0300": "FINALIZADA",
+    "0400": "PENDIENTE DE FIRMA",
+    "0500": "FINALIZADA C/PENDIENTES",
+    "0600": "Carta No Mantto",
+  };
+
+  return labels[code] || String(fallback || "").trim() || code || null;
+}
+
+function applyAuthoritativeListStatus(detail, statusHint) {
+  if (!statusHint || typeof statusHint !== "object") return detail;
+
+  const code = normalizeStatusCode(
+    statusHint?.estatus_code ?? statusHint?.userstatus ?? "",
+  );
+
+  if (!code) return detail;
+
+  return {
+    ...(detail || {}),
+    estatus_code: code,
+    userstatus: code,
+    Userstatus: code,
+    UserStatus: code,
+    UserStText: code,
+    estatus_label: resolveStatusLabel(code, statusHint?.estatus_label),
+    isPendingSignature: code === "0400",
+    isFinal: ["0300", "0500", "0600"].includes(code),
+    checkin_done: ["0100", "0200", "0300", "0400", "0500", "0600"].includes(code),
+  };
+}
+
 function pickFirstAddress(results = []) {
   if (
     !Array.isArray(results) ||
@@ -580,6 +630,7 @@ async function fetchEquipmentInfo(equipment, baseOrder, cachedDetail) {
  */
 async function runPrefetchOrdenesTecnicoDetalles({
   orderIds = [],
+  statusByOrderId = {},
   concurrency = 3,
   force = false,
   ttlMs = ORDENES_CACHE_TTL_MS,
@@ -796,7 +847,7 @@ async function runPrefetchOrdenesTecnicoDetalles({
           operationsResult.ok &&
           equipmentResult.ok;
 
-        const detail = {
+        const detailFromSap = {
           Orderid: realOrderId,
 
           order_type:
@@ -907,6 +958,16 @@ async function runPrefetchOrdenesTecnicoDetalles({
           _prefetch_updated_at:
             Date.now(),
         };
+
+        /*
+         * La lista recién sincronizada es la fuente autoritativa del
+         * estatus durante esta precarga. El endpoint de detalle puede ir
+         * retrasado y no debe volver a guardar un código anterior.
+         */
+        const detail = applyAuthoritativeListStatus(
+          detailFromSap,
+          statusByOrderId?.[realOrderId] ?? statusByOrderId?.[orderId],
+        );
 
         const saved =
           await saveOrdenTecnicoDetail(

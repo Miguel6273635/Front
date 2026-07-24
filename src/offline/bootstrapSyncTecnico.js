@@ -156,6 +156,7 @@ async function applyLocalStatuses(userEmail, orders = []) {
  */
 function startDetailsPrefetch({
   orderIds,
+  statusByOrderId = {},
   ttlMs,
   reason,
   force = false,
@@ -171,6 +172,7 @@ function startDetailsPrefetch({
 
   prefetchOrdenesTecnicoDetalles({
     orderIds,
+    statusByOrderId,
     concurrency: 3,
     force,
     ttlMs,
@@ -394,6 +396,41 @@ export async function bootstrapPrefetchOrdenesTecnico(
     const orderIds = getOrderIds(effectiveOrders);
 
     /*
+     * Conserva exactamente el estatus efectivo que acaba de quedar en
+     * el index. La precarga puede consultar un endpoint de detalle que
+     * todavía devuelva un estado anterior; estas pistas impiden que ese
+     * resultado vuelva a sobrescribir el estado ya reconciliado.
+     */
+    const statusByOrderId = Object.fromEntries(
+      effectiveOrders
+        .map((order) => {
+          const orderId = String(
+            order?.Orderid || order?.OrderId || order?.orderid || "",
+          ).trim();
+
+          if (!orderId) return null;
+
+          return [
+            orderId,
+            {
+              estatus_code: order?.estatus_code ?? null,
+              userstatus:
+                order?.userstatus ??
+                order?.Userstatus ??
+                order?.UserStatus ??
+                order?.UserStText ??
+                null,
+              estatus_label: order?.estatus_label ?? null,
+              isPendingSignature: order?.isPendingSignature,
+              isFinal: order?.isFinal,
+              checkin_done: order?.checkin_done,
+            },
+          ];
+        })
+        .filter(Boolean),
+    );
+
+    /*
      * Elimina detalles que ya no pertenecen a la ventana actual.
      */
     await pruneDetallesNoUsados(orderIds);
@@ -406,6 +443,7 @@ export async function bootstrapPrefetchOrdenesTecnico(
     if (prefetchDetails) {
       startDetailsPrefetch({
         orderIds,
+        statusByOrderId,
         ttlMs,
         reason: "sap_updated",
         force,

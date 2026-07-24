@@ -682,19 +682,25 @@ export default function ListaOrdenesTecnico() {
             "",
         );
 
-        // Si la orden ya avanzó a 0400, 0300 o 0600,
-        // NO permitas que tbmky_status_ la regrese a 0200.
-        if (["0400", "0300", "0600"].includes(currentStatus)) {
+        // tbmky_status_ solo puede completar una orden que todavía no tenga
+        // un estatus efectivo proveniente del contexto, caché o SAP.
+        if (currentStatus) {
+          AsyncStorage.removeItem(TBMKY_STATUS_KEY(orderId)).catch(() => {});
           return x;
         }
 
+        const localTbmkyStatus = normalizeCode(status);
+        if (!localTbmkyStatus) return x;
+
         return {
           ...x,
-          estatus_code: status,
-          userstatus: status,
-          UserStatus: status,
-          UserStText: status,
-          estatus_label: STATUS_META[status]?.label || status,
+          estatus_code: localTbmkyStatus,
+          userstatus: localTbmkyStatus,
+          Userstatus: localTbmkyStatus,
+          UserStatus: localTbmkyStatus,
+          UserStText: localTbmkyStatus,
+          estatus_label:
+            STATUS_META[localTbmkyStatus]?.label || localTbmkyStatus,
         };
       });
     } catch (e) {

@@ -18,6 +18,7 @@ import { WebView } from "react-native-webview";
 import Header from "../../../../src/components/Header";
 import api from "../../../../src/services/api";
 import { useAuth } from "../../../../src/context/AuthContext";
+import { useOrdenesTecnico } from "../../../../src/context/OrdenesTecnicoContext";
 import { addPageNumbersToPdfBase64 } from "../../../../src/services/pdf/addPageNumbersToPdf";
 import { useLocalSearchParams, router } from "expo-router";
 
@@ -639,12 +640,22 @@ function extractCodes(raw) {
 }
 
 function pickCurrentStatusCode(orden) {
-  const codes = extractCodes(orden?.userstatus ?? "");
   const apiCode = normalizeCode(orden?.estatus_code ?? "");
 
-  const all = Array.from(
-    new Set([...(codes || []), ...(apiCode ? [apiCode] : [])]),
+  // estatus_code ya contiene el estatus efectivo reconciliado por el index.
+  // Si existe, debe usarse directamente, incluso cuando represente un regreso
+  // válido de 0200 a 0100 realizado directamente en SAP.
+  if (apiCode) return apiCode;
+
+  const codes = extractCodes(
+    orden?.userstatus ??
+      orden?.Userstatus ??
+      orden?.UserStatus ??
+      orden?.UserStText ??
+      "",
   );
+
+  const all = Array.from(new Set(codes || []));
 
   // Prioridad de los únicos estatus válidos actuales.
   if (all.includes("0600")) return "0600";
@@ -653,7 +664,7 @@ function pickCurrentStatusCode(orden) {
   if (all.includes("0200")) return "0200";
   if (all.includes("0100")) return "0100";
 
-  return apiCode || codes[0] || "";
+  return codes[0] || "";
 }
 
 function buildStatus0300Payload({ orderId, email, currentCode }) {
@@ -860,11 +871,85 @@ function hasValidConsumibles(consumiblesRows) {
   });
 }
 
+function isCachedDetailUsable(detail) {
+  if (!detail || typeof detail !== "object") return false;
+
+  const orderId = safeStr(detail?.Orderid || detail?.OrderId);
+  return !!orderId && Array.isArray(detail?.operaciones);
+}
+
+function getOrderIdValue(item) {
+  return String(
+    item?.Orderid ?? item?.OrderId ?? item?.orderid ?? "",
+  ).trim();
+}
+
+function normalizeOrderIdForCompare(value) {
+  const clean = String(value ?? "").trim();
+  if (!clean) return "";
+
+  // SAP puede devolver el mismo número de orden con o sin ceros iniciales.
+  // No usamos Number para evitar pérdida de precisión en identificadores largos.
+  const withoutLeadingZeros = clean.replace(/^0+(?=\d)/, "");
+  return withoutLeadingZeros || "0";
+}
+
+function getEffectiveSharedStatusCode(sharedOrder) {
+  if (!sharedOrder) return "";
+
+  // El index ya deja su estatus reconciliado en estatus_code. Este campo tiene
+  // prioridad absoluta y no debe combinarse con un userstatus anterior.
+  const effectiveCode = normalizeCode(sharedOrder?.estatus_code ?? "");
+  if (effectiveCode) return effectiveCode;
+
+  return normalizeCode(
+    sharedOrder?.userstatus ??
+      sharedOrder?.Userstatus ??
+      sharedOrder?.UserStatus ??
+      sharedOrder?.UserStText ??
+      "",
+  );
+}
+
+function mergeStatusFromSharedOrder(detail, sharedOrder) {
+  if (!detail || !sharedOrder) return detail;
+
+  const sharedCode = getEffectiveSharedStatusCode(sharedOrder);
+
+  if (!sharedCode) return detail;
+
+  return {
+    ...detail,
+    estatus_code: sharedCode,
+    userstatus: sharedCode,
+    Userstatus: sharedCode,
+    UserStatus: sharedCode,
+    UserStText: sharedCode,
+    estatus_label:
+      sharedOrder?.estatus_label || resolveStatusLabelFromCode(sharedCode),
+    isPendingSignature: sharedCode === "0400",
+    isFinal: ["0300", "0600"].includes(sharedCode),
+    checkin_done: ["0100", "0200", "0300", "0400", "0600"].includes(
+      sharedCode,
+    ),
+  };
+}
+
 // CAMBIOS agregasdos por miguel
 /* ====================== Componente ====================== */
 export default function DetalleOrden() {
   const { id } = useLocalSearchParams();
   const { user, ensureValidToken } = useAuth();
+  const { ordenes: ordenesCompartidas = [] } = useOrdenesTecnico();
+
+  const sharedOrder = (Array.isArray(ordenesCompartidas)
+    ? ordenesCompartidas
+    : []
+  ).find(
+    (item) =>
+      normalizeOrderIdForCompare(getOrderIdValue(item)) ===
+      normalizeOrderIdForCompare(id),
+  );
 
   const [orden, setOrden] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -1345,11 +1430,30 @@ export default function DetalleOrden() {
       setLoading(true);
 
       const cached = await loadOrdenTecnicoDetail(orderIdParam);
-      if (cached?.data) {
-        setOrden(cached.data);
+      const cachedDataReconciled = mergeStatusFromSharedOrder(
+        cached?.data,
+        sharedOrder,
+      );
+      const hasUsableCachedDetail = isCachedDetailUsable(cachedDataReconciled);
+
+      if (cachedDataReconciled) {
+        setOrden(cachedDataReconciled);
+
+        if (
+          normalizeCode(cached?.data?.estatus_code ?? cached?.data?.userstatus) !==
+          normalizeCode(
+            cachedDataReconciled?.estatus_code ??
+              cachedDataReconciled?.userstatus,
+          )
+        ) {
+          await safeSaveDetailIfWindow(orderIdParam, cachedDataReconciled);
+        }
+        // El detalle guardado ya se puede pintar. No bloqueamos la pantalla
+        // mientras se decide si hace falta actualizarlo desde SAP.
+        setLoading(false);
 
         const cachedOrderId = String(
-          cached?.data?.Orderid || orderIdParam,
+          cachedDataReconciled?.Orderid || orderIdParam,
         ).trim();
 
         const savedStartCached = await loadOrderStart(cachedOrderId);
@@ -1388,21 +1492,21 @@ export default function DetalleOrden() {
           setOrderElapsedMs(pendingCached.orderElapsedMs);
         }
 
-        const emailCached = String(cached?.data?.cliente_email || "").trim();
+        const emailCached = String(cachedDataReconciled?.cliente_email || "").trim();
         if (emailCached && isValidEmail(emailCached))
           setClienteEmail(emailCached);
 
-        const cn = String(cached?.data?.cliente_nombre || "").trim();
-        const cc = String(cached?.data?.cliente_cargo || "").trim();
-        const av = String(cached?.data?.aviso_cliente || "").trim();
+        const cn = String(cachedDataReconciled?.cliente_nombre || "").trim();
+        const cc = String(cachedDataReconciled?.cliente_cargo || "").trim();
+        const av = String(cachedDataReconciled?.aviso_cliente || "").trim();
         if (cn) setClienteNombre(cn);
         if (cc) setClienteCargo(cc);
         if (av) setAvisoCliente(av);
       }
 
-      // El caché se muestra primero para que la pantalla abra rápido,
-      // pero no debe impedir validar cambios hechos directamente en SAP.
-      // Solo se usa como resultado final cuando no hay conexión.
+      // El caché se muestra primero para que la pantalla abra rápido.
+      // Si sigue vigente se usa como resultado final; si venció, SAP se
+      // consulta en segundo plano sin volver a bloquear la vista.
       const net = await NetInfo.fetch();
       const isOnline = !!(
         net?.isConnected && net?.isInternetReachable !== false
@@ -1415,6 +1519,17 @@ export default function DetalleOrden() {
             "No hay internet y no hay detalle guardado aún para esta orden.",
           );
         }
+        return;
+      }
+
+      if (
+        hasUsableCachedDetail &&
+        isCacheFresh(cached?.updatedAt, ORDENES_CACHE_TTL_MS)
+      ) {
+        console.log("[DETALLE ORDEN] Usando detalle vigente de caché:", {
+          orderId: orderIdParam,
+          cachedUpdatedAt: cached?.updatedAt || null,
+        });
         return;
       }
 
@@ -1494,7 +1609,9 @@ export default function DetalleOrden() {
           "No se pudieron cargar operaciones:",
           e?.response?.data || e,
         );
-        ops = normalizeOpsFromBackend(baseOrden?.operaciones || []);
+        ops = normalizeOpsFromBackend(
+          baseOrden?.operaciones || cached?.data?.operaciones || [],
+        );
       }
 
       const orderIdReal = String(
@@ -1535,26 +1652,48 @@ export default function DetalleOrden() {
         );
       }
 
-      const data = {
+      const dataFromSap = {
+        ...(cached?.data || {}),
         ...baseOrden,
-        ShortText: shortTextForCoverage || baseOrden?.ShortText || "",
-        cobertura_tipo: coberturaDetectada || baseOrden?.cobertura_tipo || null,
+        ShortText:
+          shortTextForCoverage ||
+          baseOrden?.ShortText ||
+          cached?.data?.ShortText ||
+          "",
+        cobertura_tipo:
+          coberturaDetectada ||
+          baseOrden?.cobertura_tipo ||
+          cached?.data?.cobertura_tipo ||
+          null,
         direccion:
           direccionSap ||
           baseOrden?.direccion ||
           baseOrden?.address ||
           baseOrden?.partner_address ||
+          cached?.data?.direccion ||
           "",
         cliente:
           clienteSap ||
           baseOrden?.cliente ||
-          `${baseOrden?.Name1 ?? ""} ${baseOrden?.Name2 ?? ""}`.trim(),
-        cliente_email: emailFromPartners || baseOrden?.cliente_email || "",
+          `${baseOrden?.Name1 ?? ""} ${baseOrden?.Name2 ?? ""}`.trim() ||
+          cached?.data?.cliente ||
+          "",
+        cliente_email:
+          emailFromPartners ||
+          baseOrden?.cliente_email ||
+          cached?.data?.cliente_email ||
+          "",
         operaciones: opsMerged,
         cliente_nombre: String(clienteNombre || "").trim(),
         cliente_cargo: String(clienteCargo || "").trim(),
         aviso_cliente: String(avisoCliente || "").trim(),
       };
+
+      // El listado central ya contiene el estatus efectivo reconciliado:
+      // SAP cuando no hay pendientes, o el parche local cuando se trabaja
+      // offline. El detalle conserva todos sus datos, pero usa ese mismo
+      // estatus para que ambas pantallas nunca se contradigan.
+      const data = mergeStatusFromSharedOrder(dataFromSap, sharedOrder);
 
       setOrden(data);
 
@@ -3213,6 +3352,56 @@ export default function DetalleOrden() {
     obtenerOrden();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    const sharedCode = getEffectiveSharedStatusCode(sharedOrder);
+
+    if (!sharedCode) return;
+
+    setOrden((current) => {
+      if (!current) return current;
+
+      const currentCode = normalizeCode(
+        current?.estatus_code ?? current?.userstatus ?? "",
+      );
+
+      if (currentCode === sharedCode) return current;
+      return mergeStatusFromSharedOrder(current, sharedOrder);
+    });
+
+    // También se guarda el mismo estatus en el caché del detalle. Así, si
+    // después se pierde la conexión, el index y el detalle siguen mostrando
+    // exactamente el último estatus efectivo conocido.
+    (async () => {
+      const orderId = String(id || "").trim();
+      if (!orderId) return;
+
+      const cached = await loadOrdenTecnicoDetail(orderId);
+      if (!cached?.data) return;
+
+      const cachedCode = normalizeCode(
+        cached?.data?.estatus_code ?? cached?.data?.userstatus ?? "",
+      );
+      if (cachedCode === sharedCode) return;
+
+      await safeSaveDetailIfWindow(
+        orderId,
+        mergeStatusFromSharedOrder(cached.data, sharedOrder),
+      );
+    })().catch((error) => {
+      console.log(
+        "[DETALLE] No se pudo sincronizar el estatus del index:",
+        error?.message || error,
+      );
+    });
+  }, [
+    id,
+    sharedOrder?.estatus_code,
+    sharedOrder?.userstatus,
+    sharedOrder?.Userstatus,
+    sharedOrder?.UserStatus,
+    sharedOrder?.UserStText,
+  ]);
 
   if (loading) {
     return (
