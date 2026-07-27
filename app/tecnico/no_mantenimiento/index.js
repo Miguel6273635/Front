@@ -10,8 +10,12 @@ import {
   ActivityIndicator,
   RefreshControl,
   Alert,
+  Platform,
+  Modal,
+  ScrollView,
+  Pressable,
 } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
+import DateTimePicker from "@react-native-community/datetimepicker";
 import { useLocalSearchParams, router } from "expo-router";
 
 import Header from "../../../src/components/Header";
@@ -19,20 +23,69 @@ import { useAuth } from "../../../src/context/AuthContext";
 import { useOrdenesTecnico } from "../../../src/context/OrdenesTecnicoContext";
 import { loadOrdenTecnicoDetail } from "../../../src/offline/ordenesTecnicoCache";
 
-/* ===================== Utils ===================== */
-const COLORS = {
-  pageBg: "#F4F6F9",
+/* ===================== Paleta ===================== */
+const FIORI = {
+  pageBg: "#F7F7F7",
   cardBg: "#FFFFFF",
-  border: "#E4E9F0",
-  title: "#0B1F3B",
-  text: "#52616B",
+  cardSubtle: "#F5F7FA",
+  border: "#DDE6F2",
+  ink: "#0B1F3B",
+  textMuted: "#63718B",
   accent: "#0A6ED1",
+  neutralBtn: "#ECEFF5",
+  noMantto: "#B90909",
 };
 
 const ESTATUS_CARTA_NO_MANTTO = "0600";
 const ESTATUS_CARTA_NO_MANTTO_LABEL = "Carta No Mantto";
 
-const safeStr = (v) => (v == null ? "" : String(v));
+const MONTHS = [
+  "Enero",
+  "Febrero",
+  "Marzo",
+  "Abril",
+  "Mayo",
+  "Junio",
+  "Julio",
+  "Agosto",
+  "Septiembre",
+  "Octubre",
+  "Noviembre",
+  "Diciembre",
+];
+
+/* ===================== Utilidades ===================== */
+const safeStr = (value) => (value == null ? "" : String(value));
+
+const atStartOfDay = (value) => {
+  const date = new Date(value);
+  date.setHours(0, 0, 0, 0);
+  return date;
+};
+
+const atEndOfDay = (value) => {
+  const date = new Date(value);
+  date.setHours(23, 59, 59, 999);
+  return date;
+};
+
+const startOfMonth = (value) =>
+  new Date(value.getFullYear(), value.getMonth(), 1, 0, 0, 0, 0);
+
+const endOfMonth = (value) =>
+  new Date(
+    value.getFullYear(),
+    value.getMonth() + 1,
+    0,
+    23,
+    59,
+    59,
+    999,
+  );
+
+const startOfYear = (year) => new Date(year, 0, 1, 0, 0, 0, 0);
+
+const endOfYear = (year) => new Date(year, 11, 31, 23, 59, 59, 999);
 
 const parseSapDate = (value) => {
   if (!value) return null;
@@ -50,6 +103,7 @@ const parseSapDate = (value) => {
   if (!text) return null;
 
   const sapMatch = text.match(/\/Date\((-?\d+)(?:[+-]\d+)?\)\//);
+
   if (sapMatch) {
     const milliseconds = Number(sapMatch[1]);
     if (!Number.isFinite(milliseconds)) return null;
@@ -58,12 +112,13 @@ const parseSapDate = (value) => {
     return Number.isNaN(date.getTime()) ? null : date;
   }
 
+  // Formato SAP yyyyMMdd.
   if (/^\d{8}$/.test(text)) {
     const year = Number(text.slice(0, 4));
     const month = Number(text.slice(4, 6)) - 1;
     const day = Number(text.slice(6, 8));
-
     const date = new Date(year, month, day);
+
     return Number.isNaN(date.getTime()) ? null : date;
   }
 
@@ -71,30 +126,39 @@ const parseSapDate = (value) => {
   return Number.isNaN(date.getTime()) ? null : date;
 };
 
+const formatDateDMY = (value) => {
+  const date = parseSapDate(value);
+  if (!date) return "—";
+
+  return date.toLocaleDateString("es-MX", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  });
+};
+
 function normalizeCode(code) {
-  const s = safeStr(code).trim();
-  if (!s) return "";
+  const text = safeStr(code).trim();
+  if (!text) return "";
 
-  const n = parseInt(s, 10);
-  if (Number.isNaN(n)) return s;
+  const number = parseInt(text, 10);
+  if (Number.isNaN(number)) return text;
 
-  return String(n).padStart(4, "0");
+  return String(number).padStart(4, "0");
 }
 
 function extractStatusCodes(userstatusRaw) {
-  const s = safeStr(userstatusRaw).trim();
-  if (!s) return [];
+  const text = safeStr(userstatusRaw).trim();
+  if (!text) return [];
 
-  const matches = s.match(/\d{1,4}/g) || [];
-
+  const matches = text.match(/\d{1,4}/g) || [];
   const codes = matches
-    .map((x) => normalizeCode(x))
-    .filter((x) => /^\d{4}$/.test(x));
+    .map((value) => normalizeCode(value))
+    .filter((value) => /^\d{4}$/.test(value));
 
   return Array.from(new Set(codes));
 }
 
-// Carta No Mantto únicamente se identifica con 0600.
 function isCartaNoManttoByUserstatus(userstatusRaw, estatusCodeRaw) {
   const codes = extractStatusCodes(userstatusRaw);
   const apiCode = normalizeCode(estatusCodeRaw);
@@ -105,15 +169,124 @@ function isCartaNoManttoByUserstatus(userstatusRaw, estatusCodeRaw) {
   );
 }
 
-function formatDateTime(value) {
-  const date = parseSapDate(value);
-  if (!date) return "—";
+function getOrderId(item = {}) {
+  return safeStr(
+    item?.Orderid || item?.OrderId || item?.OrderID || item?.orderid,
+  ).trim();
+}
 
-  return date.toLocaleDateString("es-MX", {
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-  });
+function getOrderIdDisplay(item = {}) {
+  const raw = getOrderId(item);
+  if (!raw) return "";
+
+  return raw.replace(/^0+/, "") || raw;
+}
+
+function getEquipment(item = {}) {
+  return safeStr(
+    item?.equipment || item?.Equipment || item?.EQUIPMENT,
+  ).trim();
+}
+
+function getStartDateValue(item = {}) {
+  return (
+    item?.start_date ||
+    item?.StartDate ||
+    item?.startDate ||
+    item?.BasicStartDate ||
+    item?.BasicStart ||
+    null
+  );
+}
+
+function getFinishDateValue(item = {}) {
+  return (
+    item?.finish_date ||
+    item?.FinishDate ||
+    item?.finishDate ||
+    item?.BasicFinDate ||
+    item?.BasicFinish ||
+    null
+  );
+}
+
+function getOrderType(item = {}) {
+  return safeStr(
+    item?.order_type ||
+      item?.OrderType ||
+      item?.Ordertype ||
+      item?.Auart,
+  ).trim();
+}
+
+function getCoberturaOrden(item = {}) {
+  const raw = safeStr(
+    item?.ShortText ||
+      item?.shortText ||
+      item?.shorttext ||
+      item?.short_text ||
+      item?.coverage ||
+      item?.cobertura,
+  ).trim();
+
+  if (!raw) return "";
+
+  const upper = raw.toUpperCase();
+
+  if (upper.includes("BASICA") || upper.includes("BÁSICA")) {
+    return "BÁSICA";
+  }
+
+  if (upper.includes("MEDIA")) {
+    return "MEDIA";
+  }
+
+  if (
+    upper.includes("SEMI FULL") ||
+    upper.includes("SEMIFULL") ||
+    upper.includes("SEMI")
+  ) {
+    return "SEMIFULL";
+  }
+
+  if (upper.includes("FULL")) {
+    return "FULL";
+  }
+
+  return raw.split("|")[0].replace(/COBERTURA/gi, "").trim();
+}
+
+function isWithinRange(date, start, end) {
+  if (!date) return false;
+
+  const timestamp = date.getTime();
+  if (start && timestamp < atStartOfDay(start).getTime()) return false;
+  if (end && timestamp > atEndOfDay(end).getTime()) return false;
+
+  return true;
+}
+
+function matchesQuery(item, query) {
+  const needle = safeStr(query).trim().toLowerCase();
+  if (!needle) return true;
+
+  const fields = [
+    getOrderId(item),
+    getOrderIdDisplay(item),
+    getOrderType(item),
+    getEquipment(item),
+    getCoberturaOrden(item),
+    ESTATUS_CARTA_NO_MANTTO_LABEL,
+    item?.partner_name,
+    item?.partner_address,
+    item?.estatus_code,
+    item?.estatus_label,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  return fields.includes(needle);
 }
 
 async function mergeRowsWithCachedDetails(items = []) {
@@ -121,13 +294,7 @@ async function mergeRowsWithCachedDetails(items = []) {
 
   return Promise.all(
     source.map(async (item) => {
-      const orderId = safeStr(
-        item?.Orderid ||
-          item?.OrderId ||
-          item?.OrderID ||
-          item?.orderid,
-      ).trim();
-
+      const orderId = getOrderId(item);
       if (!orderId) return item;
 
       try {
@@ -139,46 +306,36 @@ async function mergeRowsWithCachedDetails(items = []) {
         return {
           ...detail,
           ...item,
-          Orderid:
-            item?.Orderid ||
-            item?.OrderId ||
-            item?.OrderID ||
-            item?.orderid ||
-            detail?.Orderid ||
-            detail?.OrderId ||
-            detail?.orderid ||
-            orderId,
+
+          Orderid: getOrderId(item) || getOrderId(detail) || orderId,
+
           equipment:
-            item?.equipment ||
-            item?.Equipment ||
-            item?.EQUIPMENT ||
-            detail?.equipment ||
-            detail?.Equipment ||
-            detail?.EQUIPMENT ||
+            getEquipment(item) ||
+            getEquipment(detail) ||
             "",
+
           start_date:
-            item?.start_date ||
-            item?.StartDate ||
-            item?.startDate ||
-            item?.BasicStartDate ||
-            item?.BasicStart ||
-            detail?.start_date ||
-            detail?.StartDate ||
-            detail?.startDate ||
-            detail?.BasicStartDate ||
-            detail?.BasicStart ||
+            getStartDateValue(item) ||
+            getStartDateValue(detail) ||
             "",
+
           finish_date:
-            item?.finish_date ||
-            item?.FinishDate ||
-            item?.finishDate ||
-            item?.BasicFinDate ||
-            item?.BasicFinish ||
-            detail?.finish_date ||
-            detail?.FinishDate ||
-            detail?.finishDate ||
-            detail?.BasicFinDate ||
-            detail?.BasicFinish ||
+            getFinishDateValue(item) ||
+            getFinishDateValue(detail) ||
+            "",
+
+          order_type:
+            getOrderType(item) ||
+            getOrderType(detail) ||
+            "",
+
+          ShortText:
+            item?.ShortText ||
+            item?.short_text ||
+            item?.shortText ||
+            detail?.ShortText ||
+            detail?.short_text ||
+            detail?.shortText ||
             "",
         };
       } catch (error) {
@@ -187,13 +344,14 @@ async function mergeRowsWithCachedDetails(items = []) {
           orderId,
           error?.message || error,
         );
+
         return item;
       }
     }),
   );
 }
 
-/* ===================== Screen ===================== */
+/* ===================== Pantalla ===================== */
 export default function TecnicoNoMantenimientoIndex() {
   const { user } = useAuth();
   const {
@@ -204,86 +362,132 @@ export default function TecnicoNoMantenimientoIndex() {
     refresh: refreshCentral,
   } = useOrdenesTecnico();
 
-  const correo = useMemo(() => {
-    return safeStr(
-      user?.email || user?.correo || user?.upn || user?.username,
-    ).trim();
-  }, [user]);
+  const correo = useMemo(
+    () =>
+      safeStr(
+        user?.email ||
+          user?.correo ||
+          user?.upn ||
+          user?.username,
+      ).trim(),
+    [user],
+  );
 
-  const [rows, setRows] = useState([]);
-  const [q, setQ] = useState("");
+  const now = new Date();
+
+  const [allRows, setAllRows] = useState([]);
+  const [query, setQuery] = useState("");
+  const [preparing, setPreparing] = useState(false);
+
+  const [dateMode, setDateMode] = useState("all");
+
+  const [dayRef, setDayRef] = useState(new Date());
+  const [showDayPicker, setShowDayPicker] = useState(false);
+
+  const [weekStart, setWeekStart] = useState(null);
+  const [weekEnd, setWeekEnd] = useState(null);
+  const [showWeekStartPicker, setShowWeekStartPicker] = useState(false);
+  const [showWeekEndPicker, setShowWeekEndPicker] = useState(false);
+
+  const [monthYear, setMonthYear] = useState({
+    month: now.getMonth(),
+    year: now.getFullYear(),
+  });
+  const [showMonthModal, setShowMonthModal] = useState(false);
+
+  const [yearOnly, setYearOnly] = useState(now.getFullYear());
+  const [showYearModal, setShowYearModal] = useState(false);
 
   const params = useLocalSearchParams();
   const { refresh: refreshParam } = params;
 
-  const applySharedLista = useCallback(async (data = []) => {
+  const selectedRange = useMemo(() => {
+    if (dateMode === "all") {
+      return { start: null, end: null };
+    }
+
+    if (dateMode === "day") {
+      return {
+        start: atStartOfDay(dayRef),
+        end: atEndOfDay(dayRef),
+      };
+    }
+
+    if (dateMode === "weekRange") {
+      return {
+        start: weekStart ? atStartOfDay(weekStart) : null,
+        end: weekEnd ? atEndOfDay(weekEnd) : null,
+      };
+    }
+
+    if (dateMode === "month") {
+      const reference = new Date(monthYear.year, monthYear.month, 1);
+
+      return {
+        start: startOfMonth(reference),
+        end: endOfMonth(reference),
+      };
+    }
+
+    if (dateMode === "year") {
+      return {
+        start: startOfYear(yearOnly),
+        end: endOfYear(yearOnly),
+      };
+    }
+
+    return { start: null, end: null };
+  }, [dateMode, dayRef, weekStart, weekEnd, monthYear, yearOnly]);
+
+  const applySharedLista = useCallback(
+    async (data = []) => {
       if (!correo) {
-        setRows([]);
+        setAllRows([]);
         return [];
       }
 
-      const source = await mergeRowsWithCachedDetails(
-        Array.isArray(data) ? data : [],
-      );
-      const filtradas = source.filter((it) => {
-        const us =
-          it?.userstatus ||
-          it?.Userstatus ||
-          it?.UserStatus ||
-          it?.UserStText ||
-          "";
-        const estatusCode =
-          it?.estatus_code ||
-          it?.EstatusCode ||
-          it?.StatusCode ||
-          it?.Status ||
-          "";
+      setPreparing(true);
 
-        return isCartaNoManttoByUserstatus(us, estatusCode);
-      });
+      try {
+        const source = await mergeRowsWithCachedDetails(
+          Array.isArray(data) ? data : [],
+        );
 
-      const s = q.trim().toLowerCase();
+        const noMantenimiento = source.filter((item) => {
+          const userstatus =
+            item?.userstatus ||
+            item?.Userstatus ||
+            item?.UserStatus ||
+            item?.UserStText ||
+            "";
 
-      const buscadas = !s
-        ? filtradas
-        : filtradas.filter((it) => {
-            const order = safeStr(
-              it?.Orderid || it?.OrderId || it?.OrderID || it?.orderid,
-            ).toLowerCase();
+          const estatusCode =
+            item?.estatus_code ||
+            item?.EstatusCode ||
+            item?.StatusCode ||
+            item?.Status ||
+            "";
 
-            const equip = safeStr(
-              it?.equipment || it?.Equipment || it?.EQUIPMENT,
-            ).toLowerCase();
-            const text = safeStr(
-              it?.ShortText || it?.short_text || it?.shortText,
-            ).toLowerCase();
-            const us = safeStr(
-              it?.userstatus ||
-                it?.Userstatus ||
-                it?.UserStatus ||
-                it?.UserStText,
-            ).toLowerCase();
+          return isCartaNoManttoByUserstatus(userstatus, estatusCode);
+        });
 
-            return (
-              order.includes(s) ||
-              equip.includes(s) ||
-              text.includes(s) ||
-              us.includes(s) ||
-              ESTATUS_CARTA_NO_MANTTO_LABEL.toLowerCase().includes(s)
-            );
-          });
-
-      setRows(buscadas);
-      return buscadas;
-  }, [q, correo]);
+        setAllRows(noMantenimiento);
+        return noMantenimiento;
+      } finally {
+        setPreparing(false);
+      }
+    },
+    [correo],
+  );
 
   useEffect(() => {
     let cancelled = false;
 
     (async () => {
       try {
-        const prepared = await applySharedLista(ordenesCompartidas);
-        if (cancelled) return prepared;
+        if (!cancelled) {
+          await applySharedLista(ordenesCompartidas);
+        }
       } catch (error) {
         console.log(
           "[NO MANTENIMIENTO] Error preparando la lista:",
@@ -297,6 +501,22 @@ export default function TecnicoNoMantenimientoIndex() {
     };
   }, [applySharedLista, ordenesCompartidas]);
 
+  const rows = useMemo(() => {
+    return allRows.filter((item) => {
+      if (!matchesQuery(item, query)) return false;
+
+      if (dateMode === "all") return true;
+
+      const startDate = parseSapDate(getStartDateValue(item));
+
+      return isWithinRange(
+        startDate,
+        selectedRange.start,
+        selectedRange.end,
+      );
+    });
+  }, [allRows, query, dateMode, selectedRange]);
+
   const reloadListaLocal = useCallback(async () => {
     const cached = await loadLocal();
     return applySharedLista(cached?.data || []);
@@ -307,23 +527,38 @@ export default function TecnicoNoMantenimientoIndex() {
       const result = await refreshCentral();
       await applySharedLista(result?.cached?.data || []);
       return result;
-    } catch (e) {
-      console.error("Error actualizando Carta No Mantto:", e?.message || e);
+    } catch (error) {
+      console.error(
+        "Error actualizando Carta No Mantto:",
+        error?.message || error,
+      );
+
       await reloadListaLocal();
-      return { ok: false, error: e };
+      return { ok: false, error };
     }
   }, [applySharedLista, refreshCentral, reloadListaLocal]);
 
   useEffect(() => {
-    if (refreshParam) reloadListaLocal();
+    if (refreshParam) {
+      reloadListaLocal();
+    }
   }, [refreshParam, reloadListaLocal]);
 
-  const onPullRefresh = refreshLista;
+  const clearFilters = useCallback(() => {
+    setQuery("");
+    setDateMode("all");
+    setDayRef(new Date());
+    setWeekStart(null);
+    setWeekEnd(null);
+    setMonthYear({
+      month: new Date().getMonth(),
+      year: new Date().getFullYear(),
+    });
+    setYearOnly(new Date().getFullYear());
+  }, []);
 
   const openDetalle = (item) => {
-    const orderId = safeStr(
-      item?.Orderid || item?.OrderId || item?.OrderID || item?.orderid,
-    ).trim();
+    const orderId = getOrderId(item);
 
     if (!orderId) {
       Alert.alert("Error", "No se pudo determinar la orden.");
@@ -336,214 +571,896 @@ export default function TecnicoNoMantenimientoIndex() {
     });
   };
 
-  const renderItem = ({ item }) => {
-    const orderId = safeStr(
-      item?.Orderid || item?.OrderId || item?.OrderID || item?.orderid,
-    );
+  const activeRangeText = useMemo(() => {
+    if (dateMode === "all") {
+      return "Todas las órdenes disponibles";
+    }
 
-    const equipment =
-      item?.equipment || item?.Equipment || item?.EQUIPMENT || "—";
+    if (dateMode === "day") {
+      return `Día: ${atStartOfDay(dayRef).toLocaleDateString("es-MX")}`;
+    }
 
-    const startLabel = formatDateTime(
-      item?.start_date ||
-        item?.StartDate ||
-        item?.startDate ||
-        item?.BasicStartDate ||
-        item?.BasicStart,
-    );
+    if (dateMode === "weekRange") {
+      const startText = weekStart
+        ? atStartOfDay(weekStart).toLocaleDateString("es-MX")
+        : "—";
 
-    const finishLabel = formatDateTime(
-      item?.finish_date ||
-        item?.FinishDate ||
-        item?.finishDate ||
-        item?.BasicFinDate ||
-        item?.BasicFinish,
-    );
+      const endText = weekEnd
+        ? atEndOfDay(weekEnd).toLocaleDateString("es-MX")
+        : "—";
+
+      return `Semana (rango): ${startText} → ${endText}`;
+    }
+
+    if (dateMode === "month") {
+      return `Mes: ${MONTHS[monthYear.month]} ${monthYear.year}`;
+    }
+
+    if (dateMode === "year") {
+      return `Año: ${yearOnly}`;
+    }
+
+    return "";
+  }, [dateMode, dayRef, weekStart, weekEnd, monthYear, yearOnly]);
+
+  const YearPickerContent = ({
+    selectedYear,
+    onSelect,
+    from = now.getFullYear() - 10,
+    to = now.getFullYear() + 2,
+  }) => {
+    const years = [];
+
+    for (let year = to; year >= from; year -= 1) {
+      years.push(year);
+    }
 
     return (
-      <TouchableOpacity
-        style={styles.card}
-        onPress={() => openDetalle(item)}
-        activeOpacity={0.75}
-      >
-        <View style={styles.rowBetween}>
-          <Text style={styles.title}>Orden {orderId || "—"}</Text>
-
-          <View style={styles.pill}>
-            <Text style={styles.pillText}>{ESTATUS_CARTA_NO_MANTTO_LABEL}</Text>
-          </View>
-        </View>
-
-        <Text style={styles.line}>
-          <Text style={styles.label}>Equipo: </Text>
-          {safeStr(equipment)}
-        </Text>
-
-        <Text style={styles.line}>
-          <Text style={styles.label}>Texto: </Text>
-          {safeStr(
-            item?.ShortText || item?.short_text || item?.shortText || "—",
-          )}
-        </Text>
-
-        <Text style={styles.line}>
-          <Text style={styles.label}>Estatus: </Text>
-          {ESTATUS_CARTA_NO_MANTTO_LABEL}
-        </Text>
-
-        <Text style={[styles.line, { fontSize: 12, marginTop: 6 }]}>
-          <Text style={styles.label}>Inicio: </Text>
-          {startLabel}
-          {"  ·  "}
-          <Text style={styles.label}>Fin: </Text>
-          {finishLabel}
-        </Text>
-      </TouchableOpacity>
+      <ScrollView style={{ maxHeight: 320 }}>
+        {years.map((year) => (
+          <TouchableOpacity
+            key={year}
+            style={[
+              styles.yearItem,
+              selectedYear === year && styles.yearItemActive,
+            ]}
+            onPress={() => onSelect(year)}
+          >
+            <Text
+              style={[
+                styles.yearItemText,
+                selectedYear === year && styles.yearItemTextActive,
+              ]}
+            >
+              {year}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </ScrollView>
     );
   };
 
+  const renderItem = ({ item }) => {
+    const orderIdDisplay = getOrderIdDisplay(item);
+    const equipment = getEquipment(item);
+    const orderType = getOrderType(item);
+    const coberturaLabel = getCoberturaOrden(item);
+
+    const startLabel = formatDateDMY(getStartDateValue(item));
+    const finishLabel = formatDateDMY(getFinishDateValue(item));
+
+    return (
+      <Pressable
+        style={[
+          styles.card,
+          styles.cardNoMant,
+          { borderLeftColor: FIORI.noMantto },
+        ]}
+        onPress={() => openDetalle(item)}
+      >
+        <View style={styles.cardTopRow}>
+          <Text style={styles.cardTitle} numberOfLines={1}>
+            #{orderIdDisplay || "—"}{" "}
+            {!!orderType && (
+              <Text style={styles.cardSubtitle}>• {orderType}</Text>
+            )}
+          </Text>
+
+          <View
+            style={[
+              styles.badge,
+              { backgroundColor: `${FIORI.noMantto}1A` },
+            ]}
+          >
+            <View
+              style={[
+                styles.statusDot,
+                { backgroundColor: FIORI.noMantto },
+              ]}
+            />
+
+            <Text style={[styles.badgeText, { color: FIORI.noMantto }]}>
+              {ESTATUS_CARTA_NO_MANTTO_LABEL}
+            </Text>
+          </View>
+        </View>
+
+        <View style={styles.cardMiddleRow}>
+          <Text style={styles.infoText} numberOfLines={1}>
+            <Text style={styles.infoStrong}>Eq: </Text>
+            {equipment || "—"}
+          </Text>
+
+          <Text style={styles.infoDateText} numberOfLines={1}>
+            {startLabel} - {finishLabel}
+          </Text>
+        </View>
+
+        <View style={styles.coverageRow}>
+          <Text style={styles.coverageText} numberOfLines={1}>
+            <Text style={styles.coverageLabel}>Cobertura: </Text>
+            {coberturaLabel || "Sin cobertura"}
+          </Text>
+        </View>
+
+        <View style={styles.cardBottomRow}>
+          <Text style={styles.lockText}>
+            Carta No Mantto. Bloqueada.
+          </Text>
+        </View>
+      </Pressable>
+    );
+  };
+
+  const isLoading = loading || preparing;
+
   return (
     <View style={styles.container}>
-      <Header title="Carta No Mantto" />
+      <Header title="No mantenimientos" />
 
-      <View style={styles.content}>
-        <View style={styles.searchBox}>
-          <Ionicons
-            name="search"
-            size={18}
-            color={COLORS.text}
-            style={{ marginRight: 6 }}
-          />
-
+      <View style={styles.filtersWrap}>
+        <View style={styles.searchRow}>
           <TextInput
-            value={q}
-            onChangeText={setQ}
-            placeholder="Buscar por orden, equipo o texto..."
-            placeholderTextColor="#8A96A3"
             style={styles.searchInput}
+            value={query}
+            onChangeText={setQuery}
+            placeholder="Buscar por #, tipo, equipo, cobertura…"
+            placeholderTextColor={FIORI.textMuted}
             returnKeyType="search"
             autoCapitalize="none"
           />
         </View>
 
-        {loading ? (
-          <View style={styles.loadingBox}>
-            <ActivityIndicator size="large" color={COLORS.accent} />
-            <Text style={{ marginTop: 8, color: COLORS.text }}>
-              Cargando…
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipsRow}>
+          <TouchableOpacity
+            style={[styles.chip, dateMode === "all" && styles.chipActive]}
+            onPress={() => setDateMode("all")}
+          >
+            <Text
+              style={[
+                styles.chipText,
+                dateMode === "all" && styles.chipTextActive,
+              ]}
+            >
+              Todas
             </Text>
-          </View>
-        ) : (
-          <FlatList
-            data={rows}
-            keyExtractor={(it, idx) =>
-              safeStr(it?.Orderid || it?.OrderId || it?.OrderID || idx)
-            }
-            renderItem={renderItem}
-            contentContainerStyle={{ paddingBottom: 90 }}
-            refreshControl={
-              <RefreshControl
-                refreshing={refreshing}
-                onRefresh={onPullRefresh}
-              />
-            }
-            ListEmptyComponent={
-              <Text style={styles.emptyText}>
-                No hay órdenes de Carta No Mantto.
-              </Text>
-            }
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.chip, dateMode === "day" && styles.chipActive]}
+            onPress={() => {
+              setDateMode("day");
+              setShowDayPicker(true);
+            }}
+          >
+            <Text
+              style={[
+                styles.chipText,
+                dateMode === "day" && styles.chipTextActive,
+              ]}
+            >
+              Día
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[
+              styles.chip,
+              dateMode === "weekRange" && styles.chipActive,
+            ]}
+            onPress={() => {
+              setDateMode("weekRange");
+              setShowWeekStartPicker(true);
+            }}
+          >
+            <Text
+              style={[
+                styles.chipText,
+                dateMode === "weekRange" && styles.chipTextActive,
+              ]}
+            >
+              Semana
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.chip, dateMode === "month" && styles.chipActive]}
+            onPress={() => {
+              setDateMode("month");
+              setShowMonthModal(true);
+            }}
+          >
+            <Text
+              style={[
+                styles.chipText,
+                dateMode === "month" && styles.chipTextActive,
+              ]}
+            >
+              Mes
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.chip, dateMode === "year" && styles.chipActive]}
+            onPress={() => {
+              setDateMode("year");
+              setShowYearModal(true);
+            }}
+          >
+            <Text
+              style={[
+                styles.chipText,
+                dateMode === "year" && styles.chipTextActive,
+              ]}
+            >
+              Año
+            </Text>
+          </TouchableOpacity>
+        </ScrollView>
+
+        <View style={styles.filterActionsRow}>
+          <TouchableOpacity
+            style={styles.clearBtn}
+            onPress={clearFilters}
+            activeOpacity={0.85}
+          >
+            <Text style={styles.clearBtnText}>Limpiar</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.refreshBtn}
+            onPress={refreshLista}
+            activeOpacity={0.85}
+          >
+            <Text style={styles.refreshBtnText}>Recargar</Text>
+          </TouchableOpacity>
+        </View>
+
+        <Text style={styles.activeRangeText}>
+          {activeRangeText} · {rows.length} orden
+          {rows.length === 1 ? "" : "es"}
+        </Text>
+
+        {showDayPicker && (
+          <DateTimePicker
+            value={dayRef || new Date()}
+            mode="date"
+            display={Platform.OS === "ios" ? "inline" : "default"}
+            onChange={(event, date) => {
+              if (Platform.OS === "android") {
+                setShowDayPicker(false);
+                if (event.type !== "set") return;
+              }
+
+              if (date) setDayRef(date);
+            }}
           />
         )}
+
+        {showWeekStartPicker && (
+          <DateTimePicker
+            value={weekStart || new Date()}
+            mode="date"
+            display={Platform.OS === "ios" ? "inline" : "default"}
+            onChange={(event, date) => {
+              if (Platform.OS === "android") {
+                setShowWeekStartPicker(false);
+                if (event.type !== "set") return;
+              }
+
+              if (date) {
+                setWeekStart(date);
+
+                if (
+                  weekEnd &&
+                  atStartOfDay(weekEnd).getTime() <
+                    atStartOfDay(date).getTime()
+                ) {
+                  setWeekEnd(null);
+                }
+
+                if (Platform.OS !== "ios") {
+                  setShowWeekEndPicker(true);
+                }
+              }
+            }}
+          />
+        )}
+
+        {showWeekEndPicker && (
+          <DateTimePicker
+            value={weekEnd || weekStart || new Date()}
+            mode="date"
+            minimumDate={weekStart || undefined}
+            display={Platform.OS === "ios" ? "inline" : "default"}
+            onChange={(event, date) => {
+              if (Platform.OS === "android") {
+                setShowWeekEndPicker(false);
+                if (event.type !== "set") return;
+              }
+
+              if (date) setWeekEnd(date);
+            }}
+          />
+        )}
+
+        {dateMode === "weekRange" && (
+          <View style={styles.rangeButtonsRow}>
+            <TouchableOpacity
+              style={styles.smallBtn}
+              onPress={() => setShowWeekStartPicker(true)}
+            >
+              <Text style={styles.smallBtnText}>
+                Inicio:{" "}
+                {weekStart
+                  ? weekStart.toLocaleDateString("es-MX")
+                  : "—"}
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.smallBtn}
+              onPress={() => setShowWeekEndPicker(true)}
+            >
+              <Text style={styles.smallBtnText}>
+                Fin:{" "}
+                {weekEnd
+                  ? weekEnd.toLocaleDateString("es-MX")
+                  : "—"}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        )}
       </View>
+
+      <Modal
+        visible={showMonthModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowMonthModal(false)}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <View style={styles.modalHeader}>
+              <TouchableOpacity
+                onPress={() =>
+                  setMonthYear((current) => ({
+                    ...current,
+                    year: current.year - 1,
+                  }))
+                }
+              >
+                <Text style={styles.modalHeaderBtn}>‹</Text>
+              </TouchableOpacity>
+
+              <Text style={styles.modalHeaderTitle}>
+                {monthYear.year}
+              </Text>
+
+              <TouchableOpacity
+                onPress={() =>
+                  setMonthYear((current) => ({
+                    ...current,
+                    year: current.year + 1,
+                  }))
+                }
+              >
+                <Text style={styles.modalHeaderBtn}>›</Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.monthGrid}>
+              {MONTHS.map((month, index) => {
+                const active =
+                  index === monthYear.month && dateMode === "month";
+
+                return (
+                  <TouchableOpacity
+                    key={month}
+                    style={[
+                      styles.monthCell,
+                      active && styles.monthCellActive,
+                    ]}
+                    onPress={() => {
+                      setMonthYear({
+                        month: index,
+                        year: monthYear.year,
+                      });
+                      setShowMonthModal(false);
+                    }}
+                  >
+                    <Text
+                      style={[
+                        styles.monthCellText,
+                        active && styles.monthCellTextActive,
+                      ]}
+                    >
+                      {month}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+
+            <TouchableOpacity
+              style={styles.modalClose}
+              onPress={() => setShowMonthModal(false)}
+            >
+              <Text style={styles.modalCloseText}>Cerrar</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={showYearModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowYearModal(false)}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <Text style={[styles.modalHeaderTitle, { marginBottom: 8 }]}>
+              Selecciona un año
+            </Text>
+
+            <YearPickerContent
+              selectedYear={yearOnly}
+              onSelect={(year) => {
+                setYearOnly(year);
+                setShowYearModal(false);
+              }}
+            />
+
+            <TouchableOpacity
+              style={styles.modalClose}
+              onPress={() => setShowYearModal(false)}
+            >
+              <Text style={styles.modalCloseText}>Cerrar</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {isLoading && allRows.length === 0 ? (
+        <View style={styles.loadingBox}>
+          <ActivityIndicator size="large" color={FIORI.accent} />
+          <Text style={styles.loadingText}>Cargando…</Text>
+        </View>
+      ) : (
+        <FlatList
+          data={rows}
+          keyExtractor={(item, index) =>
+            getOrderId(item) || `no-mantto-${index}`
+          }
+          renderItem={renderItem}
+          contentContainerStyle={styles.listContent}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={refreshLista}
+              colors={[FIORI.accent]}
+              tintColor={FIORI.accent}
+            />
+          }
+          ListEmptyComponent={
+            <Text style={styles.emptyText}>
+              No hay órdenes de Carta No Mantto con los filtros actuales.
+            </Text>
+          }
+        />
+      )}
     </View>
   );
 }
 
-/* ===================== Styles ===================== */
+/* ===================== Estilos ===================== */
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: COLORS.pageBg,
+    backgroundColor: FIORI.pageBg,
   },
 
-  content: {
-    flex: 1,
-    padding: 14,
+  filtersWrap: {
+    paddingHorizontal: 16,
+    paddingTop: 10,
+    paddingBottom: 6,
+    backgroundColor: FIORI.cardBg,
+    borderBottomColor: FIORI.border,
+    borderBottomWidth: 1,
+    ...Platform.select({
+      ios: {
+        shadowColor: "#000",
+        shadowOpacity: 0.03,
+        shadowRadius: 6,
+        shadowOffset: { width: 0, height: 2 },
+      },
+      android: {
+        elevation: 1,
+      },
+      default: {},
+    }),
   },
 
-  searchBox: {
+  searchRow: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#FFF",
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    borderRadius: 16,
-    paddingHorizontal: 10,
-    paddingVertical: 10,
-    marginBottom: 12,
   },
 
   searchInput: {
     flex: 1,
-    color: COLORS.title,
-    fontSize: 13,
+    backgroundColor: FIORI.cardSubtle,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: Platform.OS === "ios" ? 10 : 8,
+    fontSize: 14,
+    color: FIORI.ink,
+    borderWidth: 1,
+    borderColor: FIORI.border,
+  },
+
+  chipsRow: {
+    gap: 8,
+    paddingTop: 8,
+    paddingRight: 12,
+  },
+
+  chip: {
+    borderWidth: 1,
+    borderColor: FIORI.border,
+    borderRadius: 999,
+    paddingHorizontal: 11,
+    paddingVertical: 6,
+    backgroundColor: FIORI.cardBg,
+  },
+
+  chipActive: {
+    backgroundColor: FIORI.accent,
+    borderColor: FIORI.accent,
+  },
+
+  chipText: {
+    color: FIORI.ink,
+    fontWeight: "700",
+    fontSize: 12,
+  },
+
+  chipTextActive: {
+    color: "#FFFFFF",
+  },
+
+  clearBtn: {
+    backgroundColor: FIORI.neutralBtn,
+    paddingHorizontal: 11,
+    paddingVertical: 6,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: FIORI.border,
+  },
+
+  clearBtnText: {
+    color: FIORI.ink,
+    fontWeight: "700",
+    fontSize: 12,
+  },
+
+  refreshBtn: {
+    backgroundColor: FIORI.accent,
+    paddingHorizontal: 11,
+    paddingVertical: 6,
+    borderRadius: 999,
+  },
+
+  refreshBtnText: {
+    color: "#FFFFFF",
+    fontWeight: "800",
+    fontSize: 12,
+  },
+
+  filterActionsRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
+    gap: 8,
+    marginTop: 8,
+  },
+
+  activeRangeText: {
+    marginTop: 8,
+    color: FIORI.textMuted,
+    fontSize: 12,
+  },
+
+  rangeButtonsRow: {
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 10,
+    flexWrap: "wrap",
+  },
+
+  smallBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: FIORI.cardSubtle,
+    borderWidth: 1,
+    borderColor: FIORI.border,
+  },
+
+  smallBtnText: {
+    color: FIORI.ink,
+    fontWeight: "600",
+  },
+
+  listContent: {
+    padding: 12,
+    paddingTop: 6,
+    paddingBottom: 90,
   },
 
   loadingBox: {
-    paddingTop: 24,
+    paddingTop: 40,
     alignItems: "center",
   },
 
+  loadingText: {
+    marginTop: 8,
+    color: FIORI.textMuted,
+  },
+
   emptyText: {
-    color: COLORS.text,
+    color: FIORI.textMuted,
     textAlign: "center",
-    marginTop: 20,
+    marginTop: 24,
   },
 
   card: {
-    backgroundColor: COLORS.cardBg,
-    borderRadius: 18,
-    padding: 14,
-    marginBottom: 12,
+    backgroundColor: FIORI.cardBg,
+    borderRadius: 8,
+    padding: 10,
+    marginBottom: 8,
     borderWidth: 1,
-    borderColor: COLORS.border,
+    borderColor: FIORI.border,
+    borderLeftWidth: 4,
+    shadowColor: "#000",
+    shadowOpacity: 0.03,
+    shadowOffset: { width: 0, height: 1 },
+    shadowRadius: 2,
+    elevation: 1,
   },
 
-  rowBetween: {
+  cardNoMant: {
+    backgroundColor: "#F8F9FA",
+    borderColor: "#E2E2E2",
+  },
+
+  cardTopRow: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
   },
 
-  title: {
-    fontSize: 15,
-    fontWeight: "900",
-    color: COLORS.title,
+  cardTitle: {
+    fontWeight: "800",
+    fontSize: 14,
+    color: FIORI.ink,
     flex: 1,
-    paddingRight: 8,
+    marginRight: 6,
   },
 
-  line: {
-    marginTop: 4,
-    color: COLORS.text,
-    fontSize: 13,
+  cardSubtitle: {
+    fontWeight: "400",
+    color: FIORI.textMuted,
   },
 
-  label: {
-    fontWeight: "900",
-    color: COLORS.title,
+  badge: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+    borderRadius: 6,
   },
 
-  pill: {
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 999,
-    backgroundColor: "#FFF3CD",
+  statusDot: {
+    width: 5,
+    height: 5,
+    borderRadius: 2.5,
+    marginRight: 4,
   },
 
-  pillText: {
+  badgeText: {
+    fontSize: 9,
+    fontWeight: "800",
+    textTransform: "uppercase",
+  },
+
+  cardMiddleRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginTop: 6,
+    gap: 8,
+  },
+
+  infoText: {
+    flex: 1,
+    fontSize: 12,
+    color: FIORI.textMuted,
+  },
+
+  infoStrong: {
+    fontWeight: "700",
+    color: FIORI.ink,
+  },
+
+  infoDateText: {
+    fontSize: 12,
+    color: FIORI.textMuted,
+    textAlign: "right",
+  },
+
+  coverageRow: {
+    marginTop: 6,
+    backgroundColor: FIORI.cardSubtle,
+    borderWidth: 1,
+    borderColor: FIORI.border,
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+  },
+
+  coverageText: {
     fontSize: 11,
+    color: FIORI.textMuted,
+    fontWeight: "600",
+  },
+
+  coverageLabel: {
+    color: FIORI.ink,
+    fontWeight: "800",
+  },
+
+  cardBottomRow: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    alignItems: "center",
+    marginTop: 8,
+  },
+
+  lockText: {
+    color: FIORI.textMuted,
+    fontSize: 11,
+    fontStyle: "italic",
+    flex: 1,
+    textAlign: "right",
+  },
+
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.4)",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 16,
+  },
+
+  modalCard: {
+    width: "100%",
+    maxWidth: 420,
+    backgroundColor: FIORI.cardBg,
+    borderRadius: 12,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: FIORI.border,
+  },
+
+  modalHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 10,
+  },
+
+  modalHeaderTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: FIORI.ink,
+  },
+
+  modalHeaderBtn: {
+    fontSize: 22,
     fontWeight: "900",
-    color: COLORS.title,
+    color: FIORI.accent,
+    paddingHorizontal: 12,
+  },
+
+  monthGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    justifyContent: "space-between",
+  },
+
+  monthCell: {
+    width: "31.5%",
+    backgroundColor: FIORI.cardSubtle,
+    borderRadius: 10,
+    paddingVertical: 12,
+    alignItems: "center",
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: FIORI.border,
+  },
+
+  monthCellActive: {
+    backgroundColor: FIORI.accent,
+    borderColor: FIORI.accent,
+  },
+
+  monthCellText: {
+    color: FIORI.ink,
+    fontWeight: "600",
+  },
+
+  monthCellTextActive: {
+    color: "#FFFFFF",
+  },
+
+  modalClose: {
+    marginTop: 10,
+    alignSelf: "flex-end",
+    backgroundColor: FIORI.accent,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+
+  modalCloseText: {
+    color: "#FFFFFF",
+    fontWeight: "700",
+  },
+
+  yearItem: {
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+    borderRadius: 8,
+    marginBottom: 6,
+    backgroundColor: FIORI.cardSubtle,
+    borderWidth: 1,
+    borderColor: FIORI.border,
+  },
+
+  yearItemActive: {
+    backgroundColor: FIORI.accent,
+    borderColor: FIORI.accent,
+  },
+
+  yearItemText: {
+    fontSize: 16,
+    color: FIORI.ink,
+    fontWeight: "600",
+  },
+
+  yearItemTextActive: {
+    color: "#FFFFFF",
   },
 });

@@ -6,7 +6,6 @@ import {
   Modal,
   ScrollView,
   TouchableOpacity,
-  ActivityIndicator,
   StyleSheet,
   Platform,
   TextInput,
@@ -14,7 +13,6 @@ import {
   KeyboardAvoidingView,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { WebView } from "react-native-webview";
 import Signature from "react-native-signature-canvas";
 
 export default function ModalesDetalleOrden({
@@ -52,14 +50,6 @@ export default function ModalesDetalleOrden({
   avisoCliente,
   setAvisoCliente,
 
-  showNoMantPdfModal,
-  cerrarModalNoMantPdf,
-  loadingNoMantPdf,
-  noMantError,
-  noMantPdfUrl,
-  noMantPdfRawUrl,
-  descargarNoMantPdf,
-  downloadingNoMantPdf,
   onPreviewPdfAntesFirma,
 }) {
   const safeStr = (v) => String(v ?? "").trim();
@@ -624,74 +614,6 @@ export default function ModalesDetalleOrden({
               >
                 <Text style={signPadStyles.secondaryText}>Cerrar</Text>
               </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
-
-      {/* ===== Modal PDF no mantenimiento ===== */}
-      <Modal
-        visible={!!showNoMantPdfModal}
-        animationType="slide"
-        transparent
-        onRequestClose={cerrarModalNoMantPdf}
-      >
-        <View style={styles.modalBackdrop}>
-          <View style={[styles.modalCard, { maxWidth: 600, maxHeight: "90%" }]}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>
-                Carta de no mantenimiento (PDF)
-              </Text>
-              <TouchableOpacity
-                onPress={cerrarModalNoMantPdf}
-                style={styles.modalCloseBtn}
-              >
-                <Ionicons name="close" size={20} color="#fff" />
-              </TouchableOpacity>
-            </View>
-
-            <View style={{ flex: 1, padding: 12 }}>
-              {loadingNoMantPdf ? (
-                <View style={{ alignItems: "center", marginTop: 20 }}>
-                  <ActivityIndicator size="large" color={FIORI.brand} />
-                  <Text style={{ marginTop: 10, color: FIORI.textMuted }}>
-                    Cargando PDF…
-                  </Text>
-                </View>
-              ) : noMantError ? (
-                <Text style={{ color: FIORI.err, marginTop: 10 }}>
-                  {noMantError}
-                </Text>
-              ) : noMantPdfUrl ? (
-                <View style={{ flex: 1, height: 420 }}>
-                  <WebView source={{ uri: noMantPdfUrl }} style={{ flex: 1 }} />
-                </View>
-              ) : (
-                <Text style={{ color: FIORI.textMuted, marginTop: 10 }}>
-                  No se encontró el archivo PDF de la carta de no mantenimiento.
-                </Text>
-              )}
-            </View>
-
-            <View style={styles.modalFooterRow}>
-              <TouchableOpacity
-                style={[styles.smallBtn, { backgroundColor: FIORI.surfaceAlt }]}
-                onPress={cerrarModalNoMantPdf}
-              >
-                <Text style={styles.smallBtnText}>Cerrar</Text>
-              </TouchableOpacity>
-
-              {!!noMantPdfRawUrl && (
-                <TouchableOpacity
-                  style={[styles.smallBtn, { backgroundColor: FIORI.brand }]}
-                  onPress={descargarNoMantPdf}
-                  disabled={!!downloadingNoMantPdf}
-                >
-                  <Text style={[styles.smallBtnText, { color: "#fff" }]}>
-                    {downloadingNoMantPdf ? "Descargando…" : "Descargar"}
-                  </Text>
-                </TouchableOpacity>
-              )}
             </View>
           </View>
         </View>

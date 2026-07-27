@@ -1652,7 +1652,7 @@ export default function ListaOrdenesTecnico() {
           />
         </View>
 
-        <View style={styles.chipsRow}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipsRow}>
           <TouchableOpacity
             style={[styles.chip, dateMode === "all" && styles.chipActive]}
             onPress={() => setDateMode("all")}
@@ -1734,7 +1734,9 @@ export default function ListaOrdenesTecnico() {
               Año
             </Text>
           </TouchableOpacity>
+        </ScrollView>
 
+        <View style={styles.filterActionsRow}>
           <TouchableOpacity
             style={styles.clearBtn}
             onPress={clearFilters}
@@ -2123,54 +2125,56 @@ const styles = StyleSheet.create({
 
   clearBtn: {
     backgroundColor: FIORI.neutralBtn,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 10,
+    paddingHorizontal: 11,
+    paddingVertical: 6,
+    borderRadius: 999,
     borderWidth: 1,
     borderColor: FIORI.border,
   },
 
   clearBtnText: {
     color: FIORI.ink,
-    fontWeight: "600",
+    fontWeight: "700",
+    fontSize: 12,
   },
 
   refreshBtn: {
     backgroundColor: FIORI.accent,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 10,
+    paddingHorizontal: 11,
+    paddingVertical: 6,
+    borderRadius: 999,
   },
 
   refreshBtnText: {
     color: "#fff",
-    fontWeight: "700",
+    fontWeight: "800",
+    fontSize: 12,
   },
 
   syncBtn: {
     backgroundColor: "#111827",
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 10,
+    paddingHorizontal: 11,
+    paddingVertical: 6,
+    borderRadius: 999,
   },
 
   syncBtnText: {
     color: "#fff",
     fontWeight: "800",
+    fontSize: 12,
   },
 
   chipsRow: {
-    flexDirection: "row",
-    flexWrap: "wrap",
     gap: 8,
-    marginTop: 10,
+    paddingTop: 8,
+    paddingRight: 12,
   },
 
   chip: {
     borderWidth: 1,
     borderColor: FIORI.border,
     borderRadius: 999,
-    paddingHorizontal: 12,
+    paddingHorizontal: 11,
     paddingVertical: 6,
     backgroundColor: FIORI.cardBg,
   },
@@ -2182,7 +2186,16 @@ const styles = StyleSheet.create({
 
   chipText: {
     color: FIORI.ink,
-    fontWeight: "600",
+    fontWeight: "700",
+    fontSize: 12,
+  },
+
+  filterActionsRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
+    gap: 8,
+    marginTop: 8,
   },
 
   chipTextActive: {

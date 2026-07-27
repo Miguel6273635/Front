@@ -74,7 +74,6 @@ export default function EncabezadoDetalleOrden({
   allMaterialsLen,
   fmtDMY,
   formatValueForRow,
-  onAbrirPdfNoMant,
   onVerMaterialesOrden,
   orderStartedAtMs,
   orderFinishedAtMs,
@@ -146,18 +145,9 @@ export default function EncabezadoDetalleOrden({
         <Banner
           icon="document-text-outline"
           title='Orden marcada como "Carta No Mantto"'
-          text="Esta orden tiene el estatus 0600. Las operaciones se muestran solo como referencia y no se pueden iniciar."
+          text="Las operaciones se muestran solo como referencia y no se pueden iniciar."
           FIORI={FIORI}
         >
-          {typeof onAbrirPdfNoMant === "function" && (
-            <TouchableOpacity
-              style={[local.btnNoMantBanner, { backgroundColor: FIORI.brand }]}
-              onPress={onAbrirPdfNoMant}
-              activeOpacity={0.9}
-            >
-              <Text style={local.btnNoMantBannerText}>Ver carta PDF</Text>
-            </TouchableOpacity>
-          )}
         </Banner>
       )}
 
@@ -387,20 +377,6 @@ const local = StyleSheet.create({
     lineHeight: 17,
     fontWeight: "700",
     color: "#63718B",
-  },
-
-  btnNoMantBanner: {
-    marginTop: 10,
-    alignSelf: "flex-start",
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    borderRadius: 999,
-  },
-
-  btnNoMantBannerText: {
-    color: "#FFFFFF",
-    fontWeight: "900",
-    fontSize: 12,
   },
 
   panel: {

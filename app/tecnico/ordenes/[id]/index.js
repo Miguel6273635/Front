@@ -1109,13 +1109,6 @@ export default function DetalleOrden() {
 
   const [showAllMaterialsModal, setShowAllMaterialsModal] = useState(false);
 
-  const [showNoMantPdfModal, setShowNoMantPdfModal] = useState(false);
-  const [noMantPdfUrl, setNoMantPdfUrl] = useState(null);
-  const [noMantPdfRawUrl, setNoMantPdfRawUrl] = useState(null);
-  const [loadingNoMantPdf, setLoadingNoMantPdf] = useState(false);
-  const [noMantError, setNoMantError] = useState(null);
-  const [downloadingNoMantPdf, setDownloadingNoMantPdf] = useState(false);
-
   const [finishingOrder, setFinishingOrder] = useState(false);
   const [showSignModal, setShowSignModal] = useState(false);
   const [signatureData, setSignatureData] = useState(null);
@@ -2211,96 +2204,6 @@ export default function DetalleOrden() {
         },
       },
     ]);
-  };
-
-  const abrirModalNoMantPdf = async () => {
-    if (!orden?.Orderid) return;
-
-    setShowNoMantPdfModal(true);
-    setLoadingNoMantPdf(true);
-    setNoMantPdfUrl(null);
-    setNoMantPdfRawUrl(null);
-    setNoMantError(null);
-
-    try {
-      const res = await api.get(
-        `/evidencias/orden/${orden.Orderid}/no-mantenimiento-pdf`,
-      );
-      const { pdf_url } = res.data || {};
-      if (!pdf_url) throw new Error("Sin URL de PDF desde backend");
-
-      const apiBase = api.defaults.baseURL || "";
-      const serverRoot = apiBase.replace(/\/api\/?$/, "");
-
-      const rawUrl = pdf_url.startsWith("http")
-        ? pdf_url
-        : `${serverRoot}${pdf_url}`;
-      setNoMantPdfRawUrl(rawUrl);
-
-      const viewerUrl = `https://docs.google.com/gview?embedded=1&url=${encodeURIComponent(rawUrl)}`;
-      setNoMantPdfUrl(viewerUrl);
-    } catch (error) {
-      console.error(
-        "Error al obtener PDF no mantto:",
-        error?.response?.data || error,
-      );
-      setNoMantError(
-        "No se pudo cargar el PDF de la carta de no mantenimiento.",
-      );
-    } finally {
-      setLoadingNoMantPdf(false);
-    }
-  };
-
-  const cerrarModalNoMantPdf = () => {
-    setShowNoMantPdfModal(false);
-    setNoMantPdfUrl(null);
-    setNoMantPdfRawUrl(null);
-    setNoMantError(null);
-    setDownloadingNoMantPdf(false);
-  };
-
-  const descargarNoMantPdf = async () => {
-    if (!noMantPdfRawUrl) {
-      Alert.alert(
-        "Sin archivo",
-        "No se encontró la URL del PDF para descargar.",
-      );
-      return;
-    }
-
-    try {
-      setDownloadingNoMantPdf(true);
-
-      const filename =
-        noMantPdfRawUrl.split("/").pop() ||
-        `carta-no-mantto_${orden?.Orderid || ""}.pdf`;
-      const localUri = FileSystem.documentDirectory + filename;
-
-      const { uri } = await FileSystem.downloadAsync(noMantPdfRawUrl, localUri);
-
-      const canShare = await Sharing.isAvailableAsync();
-      if (!canShare) {
-        Alert.alert(
-          "Descarga completa",
-          "El PDF se guardó en la carpeta de documentos de la app.",
-        );
-        return;
-      }
-
-      await Sharing.shareAsync(uri, {
-        mimeType: "application/pdf",
-        dialogTitle: "Compartir / guardar carta de no mantenimiento",
-      });
-    } catch (e) {
-      console.error("Error al descargar PDF:", e);
-      Alert.alert(
-        "Error",
-        "No se pudo descargar el PDF. Verifica acceso a la URL del servidor.",
-      );
-    } finally {
-      setDownloadingNoMantPdf(false);
-    }
   };
 
   const handleFinalizarOrden = (e) => {
@@ -3681,7 +3584,6 @@ export default function DetalleOrden() {
             allMaterialsLen={allMaterials.length}
             fmtDMY={fmtDMY}
             formatValueForRow={formatValueForRow}
-            onAbrirPdfNoMant={abrirModalNoMantPdf}
             onVerMaterialesOrden={() => setShowAllMaterialsModal(true)}
             orderStartedAtMs={orderStartedAtMs}
             orderFinishedAtMs={orderFinishedAtMs}
@@ -3816,14 +3718,6 @@ export default function DetalleOrden() {
         setClienteCargo={setClienteCargo}
         avisoCliente={avisoCliente}
         setAvisoCliente={setAvisoCliente}
-        showNoMantPdfModal={showNoMantPdfModal}
-        cerrarModalNoMantPdf={cerrarModalNoMantPdf}
-        loadingNoMantPdf={loadingNoMantPdf}
-        noMantError={noMantError}
-        noMantPdfUrl={noMantPdfUrl}
-        noMantPdfRawUrl={noMantPdfRawUrl}
-        descargarNoMantPdf={descargarNoMantPdf}
-        downloadingNoMantPdf={downloadingNoMantPdf}
         onPreviewPdfAntesFirma={generarVistaPreviaPdfAntesFirma}
       />
       <Modal
@@ -3954,33 +3848,6 @@ const styles = StyleSheet.create({
     marginLeft: 8,
   },
   statusBadgeText: { color: "#fff", fontWeight: "800", fontSize: 12 },
-
-  noMantBanner: {
-    flexDirection: "row",
-    alignItems: "center",
-    padding: 12,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: FIORI.borderSoft,
-    backgroundColor: FIORI.surfaceAlt,
-    marginBottom: 12,
-    ...elev(0.3),
-  },
-  noMantTitle: {
-    fontSize: 14,
-    fontWeight: "800",
-    color: FIORI.text,
-    marginBottom: 4,
-  },
-  noMantText: { fontSize: 12, color: FIORI.textMuted },
-  btnNoMantBanner: {
-    marginLeft: 10,
-    backgroundColor: FIORI.brand,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 999,
-  },
-  btnNoMantBannerText: { color: "#fff", fontWeight: "800", fontSize: 12 },
 
   panel: {
     backgroundColor: FIORI.surface,
