@@ -243,7 +243,16 @@ function sanitizeDetailForCache(detail) {
   return {
     Orderid: String(detail?.Orderid ?? detail?.OrderId ?? "").trim(),
     order_type: detail?.order_type,
-    equipment: detail?.equipment,
+    equipment:
+      detail?.equipment ??
+      detail?.Equipment ??
+      detail?.EQUIPMENT ??
+      null,
+    Equipment:
+      detail?.Equipment ??
+      detail?.equipment ??
+      detail?.EQUIPMENT ??
+      null,
     tipo_equipo:
       detail?.tipo_equipo ?? detail?.equipment_type ?? null,
     tipo_equipo_source:
@@ -251,8 +260,34 @@ function sanitizeDetailForCache(detail) {
     Eqart: detail?.Eqart ?? detail?.eqart ?? null,
     eqart: detail?.eqart ?? detail?.Eqart ?? null,
     plant: detail?.plant ?? detail?.Plant ?? null,
-    start_date: detail?.start_date,
-    finish_date: detail?.finish_date,
+    start_date:
+      detail?.start_date ??
+      detail?.StartDate ??
+      detail?.startDate ??
+      detail?.BasicStartDate ??
+      detail?.BasicStart ??
+      null,
+    StartDate:
+      detail?.StartDate ??
+      detail?.start_date ??
+      detail?.startDate ??
+      detail?.BasicStartDate ??
+      detail?.BasicStart ??
+      null,
+    finish_date:
+      detail?.finish_date ??
+      detail?.FinishDate ??
+      detail?.finishDate ??
+      detail?.BasicFinDate ??
+      detail?.BasicFinish ??
+      null,
+    FinishDate:
+      detail?.FinishDate ??
+      detail?.finish_date ??
+      detail?.finishDate ??
+      detail?.BasicFinDate ??
+      detail?.BasicFinish ??
+      null,
     ShortText: detail?.ShortText ?? detail?.short_text ?? null,
     short_text: detail?.short_text ?? detail?.ShortText ?? null,
     cobertura_tipo: detail?.cobertura_tipo ?? detail?.cobertura ?? null,

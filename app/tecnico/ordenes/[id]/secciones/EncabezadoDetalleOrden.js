@@ -107,10 +107,26 @@ export default function EncabezadoDetalleOrden({
     ).trim() || null;
 
   const inicioSap =
-    typeof fmtDMY === "function" ? fmtDMY(orden?.start_date) : "—";
+    typeof fmtDMY === "function"
+      ? fmtDMY(
+          orden?.start_date ||
+            orden?.StartDate ||
+            orden?.startDate ||
+            orden?.BasicStartDate ||
+            orden?.BasicStart,
+        )
+      : "—";
 
   const finSap =
-    typeof fmtDMY === "function" ? fmtDMY(orden?.finish_date) : "—";
+    typeof fmtDMY === "function"
+      ? fmtDMY(
+          orden?.finish_date ||
+            orden?.FinishDate ||
+            orden?.finishDate ||
+            orden?.BasicFinDate ||
+            orden?.BasicFinish,
+        )
+      : "—";
 
   return (
     <>
@@ -183,7 +199,11 @@ export default function EncabezadoDetalleOrden({
           <MiniInfo
             icon="business-outline"
             label="Equipo"
-            value={orden?.equipment}
+            value={
+                orden?.equipment ||
+                orden?.Equipment ||
+                orden?.EQUIPMENT
+              }
             FIORI={FIORI}
             formatValueForRow={formatValueForRow}
           />

@@ -871,11 +871,109 @@ function hasValidConsumibles(consumiblesRows) {
   });
 }
 
-function isCachedDetailUsable(detail) {
+function normalizeDetailForView(detail, fallbackOrderId = "") {
+  if (!detail || typeof detail !== "object") return detail;
+
+  const operations =
+    detail?.operaciones ||
+    detail?.Operations ||
+    detail?.ToOperations?.results ||
+    [];
+
+  return {
+    ...detail,
+    Orderid:
+      detail?.Orderid ||
+      detail?.OrderId ||
+      detail?.OrderID ||
+      detail?.orderid ||
+      fallbackOrderId,
+    equipment:
+      detail?.equipment ||
+      detail?.Equipment ||
+      detail?.EQUIPMENT ||
+      "",
+    start_date:
+      detail?.start_date ||
+      detail?.StartDate ||
+      detail?.startDate ||
+      detail?.BasicStartDate ||
+      detail?.BasicStart ||
+      "",
+    finish_date:
+      detail?.finish_date ||
+      detail?.FinishDate ||
+      detail?.finishDate ||
+      detail?.BasicFinDate ||
+      detail?.BasicFinish ||
+      "",
+    order_type:
+      detail?.order_type ||
+      detail?.OrderType ||
+      detail?.Ordertype ||
+      "",
+    operaciones: Array.isArray(operations) ? operations : [],
+  };
+}
+
+function isCachedDetailUsable(detail, fallbackOrderId = "") {
   if (!detail || typeof detail !== "object") return false;
 
-  const orderId = safeStr(detail?.Orderid || detail?.OrderId);
-  return !!orderId && Array.isArray(detail?.operaciones);
+  const orderId = String(
+    detail?.Orderid ||
+      detail?.OrderId ||
+      detail?.OrderID ||
+      detail?.orderid ||
+      fallbackOrderId ||
+      "",
+  ).trim();
+
+  if (!orderId) return false;
+
+  const operations =
+    detail?.operaciones ||
+    detail?.Operations ||
+    detail?.ToOperations?.results;
+
+  const operationsWereFetched =
+    detail?._prefetch_status?.operaciones === true;
+
+  const headerWasFetched =
+    detail?._prefetch_status?.header === true;
+
+  const equipment = String(
+    detail?.equipment ||
+      detail?.Equipment ||
+      detail?.EQUIPMENT ||
+      "",
+  ).trim();
+
+  const startDate =
+    detail?.start_date ||
+    detail?.StartDate ||
+    detail?.startDate ||
+    detail?.BasicStartDate ||
+    detail?.BasicStart ||
+    null;
+
+  const shortText = String(
+    detail?.ShortText ||
+      detail?.short_text ||
+      detail?.shortText ||
+      "",
+  ).trim();
+
+  const hasHeaderInformation =
+    !!equipment ||
+    !!startDate ||
+    !!shortText;
+
+  return (
+    Array.isArray(operations) &&
+    operationsWereFetched &&
+    headerWasFetched &&
+    hasHeaderInformation
+  );
 }
 
 function getOrderIdValue(item) {
@@ -1453,11 +1551,19 @@ export default function DetalleOrden() {
       setLoading(true);
 
       const cached = await loadOrdenTecnicoDetail(orderIdParam);
-      const cachedDataReconciled = mergeStatusFromSharedOrder(
+      const cachedDataNormalized = normalizeDetailForView(
         cached?.data,
+        orderIdParam,
+      );
+
+      const cachedDataReconciled = mergeStatusFromSharedOrder(
+        cachedDataNormalized,
         sharedOrder,
       );
-      const hasUsableCachedDetail = isCachedDetailUsable(cachedDataReconciled);
+      const hasUsableCachedDetail = isCachedDetailUsable(
+        cachedDataReconciled,
+        orderIdParam,
+      );
 
       if (cachedDataReconciled) {
         setOrden(cachedDataReconciled);

@@ -104,6 +104,28 @@ function applyAuthoritativeListStatus(detail, statusHint) {
   };
 }
 
+function isPrefetchedDetailUsable(detail) {
+  if (!detail || typeof detail !== "object") {
+    return false;
+  }
+
+  const orderId = String(
+    detail?.Orderid ||
+      detail?.OrderId ||
+      detail?.orderid ||
+      "",
+  ).trim();
+
+  const operationsWereFetched =
+    detail?._prefetch_status?.operaciones === true;
+
+  return (
+    !!orderId &&
+    operationsWereFetched &&
+    Array.isArray(detail?.operaciones)
+  );
+}
+
 function pickFirstAddress(results = []) {
   if (
     !Array.isArray(results) ||
@@ -733,21 +755,58 @@ async function runPrefetchOrdenesTecnicoDetalles({
               ttlMs,
             );
 
-          const cachedIsComplete =
-            cached?.data?._prefetch_complete ===
-            true;
+          const cachedIsUsable =
+            isPrefetchedDetailUsable(cached?.data);
 
           if (
             hasCachedDetail &&
             cachedIsFresh &&
-            cachedIsComplete
+            cachedIsUsable
           ) {
+            const statusHint =
+              statusByOrderId?.[orderId];
+
+            const detailWithCurrentStatus =
+              applyAuthoritativeListStatus(
+                cached.data,
+                statusHint,
+              );
+
+            const previousStatus = normalizeStatusCode(
+              cached?.data?.estatus_code ??
+                cached?.data?.userstatus ??
+                "",
+            );
+
+            const nextStatus = normalizeStatusCode(
+              detailWithCurrentStatus?.estatus_code ??
+                detailWithCurrentStatus?.userstatus ??
+                "",
+            );
+
+            /*
+            * Aunque el detalle no se descargue nuevamente, se actualiza
+            * su estado cuando la lista central tiene un estado diferente.
+            */
+            if (
+              statusHint &&
+              previousStatus !== nextStatus
+            ) {
+              await saveOrdenTecnicoDetail(
+                orderId,
+                detailWithCurrentStatus,
+              );
+            }
+
             console.log(
-              "[prefetch][detalle vigente]",
+              "[prefetch][detalle vigente y utilizable]",
               {
                 orderId,
-                updatedAt:
-                  cached.updatedAt,
+                updatedAt: cached.updatedAt,
+                complete:
+                  cached?.data?._prefetch_complete === true,
+                previousStatus,
+                nextStatus,
               },
             );
 

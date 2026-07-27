@@ -17,6 +17,7 @@ import { useLocalSearchParams, router } from "expo-router";
 import Header from "../../../src/components/Header";
 import { useAuth } from "../../../src/context/AuthContext";
 import { useOrdenesTecnico } from "../../../src/context/OrdenesTecnicoContext";
+import { loadOrdenTecnicoDetail } from "../../../src/offline/ordenesTecnicoCache";
 
 /* ===================== Utils ===================== */
 const COLORS = {
@@ -33,16 +34,41 @@ const ESTATUS_CARTA_NO_MANTTO_LABEL = "Carta No Mantto";
 
 const safeStr = (v) => (v == null ? "" : String(v));
 
-const parseSapDate = (v) => {
-  if (!v) return null;
+const parseSapDate = (value) => {
+  if (!value) return null;
 
-  const m = String(v).match(/\/Date\((\-?\d+)\)\//);
-  if (!m) return null;
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value;
+  }
 
-  const ms = Number(m[1]);
-  if (!Number.isFinite(ms)) return null;
+  if (typeof value === "number") {
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
 
-  return new Date(ms);
+  const text = String(value).trim();
+  if (!text) return null;
+
+  const sapMatch = text.match(/\/Date\((-?\d+)(?:[+-]\d+)?\)\//);
+  if (sapMatch) {
+    const milliseconds = Number(sapMatch[1]);
+    if (!Number.isFinite(milliseconds)) return null;
+
+    const date = new Date(milliseconds);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+
+  if (/^\d{8}$/.test(text)) {
+    const year = Number(text.slice(0, 4));
+    const month = Number(text.slice(4, 6)) - 1;
+    const day = Number(text.slice(6, 8));
+
+    const date = new Date(year, month, day);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+
+  const date = new Date(text);
+  return Number.isNaN(date.getTime()) ? null : date;
 };
 
 function normalizeCode(code) {
@@ -80,10 +106,91 @@ function isCartaNoManttoByUserstatus(userstatusRaw, estatusCodeRaw) {
 }
 
 function formatDateTime(value) {
-  const d = parseSapDate(value);
-  if (!d) return "—";
+  const date = parseSapDate(value);
+  if (!date) return "—";
 
-  return d.toLocaleString();
+  return date.toLocaleDateString("es-MX", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  });
+}
+
+async function mergeRowsWithCachedDetails(items = []) {
+  const source = Array.isArray(items) ? items : [];
+
+  return Promise.all(
+    source.map(async (item) => {
+      const orderId = safeStr(
+        item?.Orderid ||
+          item?.OrderId ||
+          item?.OrderID ||
+          item?.orderid,
+      ).trim();
+
+      if (!orderId) return item;
+
+      try {
+        const cached = await loadOrdenTecnicoDetail(orderId);
+        const detail = cached?.data;
+
+        if (!detail || typeof detail !== "object") return item;
+
+        return {
+          ...detail,
+          ...item,
+          Orderid:
+            item?.Orderid ||
+            item?.OrderId ||
+            item?.OrderID ||
+            item?.orderid ||
+            detail?.Orderid ||
+            detail?.OrderId ||
+            detail?.orderid ||
+            orderId,
+          equipment:
+            item?.equipment ||
+            item?.Equipment ||
+            item?.EQUIPMENT ||
+            detail?.equipment ||
+            detail?.Equipment ||
+            detail?.EQUIPMENT ||
+            "",
+          start_date:
+            item?.start_date ||
+            item?.StartDate ||
+            item?.startDate ||
+            item?.BasicStartDate ||
+            item?.BasicStart ||
+            detail?.start_date ||
+            detail?.StartDate ||
+            detail?.startDate ||
+            detail?.BasicStartDate ||
+            detail?.BasicStart ||
+            "",
+          finish_date:
+            item?.finish_date ||
+            item?.FinishDate ||
+            item?.finishDate ||
+            item?.BasicFinDate ||
+            item?.BasicFinish ||
+            detail?.finish_date ||
+            detail?.FinishDate ||
+            detail?.finishDate ||
+            detail?.BasicFinDate ||
+            detail?.BasicFinish ||
+            "",
+        };
+      } catch (error) {
+        console.log(
+          "[NO MANTENIMIENTO] No se pudo leer detalle guardado:",
+          orderId,
+          error?.message || error,
+        );
+        return item;
+      }
+    }),
+  );
 }
 
 /* ===================== Screen ===================== */
@@ -109,15 +216,22 @@ export default function TecnicoNoMantenimientoIndex() {
   const params = useLocalSearchParams();
   const { refresh: refreshParam } = params;
 
-  const applySharedLista = useCallback((data = []) => {
+  const applySharedLista = useCallback(async (data = []) => {
       if (!correo) {
         setRows([]);
         return [];
       }
 
-      const source = Array.isArray(data) ? data : [];
+      const source = await mergeRowsWithCachedDetails(
+        Array.isArray(data) ? data : [],
+      );
       const filtradas = source.filter((it) => {
-        const us = it?.Userstatus || it?.UserStatus || "";
+        const us =
+          it?.userstatus ||
+          it?.Userstatus ||
+          it?.UserStatus ||
+          it?.UserStText ||
+          "";
         const estatusCode =
           it?.estatus_code ||
           it?.EstatusCode ||
@@ -134,12 +248,21 @@ export default function TecnicoNoMantenimientoIndex() {
         ? filtradas
         : filtradas.filter((it) => {
             const order = safeStr(
-              it?.Orderid || it?.OrderId || it?.OrderID,
+              it?.Orderid || it?.OrderId || it?.OrderID || it?.orderid,
             ).toLowerCase();
 
-            const equip = safeStr(it?.Equipment).toLowerCase();
-            const text = safeStr(it?.ShortText).toLowerCase();
-            const us = safeStr(it?.Userstatus).toLowerCase();
+            const equip = safeStr(
+              it?.equipment || it?.Equipment || it?.EQUIPMENT,
+            ).toLowerCase();
+            const text = safeStr(
+              it?.ShortText || it?.short_text || it?.shortText,
+            ).toLowerCase();
+            const us = safeStr(
+              it?.userstatus ||
+                it?.Userstatus ||
+                it?.UserStatus ||
+                it?.UserStText,
+            ).toLowerCase();
 
             return (
               order.includes(s) ||
@@ -155,7 +278,23 @@ export default function TecnicoNoMantenimientoIndex() {
   }, [q, correo]);
 
   useEffect(() => {
-    applySharedLista(ordenesCompartidas);
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const prepared = await applySharedLista(ordenesCompartidas);
+        if (cancelled) return prepared;
+      } catch (error) {
+        console.log(
+          "[NO MANTENIMIENTO] Error preparando la lista:",
+          error?.message || error,
+        );
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
   }, [applySharedLista, ordenesCompartidas]);
 
   const reloadListaLocal = useCallback(async () => {
@@ -166,7 +305,7 @@ export default function TecnicoNoMantenimientoIndex() {
   const refreshLista = useCallback(async () => {
     try {
       const result = await refreshCentral();
-      applySharedLista(result?.cached?.data || []);
+      await applySharedLista(result?.cached?.data || []);
       return result;
     } catch (e) {
       console.error("Error actualizando Carta No Mantto:", e?.message || e);
@@ -183,7 +322,7 @@ export default function TecnicoNoMantenimientoIndex() {
 
   const openDetalle = (item) => {
     const orderId = safeStr(
-      item?.Orderid || item?.OrderId || item?.OrderID,
+      item?.Orderid || item?.OrderId || item?.OrderID || item?.orderid,
     ).trim();
 
     if (!orderId) {
@@ -192,16 +331,34 @@ export default function TecnicoNoMantenimientoIndex() {
     }
 
     router.push({
-      pathname: "/tecnico/no_mantenimiento/detalles",
+      pathname: "/tecnico/ordenes/[id]",
       params: { id: orderId },
     });
   };
 
   const renderItem = ({ item }) => {
-    const orderId = safeStr(item?.Orderid || item?.OrderId || item?.OrderID);
+    const orderId = safeStr(
+      item?.Orderid || item?.OrderId || item?.OrderID || item?.orderid,
+    );
 
-    const startLabel = formatDateTime(item?.StartDate);
-    const finishLabel = formatDateTime(item?.FinishDate);
+    const equipment =
+      item?.equipment || item?.Equipment || item?.EQUIPMENT || "—";
+
+    const startLabel = formatDateTime(
+      item?.start_date ||
+        item?.StartDate ||
+        item?.startDate ||
+        item?.BasicStartDate ||
+        item?.BasicStart,
+    );
+
+    const finishLabel = formatDateTime(
+      item?.finish_date ||
+        item?.FinishDate ||
+        item?.finishDate ||
+        item?.BasicFinDate ||
+        item?.BasicFinish,
+    );
 
     return (
       <TouchableOpacity
@@ -219,12 +376,14 @@ export default function TecnicoNoMantenimientoIndex() {
 
         <Text style={styles.line}>
           <Text style={styles.label}>Equipo: </Text>
-          {safeStr(item?.Equipment || "—")}
+          {safeStr(equipment)}
         </Text>
 
         <Text style={styles.line}>
           <Text style={styles.label}>Texto: </Text>
-          {safeStr(item?.ShortText || "—")}
+          {safeStr(
+            item?.ShortText || item?.short_text || item?.shortText || "—",
+          )}
         </Text>
 
         <Text style={styles.line}>
