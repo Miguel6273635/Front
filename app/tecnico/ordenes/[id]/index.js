@@ -894,13 +894,23 @@ function normalizeOrderIdForCompare(value) {
   return withoutLeadingZeros || "0";
 }
 
+function hasOwnStatusField(order, fieldName) {
+  return Object.prototype.hasOwnProperty.call(order || {}, fieldName);
+}
+
 function getEffectiveSharedStatusCode(sharedOrder) {
   if (!sharedOrder) return "";
 
-  // El index ya deja su estatus reconciliado en estatus_code. Este campo tiene
-  // prioridad absoluta y no debe combinarse con un userstatus anterior.
-  const effectiveCode = normalizeCode(sharedOrder?.estatus_code ?? "");
-  if (effectiveCode) return effectiveCode;
+  /*
+   * estatus_code viene del index después de reconciliar SAP, caché,
+   * parche local y cola.
+   *
+   * Es importante revisar si la propiedad existe, no si tiene contenido:
+   * estatus_code: "" es un valor válido y significa "Sin empezar".
+   */
+  if (hasOwnStatusField(sharedOrder, "estatus_code")) {
+    return normalizeCode(sharedOrder.estatus_code);
+  }
 
   return normalizeCode(
     sharedOrder?.userstatus ??
@@ -915,23 +925,36 @@ function mergeStatusFromSharedOrder(detail, sharedOrder) {
   if (!detail || !sharedOrder) return detail;
 
   const sharedCode = getEffectiveSharedStatusCode(sharedOrder);
-
-  if (!sharedCode) return detail;
+  const isSinEmpezar = sharedCode === "";
 
   return {
     ...detail,
+
+    // Se limpian también todos los campos alternativos de estatus.
     estatus_code: sharedCode,
     userstatus: sharedCode,
     Userstatus: sharedCode,
     UserStatus: sharedCode,
     UserStText: sharedCode,
-    estatus_label:
-      sharedOrder?.estatus_label || resolveStatusLabelFromCode(sharedCode),
+
+    estatus_label: isSinEmpezar
+      ? "Sin empezar"
+      : sharedOrder?.estatus_label ||
+        resolveStatusLabelFromCode(sharedCode),
+
     isPendingSignature: sharedCode === "0400",
-    isFinal: ["0300", "0600"].includes(sharedCode),
-    checkin_done: ["0100", "0200", "0300", "0400", "0600"].includes(
-      sharedCode,
-    ),
+
+    isFinal: ["0300", "0500", "0600"].includes(sharedCode),
+
+    checkin_done: [
+      "0100",
+      "0200",
+      "0300",
+      "0301",
+      "0400",
+      "0500",
+      "0600",
+    ].includes(sharedCode),
   };
 }
 

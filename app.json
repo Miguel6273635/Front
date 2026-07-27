@@ -1,11 +1,11 @@
 {
   "expo": {
-    "name": "Melmex App",
+    "name": "Melmex App QAS",
     "slug": "mitsu_frontend",
     "scheme": "mitsuapp",
     "version": "1.0.0.7",
     "orientation": "portrait",
-    "icon": "./assets/icon_mitsu_prod.png",
+    "icon": "./assets/icon_mitsu_qas.png",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
     "splash": {
@@ -21,7 +21,7 @@
     },
     "android": {
       "adaptiveIcon": {
-        "foregroundImage": "./assets/icon_mitsu_prod.png",
+        "foregroundImage": "./assets/icon_mitsu_qas.png",
         "backgroundColor": "#FFFFFF"
       },
       "edgeToEdgeEnabled": true,
@@ -37,7 +37,7 @@
         "android.permission.ACCESS_FINE_LOCATION",
         "android.permission.ACCESS_COARSE_LOCATION"
       ],
-      "package": "com.guadalub130.mitsu_frontend"
+      "package": "com.melmex.qas"
     },
     "web": {
       "favicon": "./assets/favicon.png"

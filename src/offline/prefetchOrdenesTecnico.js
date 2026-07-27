@@ -52,25 +52,55 @@ function resolveStatusLabel(code, fallback = "") {
 }
 
 function applyAuthoritativeListStatus(detail, statusHint) {
-  if (!statusHint || typeof statusHint !== "object") return detail;
+  if (!statusHint || typeof statusHint !== "object") {
+    return detail;
+  }
+
+  /*
+   * Si estatus_code existe, incluso vacío, es el resultado
+   * autoritativo de la lista.
+   */
+  const hasEffectiveCode =
+    Object.prototype.hasOwnProperty.call(statusHint, "estatus_code");
 
   const code = normalizeStatusCode(
-    statusHint?.estatus_code ?? statusHint?.userstatus ?? "",
+    hasEffectiveCode
+      ? statusHint.estatus_code
+      : statusHint?.userstatus ??
+          statusHint?.Userstatus ??
+          statusHint?.UserStatus ??
+          statusHint?.UserStText ??
+          "",
   );
 
-  if (!code) return detail;
+  const isSinEmpezar = code === "";
 
   return {
     ...(detail || {}),
+
     estatus_code: code,
     userstatus: code,
     Userstatus: code,
     UserStatus: code,
     UserStText: code,
-    estatus_label: resolveStatusLabel(code, statusHint?.estatus_label),
+
+    estatus_label: isSinEmpezar
+      ? "Sin empezar"
+      : resolveStatusLabel(code, statusHint?.estatus_label),
+
     isPendingSignature: code === "0400",
+
     isFinal: ["0300", "0500", "0600"].includes(code),
-    checkin_done: ["0100", "0200", "0300", "0400", "0500", "0600"].includes(code),
+
+    checkin_done: [
+      "0100",
+      "0200",
+      "0300",
+      "0301",
+      "0400",
+      "0500",
+      "0600",
+    ].includes(code),
   };
 }
 
