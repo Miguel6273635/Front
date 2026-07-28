@@ -31,24 +31,46 @@ function normalizeImgSrc(maybeDataUri) {
 function formatDMY(dateOrSap) {
   if (!dateOrSap) return "—";
 
-  // soporta "/Date(....)/"
-  if (typeof dateOrSap === "string" && dateOrSap.startsWith("/Date(")) {
-    const ms = parseInt(dateOrSap.replace("/Date(", "").replace(")/", ""), 10);
+  // Fecha SAP: /Date(1784764800000)/
+  // Se interpreta con UTC para conservar el día enviado por SAP.
+  if (
+    typeof dateOrSap === "string" &&
+    dateOrSap.startsWith("/Date(")
+  ) {
+    const match = dateOrSap.match(/\/Date\((-?\d+)/);
+    const ms = match ? Number(match[1]) : NaN;
+
     if (!Number.isNaN(ms)) {
       const d = new Date(ms);
-      const dd = String(d.getDate()).padStart(2, "0");
-      const mm = String(d.getMonth() + 1).padStart(2, "0");
-      const yy = d.getFullYear();
+
+      const dd = String(d.getUTCDate()).padStart(2, "0");
+      const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+      const yy = d.getUTCFullYear();
+
       return `${dd}/${mm}/${yy}`;
     }
   }
 
+  // Fecha sin hora: YYYY-MM-DD
+  // Se toman directamente sus componentes para evitar zonas horarias.
+  if (
+    typeof dateOrSap === "string" &&
+    /^\d{4}-\d{2}-\d{2}$/.test(dateOrSap.trim())
+  ) {
+    const [yy, mm, dd] = dateOrSap.trim().split("-");
+    return `${dd}/${mm}/${yy}`;
+  }
+
+  // Timestamps reales, por ejemplo la hora del check-in:
+  // se mantienen en la hora local del dispositivo.
   const d = new Date(dateOrSap);
+
   if (Number.isNaN(d.getTime())) return "—";
 
   const dd = String(d.getDate()).padStart(2, "0");
   const mm = String(d.getMonth() + 1).padStart(2, "0");
   const yy = d.getFullYear();
+
   return `${dd}/${mm}/${yy}`;
 }
 

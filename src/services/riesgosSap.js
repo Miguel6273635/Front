@@ -1,37 +1,10 @@
-import { Platform } from "react-native";
-import * as Device from "expo-device";
-
 import api from "./api";
+import {
+  buildWorkOrderBulkId,
+} from "../utils/workOrderBulkId";
 
 const WORK_ORDER_BULK_ENDPOINT =
   "/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderBulkSet";
-
-function sanitizeBulkPart(value) {
-  return String(value ?? "")
-    .trim()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-zA-Z0-9_.-]/g, "_")
-    .replace(/_+/g, "_")
-    .replace(/^_+|_+$/g, "");
-}
-
-function getDeviceModelForBulkId() {
-  const rawModel =
-    Device.modelName ||
-    Device.productName ||
-    Device.manufacturer ||
-    Device.brand ||
-    Platform.OS ||
-    "DISPOSITIVO";
-
-  return sanitizeBulkPart(rawModel).slice(0, 24) || "DISPOSITIVO";
-}
-
-function buildBulkId(orderId) {
-  const cleanOrderId = sanitizeBulkPart(orderId || "SIN_ORDEN");
-  return `BULK_${cleanOrderId}_${getDeviceModelForBulkId()}`;
-}
 
 export function buildTbmkyBulkPayload({ orderId, pdfBase64, fileName }) {
   const cleanOrderId = String(orderId || "").trim();
@@ -49,7 +22,9 @@ export function buildTbmkyBulkPayload({ orderId, pdfBase64, fileName }) {
   }
 
   return {
-    BulkId: buildBulkId(cleanOrderId),
+    BulkId: buildWorkOrderBulkId({
+      firstOrderId: cleanOrderId,
+    }),
     WorkOrderSet: [
       {
         OrderId: cleanOrderId,

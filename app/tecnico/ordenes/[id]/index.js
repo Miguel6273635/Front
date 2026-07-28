@@ -47,7 +47,6 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as FileSystem from "expo-file-system/legacy";
 import * as Sharing from "expo-sharing";
 import * as Print from "expo-print";
-import * as Device from "expo-device";
 
 // ✅ HTML/PDF mantenimiento (plantillas + operaciones)
 import { buildMantenimientoHtml } from "../../../../src/services/templates/buildMantenimientoHtml";
@@ -63,6 +62,11 @@ import ModalesDetalleOrden from "./secciones/ModalesDetalleOrden";
 import { ListaOperacionesAgrupadas } from "./secciones/ListaOperacionesDetalle";
 import PieDetalleOrden from "./secciones/PieDetalleOrden";
 import ConsumiblesFinalizacion from "./secciones/ConsumiblesFinalizacion";
+
+import {
+  buildWorkOrderBulkId,
+  getDeviceModelForBulkId,
+} from "../../../../src/utils/workOrderBulkId";
 
 /* ====================== Paleta SAP Fiori (Horizon) ====================== */
 const FIORI = {
@@ -281,47 +285,14 @@ function buildSequentialWindows(startMs, mins) {
 }
 
 /* ====== Bulk helpers: misma estructura que Pendientes de firma ====== */
-function sanitizeBulkPart(value) {
-  return String(value || "")
-    .trim()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^\w.-]/g, "_")
-    .replace(/_+/g, "_")
-    .replace(/^_+|_+$/g, "");
-}
-
-function getBulkDateDDMMYYYY(date = new Date()) {
-  const dd = String(date.getDate()).padStart(2, "0");
-  const mm = String(date.getMonth() + 1).padStart(2, "0");
-  const yyyy = String(date.getFullYear());
-
-  return `${dd}${mm}${yyyy}`;
-}
-
-function getDeviceModelForBulkId() {
-  const rawModel =
-    Device.modelName ||
-    Device.productName ||
-    Device.manufacturer ||
-    Device.brand ||
-    Platform.OS ||
-    "DISPOSITIVO";
-
-  return sanitizeBulkPart(rawModel).slice(0, 24) || "DISPOSITIVO";
-}
-
-function buildBulkId({ firstOrderId, date = new Date() }) {
-  const cleanDate = getBulkDateDDMMYYYY(date);
-  const cleanOrderId = sanitizeBulkPart(firstOrderId || "SIN_ORDEN");
-  const cleanDeviceModel = getDeviceModelForBulkId();
-
-  return `PAQUETE_${cleanDate}_${cleanOrderId}_${cleanDeviceModel}`;
-}
-
-function buildSingleWorkOrderBulkPayload({ orderId, workOrderPayload }) {
+function buildSingleWorkOrderBulkPayload({
+  orderId,
+  workOrderPayload,
+}) {
   return {
-    BulkId: buildBulkId({ firstOrderId: orderId }),
+    BulkId: buildWorkOrderBulkId({
+      firstOrderId: orderId,
+    }),
     WorkOrderSet: [workOrderPayload],
   };
 }

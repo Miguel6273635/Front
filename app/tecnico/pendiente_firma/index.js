@@ -17,7 +17,6 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Print from "expo-print";
 import * as FileSystem from "expo-file-system/legacy";
 import * as Sharing from "expo-sharing";
-import * as Device from "expo-device";
 
 import {
   loadOrdenTecnicoDetail, loadOrdenesTecnicoList,
@@ -33,6 +32,11 @@ import {
   getEquipmentTypeFromOrder,
   normalizeEquipmentType,
 } from "../../../src/services/equipmentType";
+
+import {
+  buildWorkOrderBulkId,
+  getDeviceModelForBulkId,
+} from "../../../src/utils/workOrderBulkId";
 
 const FIORI = {
   pageBg: "#F7F7F7",
@@ -725,44 +729,6 @@ function getSapErrorDetail(error, fallback = "No se pudo enviar a SAP.") {
 
 function sanitizeFileName(value) { return String(value || "").replace(/[^\w.-]/g, "_").replace(/_+/g, "_"); }
 
-function sanitizeBulkPart(value) {
-  return String(value || "")
-    .trim()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^\w.-]/g, "_")
-    .replace(/_+/g, "_")
-    .replace(/^_+|_+$/g, "");
-}
-
-function getDeviceModelForBulkId() {
-  const rawModel =
-    Device.modelName ||
-    Device.productName ||
-    Device.manufacturer ||
-    Device.brand ||
-    Platform.OS ||
-    "DISPOSITIVO";
-
-  return sanitizeBulkPart(rawModel).slice(0, 24) || "DISPOSITIVO";
-}
-
-function getBulkDateDDMMYYYY(date = new Date()) {
-  const dd = String(date.getDate()).padStart(2, "0");
-  const mm = String(date.getMonth() + 1).padStart(2, "0");
-  const yyyy = String(date.getFullYear());
-
-  return `${dd}${mm}${yyyy}`;
-}
-
-function buildBulkId({ firstOrderId, date = new Date() }) {
-  const cleanDate = getBulkDateDDMMYYYY(date);
-  const cleanOrderId = sanitizeBulkPart(firstOrderId || "SIN_ORDEN");
-  const cleanDeviceModel = getDeviceModelForBulkId();
-
-  return `PAQUETE_${cleanDate}_${cleanOrderId}_${cleanDeviceModel}`;
-}
-
 function buildShortPdfFileName({ tipo, orderId }) {
   const cleanOrderId = sanitizeFileName(String(orderId || "").trim());
   const prefix = String(tipo || "").toLowerCase() === "escalera" ? "mantenimiento_esca" : "mantenimiento_elev";
@@ -1247,7 +1213,9 @@ export default function PendienteFirmaIndex() {
               ).trim();
 
               const bulkPayload = {
-                BulkId: buildBulkId({ firstOrderId }),
+                BulkId: buildWorkOrderBulkId({
+                  firstOrderId,
+                }),
                 WorkOrderSet: toWorkOrders,
               };
 

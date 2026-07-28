@@ -25,7 +25,6 @@ import DateTimePicker from "@react-native-community/datetimepicker";
 import { router } from "expo-router";
 import * as ImagePicker from "expo-image-picker";
 import * as ImageManipulator from "expo-image-manipulator";
-import * as Device from "expo-device";
 import NetInfo from "@react-native-community/netinfo";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useFocusEffect } from "@react-navigation/native";
@@ -42,6 +41,9 @@ import Header from "../../../src/components/Header";
 import api from "../../../src/services/api";
 import * as FileSystem from "expo-file-system/legacy";
 import { preloadAvisoAveriaCatalogos } from "../../../src/services/avisoAveriaSap";
+import { 
+  buildWorkOrderBulkId,
+} from "../../../src/utils/workOrderBulkId";
 
 // ============================
 // Guarda EQUIPO activo para geolocalización
@@ -58,33 +60,6 @@ const TBMKY_STATUS_KEY = (orderId) =>
 const WORK_ORDER_BULK_ENDPOINT =
   "/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderBulkSet";
 
-function sanitizeBulkPart(value) {
-  return String(value ?? "")
-    .trim()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-zA-Z0-9_.-]/g, "_")
-    .replace(/_+/g, "_")
-    .replace(/^_+|_+$/g, "");
-}
-
-function getDeviceModelForBulkId() {
-  const rawModel =
-    Device.modelName ||
-    Device.productName ||
-    Device.manufacturer ||
-    Device.brand ||
-    Platform.OS ||
-    "DISPOSITIVO";
-
-  return sanitizeBulkPart(rawModel).slice(0, 24) || "DISPOSITIVO";
-}
-
-function buildBulkId(orderId) {
-  const cleanOrderId = sanitizeBulkPart(orderId || "SIN_ORDEN");
-  return `BULK_${cleanOrderId}_${getDeviceModelForBulkId()}`;
-}
-
 function buildCheckinBulkPayload({ orderId, base64 }) {
   const cleanOrderId = String(orderId || "").trim();
   const cleanBase64 = String(base64 || "")
@@ -96,7 +71,9 @@ function buildCheckinBulkPayload({ orderId, base64 }) {
   if (!cleanBase64) throw new Error("La fotografía del check-in está vacía.");
 
   return {
-    BulkId: buildBulkId(cleanOrderId),
+    BulkId: buildWorkOrderBulkId({
+      firstOrderId: cleanOrderId,
+    }),
     WorkOrderSet: [
       {
         OrderId: cleanOrderId,

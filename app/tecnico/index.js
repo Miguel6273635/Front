@@ -24,7 +24,7 @@ const TILES = [
   {
     key: "ordenes",
     title: "Órdenes de servicio",
-    description: "Consulta y gestiona tus servicios",
+    description: "Realiza tus reportes de mantenimeinto",
     icon: "clipboard-outline",
     accent: "#C51F30",
     softColor: "#FBECEF",
@@ -33,7 +33,7 @@ const TILES = [
   {
     key: "pendiente_firma",
     title: "Pendientes de firma",
-    description: "Servicios por validar y firmar",
+    description: "Servicios por validar y firmar por el cliente",
     icon: "create-outline",
     accent: "#355C7D",
     softColor: "#EBF1F6",
@@ -42,7 +42,7 @@ const TILES = [
   {
     key: "no_mantenimiento",
     title: "No mantenimiento",
-    description: "Consulta las cartas registradas",
+    description: "Consulta las ordenes de no mantenimiento",
     icon: "close-circle-outline",
     accent: "#52796F",
     softColor: "#EDF4F1",
@@ -51,7 +51,7 @@ const TILES = [
   {
     key: "averias",
     title: "Aviso de avería",
-    description: "Registra y consulta incidencias",
+    description: "Consulta los avisos de avería realizados",
     icon: "warning-outline",
     accent: "#B06C3B",
     softColor: "#F8F0E9",
