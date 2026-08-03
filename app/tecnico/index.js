@@ -24,7 +24,7 @@ const TILES = [
   {
     key: "ordenes",
     title: "Órdenes de servicio",
-    description: "Realiza tus reportes de mantenimeinto",
+    description: "Consulta tus servicios asignados",
     icon: "clipboard-outline",
     accent: "#C51F30",
     softColor: "#FBECEF",
@@ -33,7 +33,7 @@ const TILES = [
   {
     key: "pendiente_firma",
     title: "Pendientes de firma",
-    description: "Servicios por validar y firmar por el cliente",
+    description: "Servicios pendientes de firmar por el cliente",
     icon: "create-outline",
     accent: "#355C7D",
     softColor: "#EBF1F6",
@@ -42,7 +42,7 @@ const TILES = [
   {
     key: "no_mantenimiento",
     title: "No mantenimiento",
-    description: "Consulta las ordenes de no mantenimiento",
+    description: "Lista de servicios que no tuvieron mantenimiento",
     icon: "close-circle-outline",
     accent: "#52796F",
     softColor: "#EDF4F1",
@@ -51,7 +51,7 @@ const TILES = [
   {
     key: "averias",
     title: "Aviso de avería",
-    description: "Consulta los avisos de avería realizados",
+    description: "Consulta los avisos de avería creados",
     icon: "warning-outline",
     accent: "#B06C3B",
     softColor: "#F8F0E9",
@@ -228,7 +228,7 @@ export default function TecnicoHome() {
               <View style={styles.welcomeContent}>
                 <Text style={styles.welcomeTitle}>¡Bienvenido!</Text>
                 <Text style={styles.welcomeText}>
-                  Consulta tus actividades y accesos de trabajo.
+                  Comienza tu jornada revisando tus órdenes asignadas.
                 </Text>
 
                 <View

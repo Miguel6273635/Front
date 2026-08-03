@@ -35,22 +35,38 @@ const isOnlineNow = async () => {
   return !!st?.isConnected && st?.isInternetReachable !== false;
 };
 
-const parseSapDate = (value) => {
-  if (!value) return null;
-  const s = String(value);
-  const m = s.match(/\/Date\((\d+)\)\//);
-  if (m?.[1]) {
-    const ms = Number(m[1]);
-    return Number.isFinite(ms) ? new Date(ms) : null;
-  }
-  const d = new Date(value);
-  return Number.isNaN(d.getTime()) ? null : d;
-};
+const formatSapCalendarDate = (value) => {
+  if (!value) return "—";
 
-const formatDate = (value) => {
-  const d = parseSapDate(value);
-  if (!d) return "—";
-  return d.toLocaleDateString();
+  const text = String(value).trim();
+  const sapMatch = text.match(/\/Date\((-?\d+)(?:[+-]\d{4})?\)\//);
+
+  if (sapMatch?.[1]) {
+    const milliseconds = Number(sapMatch[1]);
+    if (!Number.isFinite(milliseconds)) return "—";
+
+    const date = new Date(milliseconds);
+    if (Number.isNaN(date.getTime())) return "—";
+
+    const day = String(date.getUTCDate()).padStart(2, "0");
+    const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+    const year = date.getUTCFullYear();
+    return `${day}/${month}/${year}`;
+  }
+
+  const calendarMatch = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (calendarMatch) {
+    const [, year, month, day] = calendarMatch;
+    return `${day}/${month}/${year}`;
+  }
+
+  const date = new Date(text);
+  if (Number.isNaN(date.getTime())) return "—";
+
+  const day = String(date.getUTCDate()).padStart(2, "0");
+  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const year = date.getUTCFullYear();
+  return `${day}/${month}/${year}`;
 };
 
 export default function DetallesAveriaTecnico() {
@@ -75,7 +91,6 @@ export default function DetallesAveriaTecnico() {
 
       const online = await isOnlineNow();
 
-      // ✅ OFFLINE -> cache
       if (!online) {
         const cached = await loadAveriaDetailCache({ averiaid: id });
         if (cached?.header || cached?.item) {
@@ -92,7 +107,6 @@ export default function DetallesAveriaTecnico() {
         return;
       }
 
-      // ✅ ONLINE -> SAP
       const resHdr = await api.get(
         `/api/odata/ZCS_GET_NOTIFICATION_SRV/NotificationHeaderSet('${encodeURIComponent(id)}')`,
         { params: { $format: "json" } },
@@ -111,7 +125,6 @@ export default function DetallesAveriaTecnico() {
       setHeader(hdr);
       setItem(first);
 
-      // ✅ guarda cache
       await saveAveriaDetailCache({
         averiaid: id,
         header: hdr,
@@ -121,7 +134,6 @@ export default function DetallesAveriaTecnico() {
     } catch (err) {
       console.error("Error detalle técnico:", err?.response?.data || err);
 
-      // ✅ fallback: cache si falló online
       try {
         const id = String(averiaid || "").trim();
         const cached = await loadAveriaDetailCache({ averiaid: id });
@@ -166,21 +178,14 @@ export default function DetallesAveriaTecnico() {
     return (
       <View style={styles.container}>
         <Header title="Detalle de avería" />
-        <View
-          style={{
-            flex: 1,
-            justifyContent: "center",
-            alignItems: "center",
-            padding: 16,
-          }}
-        >
-          <Text style={{ color: COLORS.text, textAlign: "center" }}>
+        <View style={styles.emptyWrap}>
+          <Text style={styles.emptyText}>
             No se encontró información para el aviso #{String(averiaid || "")}
           </Text>
 
           <TouchableOpacity
             onPress={fetchDetalle}
-            style={[styles.btnSecondary, { marginTop: 14 }]}
+            style={[styles.btnSecondary, styles.retryButton]}
           >
             <Text style={styles.btnSecondaryText}>Reintentar</Text>
           </TouchableOpacity>
@@ -192,7 +197,7 @@ export default function DetallesAveriaTecnico() {
   const notifNo = header?.NotifNo || averiaid;
   const shortText = header?.ShortText || "";
   const equipment = header?.Equipment || "";
-  const MaterialLong = header?.MaterialLong || "";
+  const materialLong = header?.MaterialLong || "";
   const notifDate = header?.NotifDate || header?.CreatedOn || null;
 
   const descript = item?.Descript || "";
@@ -228,55 +233,69 @@ export default function DetallesAveriaTecnico() {
         </TouchableOpacity>
 
         <View style={styles.cardHighlight}>
-          <View style={styles.chipRow}>
-            {equipment ? (
-              <View style={styles.chip}>
+          <View style={styles.primaryDataRow}>
+            <View style={styles.primaryDataItem}>
+              <Text style={styles.infoLabel}>Equipo</Text>
+              <View style={styles.valueWithIcon}>
                 <Ionicons
                   name="hardware-chip-outline"
-                  size={14}
+                  size={16}
                   color={COLORS.accent}
-                  style={{ marginRight: 4 }}
                 />
-                <Text style={styles.chipText}>{equipment}</Text>
+                <Text style={styles.primaryValue}>{equipment || "—"}</Text>
               </View>
-            ) : null}
+            </View>
 
-            {MaterialLong ? (
-              <View style={styles.chip}>
+            <View style={styles.primaryDataItem}>
+              <Text style={styles.infoLabel}>Fecha</Text>
+              <View style={styles.valueWithIcon}>
                 <Ionicons
-                  name="pin-outline"
-                  size={14}
+                  name="calendar-outline"
+                  size={16}
                   color={COLORS.accent}
-                  style={{ marginRight: 4 }}
                 />
-                <Text style={styles.chipText} numberOfLines={1}>
-                  {MaterialLong}
+                <Text style={styles.primaryValue}>
+                  {formatSapCalendarDate(notifDate)}
                 </Text>
               </View>
-            ) : null}
+            </View>
           </View>
 
-          <Text style={styles.mainTitle}>{shortText || "Sin descripción"}</Text>
-          <Text style={styles.subtitle}>Fecha: {formatDate(notifDate)}</Text>
+          <View style={styles.descriptionBlock}>
+            <Text style={styles.infoLabel}>Descripción breve</Text>
+            <Text style={styles.mainTitle}>
+              {shortText || "Sin descripción"}
+            </Text>
+          </View>
+
+          {materialLong ? (
+            <View style={styles.chip}>
+              <Ionicons
+                name="pin-outline"
+                size={14}
+                color={COLORS.accent}
+                style={styles.chipIcon}
+              />
+              <Text style={styles.chipText} numberOfLines={2}>
+                {materialLong}
+              </Text>
+            </View>
+          ) : null}
         </View>
 
         <View style={styles.card}>
-          <Text style={styles.sectionTitle}>
-            Detalle (NotificationItemsSet)
-          </Text>
+          <Text style={styles.sectionTitle}>Detalle del aviso</Text>
 
           {descript ? (
-            <View style={{ marginBottom: 10 }}>
+            <View style={styles.detailDescription}>
               <Text style={styles.infoLabel}>Descripción</Text>
               <Text style={styles.infoValue}>{descript}</Text>
             </View>
           ) : (
-            <Text style={{ color: COLORS.text }}>
-              Sin ítems / sin descripción.
-            </Text>
+            <Text style={styles.noDataText}>Sin ítems / sin descripción.</Text>
           )}
 
-          <View style={{ marginTop: 6 }}>
+          <View style={styles.detailGroup}>
             <Text style={styles.infoLabel}>Daño</Text>
             <View style={styles.chipRowWrap}>
               <View style={styles.chip}>
@@ -297,7 +316,7 @@ export default function DetallesAveriaTecnico() {
             </View>
           </View>
 
-          <View style={{ marginTop: 10 }}>
+          <View style={styles.partGroup}>
             <Text style={styles.infoLabel}>Parte dañada</Text>
             <View style={styles.chipRowWrap}>
               <View style={styles.chip}>
@@ -319,7 +338,7 @@ export default function DetallesAveriaTecnico() {
           </View>
         </View>
 
-        <View style={{ height: 16 }} />
+        <View style={styles.bottomSpace} />
       </ScrollView>
     </View>
   );
@@ -330,6 +349,14 @@ const styles = StyleSheet.create({
   scrollContent: { padding: 16, paddingBottom: 24 },
   loadingWrap: { flex: 1, justifyContent: "center", alignItems: "center" },
   loadingText: { marginTop: 8, color: COLORS.text, fontSize: 13 },
+  emptyWrap: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 16,
+  },
+  emptyText: { color: COLORS.text, textAlign: "center" },
+  retryButton: { marginTop: 14 },
 
   offlineBox: {
     marginBottom: 10,
@@ -339,7 +366,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#F7E7A3",
   },
-  offlineText: { color: "#6b4f00", fontWeight: "800" },
+  offlineText: { color: "#6B4F00", fontWeight: "800" },
 
   backRow: {
     flexDirection: "row",
@@ -356,7 +383,7 @@ const styles = StyleSheet.create({
 
   cardHighlight: {
     backgroundColor: COLORS.cardBg,
-    borderRadius: 18,
+    borderRadius: 16,
     padding: 14,
     marginBottom: 12,
     borderWidth: 1,
@@ -367,30 +394,59 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 4 },
     elevation: 1,
   },
+  primaryDataRow: {
+    flexDirection: "row",
+    marginHorizontal: -5,
+  },
+  primaryDataItem: {
+    flex: 1,
+    marginHorizontal: 5,
+  },
+  valueWithIcon: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: 2,
+  },
+  primaryValue: {
+    marginLeft: 6,
+    fontSize: 14,
+    color: COLORS.title,
+    fontWeight: "700",
+  },
+  descriptionBlock: {
+    marginTop: 14,
+    marginBottom: 10,
+  },
   mainTitle: {
+    marginTop: 2,
     fontSize: 16,
     fontWeight: "700",
     color: COLORS.title,
-    marginBottom: 4,
+    lineHeight: 21,
   },
-  subtitle: { fontSize: 13, color: COLORS.text },
 
-  chipRow: { flexDirection: "row", flexWrap: "wrap", marginBottom: 8, gap: 6 },
-  chipRowWrap: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 4 },
+  chipRowWrap: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 6,
+    marginTop: 4,
+  },
   chip: {
     flexDirection: "row",
     alignItems: "center",
+    alignSelf: "flex-start",
     backgroundColor: COLORS.chipBg,
     borderRadius: 999,
     paddingHorizontal: 10,
     paddingVertical: 4,
     maxWidth: "100%",
   },
+  chipIcon: { marginRight: 4 },
   chipText: { fontSize: 11, color: COLORS.title },
 
   card: {
     backgroundColor: COLORS.cardBg,
-    borderRadius: 18,
+    borderRadius: 16,
     padding: 14,
     marginBottom: 12,
     borderWidth: 1,
@@ -414,6 +470,10 @@ const styles = StyleSheet.create({
     marginBottom: 2,
   },
   infoValue: { fontSize: 14, color: COLORS.title, fontWeight: "600" },
+  detailDescription: { marginBottom: 10 },
+  noDataText: { color: COLORS.text },
+  detailGroup: { marginTop: 6 },
+  partGroup: { marginTop: 10 },
 
   btnSecondary: {
     borderWidth: 1,
@@ -424,4 +484,5 @@ const styles = StyleSheet.create({
     borderRadius: 14,
   },
   btnSecondaryText: { color: COLORS.accent, fontWeight: "800", fontSize: 13 },
+  bottomSpace: { height: 16 },
 });

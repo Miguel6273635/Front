@@ -96,8 +96,32 @@ const sapDateToDate = (val) => {
 };
 
 const formatDate = (value) => {
-  const d = sapDateToDate(value) || (value ? new Date(value) : null);
-  if (!d || Number.isNaN(d.getTime())) return "—";
+  if (!value) return "—";
+
+  const text = String(value).trim();
+  const sapMatch = text.match(/\/Date\((-?\d+)(?:[+-]\d{4})?\)\//);
+
+  // NotifDate representa una fecha de calendario en SAP. Se leen sus
+  // componentes UTC para evitar que la zona horaria de México la reste un día.
+  if (sapMatch?.[1]) {
+    const ms = Number(sapMatch[1]);
+    if (!Number.isFinite(ms)) return "—";
+    const d = new Date(ms);
+    const dd = String(d.getUTCDate()).padStart(2, "0");
+    const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+    const yyyy = d.getUTCFullYear();
+    return `${dd}/${mm}/${yyyy}`;
+  }
+
+  // También evita el desfase para valores ISO como 2026-08-02 o
+  // 2026-08-02T00:00:00.
+  const isoMatch = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (isoMatch) {
+    return `${isoMatch[3]}/${isoMatch[2]}/${isoMatch[1]}`;
+  }
+
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return "—";
   const dd = String(d.getDate()).padStart(2, "0");
   const mm = String(d.getMonth() + 1).padStart(2, "0");
   const yyyy = d.getFullYear();
@@ -126,16 +150,6 @@ const normalize = (s) =>
   String(s || "")
     .trim()
     .toLowerCase();
-
-// ✅ Prioridad SIEMPRE AZUL (SAP)
-const prioMeta = (p) => {
-  return {
-    label: p ? `Prio ${String(p)}` : "Prio",
-    bar: FIORI.accent,
-    chipBg: "#EAF3FF",
-    chipText: FIORI.accent,
-  };
-};
 
 export default function AveriaIndexTecnico() {
   const { user, token } = useAuth();
@@ -285,7 +299,6 @@ export default function AveriaIndexTecnico() {
         Equipment: it?.Equipment || "",
         MaterialLong: it?.MaterialLong || "",
         CustNo: it?.CustNo || "",
-        Priority: it?.Priority || it?.Priotype || "",
         NotifDate: it?.NotifDate || null,
         CreatedOn: it?.CreatedOn || null,
         raw: it,
@@ -394,15 +407,7 @@ export default function AveriaIndexTecnico() {
       const a = normalize(it?.NotifNo);
       const b = normalize(it?.Equipment);
       const c = normalize(it?.ShortText);
-      const d = normalize(it?.MaterialLong);
-      const e = normalize(it?.CustNo);
-      return (
-        a.includes(q) ||
-        b.includes(q) ||
-        c.includes(q) ||
-        d.includes(q) ||
-        e.includes(q)
-      );
+      return a.includes(q) || b.includes(q) || c.includes(q);
     });
   }, [avisos, query]);
 
@@ -414,7 +419,7 @@ export default function AveriaIndexTecnico() {
         <TextInput
           value={query}
           onChangeText={setQuery}
-          placeholder="Buscar por Notif, equipo, texto, ubicación…"
+          placeholder="Buscar por notificación, equipo o descripción…"
           placeholderTextColor="#9AA5B1"
           style={styles.searchInput}
           autoCorrect={false}
@@ -444,7 +449,6 @@ export default function AveriaIndexTecnico() {
 
   const renderItem = ({ item }) => {
     const notifNo = item?.NotifNo || item?.id;
-    const pm = prioMeta(item?.Priority);
 
     return (
       <TouchableOpacity
@@ -458,59 +462,24 @@ export default function AveriaIndexTecnico() {
           router.push(`/tecnico/averias/${notifNo}/detalles`);
         }}
       >
-        {/* barra lateral (siempre azul SAP) */}
-        <View style={[styles.cardBar, { backgroundColor: pm.bar }]} />
+        <View style={styles.cardBar} />
 
         <View style={styles.cardBody}>
           <View style={styles.cardTop}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.cardId} numberOfLines={1}>
-                Notif: {notifNo}
-              </Text>
-              <Text style={styles.cardDate}>
-                {formatDate(item?.NotifDate)}{" "}
-                <Text style={styles.cardDateMuted}>•</Text>{" "}
-                <Text style={styles.cardDateMuted}>Equipo:</Text>{" "}
-                {item?.Equipment || "—"}
-              </Text>
-            </View>
+            <Text style={styles.cardId} numberOfLines={1}>
+              Notif: {notifNo || "—"}
+            </Text>
+            <Text style={styles.cardDate}>{formatDate(item?.NotifDate)}</Text>
+          </View>
 
-            {!!item?.Priority && (
-              <View style={[styles.prioChip, { backgroundColor: pm.chipBg }]}>
-                <Text style={[styles.prioChipText, { color: pm.chipText }]}>
-                  {pm.label}
-                </Text>
-              </View>
-            )}
+          <View style={styles.metaRow}>
+            <Text style={styles.metaLabel}>Equipo:</Text>
+            <Text style={styles.metaText}>{item?.Equipment || "—"}</Text>
           </View>
 
           <Text style={styles.cardTitle} numberOfLines={2}>
             {item?.ShortText || "Sin descripción"}
           </Text>
-
-          <View style={styles.metaRow}>
-            <Ionicons
-              name="location-outline"
-              size={16}
-              color={FIORI.textMuted}
-            />
-            <Text style={styles.metaText} numberOfLines={1}>
-              {item?.MaterialLong || "—"}
-            </Text>
-          </View>
-
-          {!!item?.CustNo && (
-            <View style={styles.metaRow}>
-              <Ionicons
-                name="business-outline"
-                size={16}
-                color={FIORI.textMuted}
-              />
-              <Text style={styles.metaText} numberOfLines={1}>
-                Cliente: {item?.CustNo}
-              </Text>
-            </View>
-          )}
         </View>
 
         <View style={styles.chevWrap}>
@@ -846,17 +815,24 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
   },
 
-  chipsRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 4 },
+  chipsRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 4,
+    marginTop: 2,
+  },
   chip: {
     borderWidth: 1,
     borderColor: FIORI.border,
     borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
     backgroundColor: FIORI.cardBg,
+    flexShrink: 1,
   },
   chipActive: { backgroundColor: FIORI.accent, borderColor: FIORI.accent },
-  chipText: { color: FIORI.ink, fontWeight: "600" },
+  chipText: { color: FIORI.ink, fontWeight: "600", fontSize: 11 },
   chipTextActive: { color: "#fff" },
 
   activeRangeText: { marginTop: 8, color: FIORI.textMuted, fontSize: 12 },
@@ -930,8 +906,8 @@ const styles = StyleSheet.create({
   // ===== cards =====
   card: {
     backgroundColor: "#fff",
-    borderRadius: 14,
-    marginBottom: 12,
+    borderRadius: 11,
+    marginBottom: 8,
     borderWidth: 1,
     borderColor: FIORI.border,
     flexDirection: "row",
@@ -939,17 +915,17 @@ const styles = StyleSheet.create({
     ...Platform.select({
       ios: {
         shadowColor: "#000",
-        shadowOpacity: 0.06,
-        shadowRadius: 12,
-        shadowOffset: { width: 0, height: 6 },
+        shadowOpacity: 0.05,
+        shadowRadius: 7,
+        shadowOffset: { width: 0, height: 3 },
       },
       android: { elevation: 2 },
     }),
   },
-  cardBar: { width: 6 }, // azul SAP
-  cardBody: { flex: 1, padding: 14 },
+  cardBar: { width: 4, backgroundColor: FIORI.accent },
+  cardBody: { flex: 1, paddingHorizontal: 11, paddingVertical: 9 },
   chevWrap: {
-    width: 40,
+    width: 32,
     alignItems: "center",
     justifyContent: "center",
     borderLeftWidth: 1,
@@ -958,39 +934,29 @@ const styles = StyleSheet.create({
   },
   cardTop: {
     flexDirection: "row",
-    alignItems: "flex-start",
+    alignItems: "center",
     justifyContent: "space-between",
-    gap: 10,
+    gap: 8,
   },
-  cardId: { fontWeight: "900", fontSize: 14, color: FIORI.ink },
-  cardDate: { marginTop: 2, fontSize: 12, color: FIORI.textMuted },
-  cardDateMuted: { color: "#9AA5B1" },
-
-  prioChip: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: "#E9EEF6",
-    alignSelf: "flex-start",
-  },
-  prioChipText: { fontSize: 12, fontWeight: "900" },
+  cardId: { flex: 1, fontWeight: "800", fontSize: 13, color: FIORI.ink },
+  cardDate: { fontSize: 11, color: FIORI.textMuted },
 
   cardTitle: {
-    marginTop: 10,
-    fontSize: 15,
-    fontWeight: "800",
+    marginTop: 5,
+    fontSize: 13,
+    fontWeight: "700",
     color: FIORI.ink,
-    lineHeight: 20,
+    lineHeight: 17,
   },
 
   metaRow: {
-    marginTop: 10,
+    marginTop: 4,
     flexDirection: "row",
     alignItems: "center",
-    gap: 8,
+    gap: 4,
   },
-  metaText: { flex: 1, color: FIORI.textMuted, fontWeight: "600" },
+  metaLabel: { color: FIORI.textMuted, fontSize: 12 },
+  metaText: { color: FIORI.ink, fontSize: 12, fontWeight: "700" },
 
   // ===== modals =====
   modalBackdrop: {
