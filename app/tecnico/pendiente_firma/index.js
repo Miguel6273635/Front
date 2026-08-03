@@ -866,7 +866,7 @@ export default function PendienteFirmaIndex() {
   const selectedIds = useMemo(() => Object.keys(selectedMap).filter((k) => !!selectedMap[k]), [selectedMap]);
   const selectedCount = selectedIds.length;
   const selectedAllReady = selectedCount > 0 && validatedOrderIds.length === selectedCount && selectedIds.every((id) => validatedOrderIds.includes(String(id)));
-  const canSend = selectedCount > 0 && firmaDataUrl && isValidEmail(clienteEmail) && clienteNombre.trim() && clienteCargo.trim() && comentarioCliente.trim() && !sending;
+  const canSend = selectedCount > 0 && firmaDataUrl && isValidEmail(clienteEmail) && clienteNombre.trim() && clienteCargo.trim() && !sending;
 
   const { start, end } = useMemo(() => {
     if (dateMode === "day") return { start: atStartOfDay(dayRef), end: atStartOfDay(dayRef) };
@@ -1558,7 +1558,7 @@ export default function PendienteFirmaIndex() {
                 <View style={styles.inputGroup}><Text style={styles.inputLabel}>Correo</Text><TextInput value={clienteEmail} onChangeText={setClienteEmail} placeholder="correo@ejemplo.com" placeholderTextColor={FIORI.textMuted} autoCapitalize="none" keyboardType="email-address" style={[styles.formInput, !!clienteEmail && !isValidEmail(clienteEmail) && styles.inputError]} /></View>
                 <View style={styles.inputGroup}><Text style={styles.inputLabel}>Nombre</Text><TextInput value={clienteNombre} onChangeText={setClienteNombre} placeholder="Nombre y apellidos" placeholderTextColor={FIORI.textMuted} autoCapitalize="words" style={styles.formInput} /></View>
                 <View style={styles.inputGroup}><Text style={styles.inputLabel}>Cargo</Text><TextInput value={clienteCargo} onChangeText={setClienteCargo} placeholder="Ej. Administrador" placeholderTextColor={FIORI.textMuted} autoCapitalize="words" style={styles.formInput} /></View>
-                <View style={styles.inputGroup}><Text style={styles.inputLabel}>Comentarios</Text><TextInput value={comentarioCliente} onChangeText={setComentarioCliente} placeholder="Comentario..." placeholderTextColor={FIORI.textMuted} multiline style={[styles.formInput, styles.textAreaInput]} /></View>
+                <View style={styles.inputGroup}><Text style={styles.inputLabel}>Comentarios (opcional)</Text><TextInput value={comentarioCliente} onChangeText={setComentarioCliente} placeholder="Comentario..." placeholderTextColor={FIORI.textMuted} multiline style={[styles.formInput, styles.textAreaInput]} /></View>
               </View>
               <View style={styles.formSection}>
                 <Text style={styles.formSectionTitle}>Firma</Text>
