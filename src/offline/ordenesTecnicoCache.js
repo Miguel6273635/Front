@@ -115,10 +115,21 @@ export async function saveOrdenesTecnicoList(userEmail, ordenes, window) {
     data: Array.isArray(ordenes) ? ordenes : [],
   };
 
-  await AsyncStorage.multiSet([
+  const pairs = [
     [LIST_KEY(userEmail), JSON.stringify(payload)],
     [META_KEY(userEmail), JSON.stringify({ lastSyncAt: Date.now() })],
-  ]);
+  ];
+
+  try {
+    await AsyncStorage.multiSet(pairs);
+  } catch (error) {
+    if (!isStorageFullError(error)) throw error;
+
+    // La lista es más importante que detalles antiguos: se libera únicamente
+    // caché reconstruible y se reintenta una sola vez.
+    await freeSpaceForRetry();
+    await AsyncStorage.multiSet(pairs);
+  }
 }
 
 export async function loadOrdenesTecnicoList(userEmail) {
@@ -199,6 +210,117 @@ function estimateBytes(str) {
 }
 
 const MAX_DETAIL_BYTES = 350_000; // ~350KB por detalle (ajustable)
+
+// AsyncStorage usa SQLite en Android. El límite es global, no por registro:
+// muchos detalles pequeños también pueden terminar en SQLITE_FULL.
+const DETAIL_KEY_PREFIX = "ordenesTecnico:detail:";
+const MAX_CACHED_DETAILS = 140;
+const DETAIL_CACHE_TARGET_BYTES = 4_500_000;
+const EMERGENCY_DETAIL_LIMIT = 90;
+let successfulDetailWritesSincePrune = 0;
+let detailPrunePromise = null;
+
+function isStorageFullError(error) {
+  const message = String(error?.message || error || "").toUpperCase();
+  return message.includes("SQLITE_FULL") || message.includes("DISK IS FULL");
+}
+
+async function runDetailPrune({
+  protectedOrderId = null,
+  maxItems = MAX_CACHED_DETAILS,
+  maxBytes = DETAIL_CACHE_TARGET_BYTES,
+} = {}) {
+  const keys = await AsyncStorage.getAllKeys();
+  const detailKeys = keys.filter((key) => key.startsWith(DETAIL_KEY_PREFIX));
+
+  if (!detailKeys.length) {
+    return { removed: 0, kept: 0, bytes: 0 };
+  }
+
+  // Se leen individualmente para no crear un CursorWindow enorme con multiGet.
+  const entries = [];
+  for (const key of detailKeys) {
+    try {
+      const raw = await AsyncStorage.getItem(key);
+      if (!raw) continue;
+
+      let updatedAt = 0;
+      try {
+        updatedAt = Number(JSON.parse(raw)?.updatedAt || 0);
+      } catch {
+        updatedAt = 0;
+      }
+
+      entries.push({
+        key,
+        bytes: estimateBytes(raw),
+        updatedAt,
+        protected:
+          protectedOrderId != null &&
+          key === DETAIL_KEY(protectedOrderId),
+      });
+    } catch {
+      // Un registro ilegible no debe detener la limpieza.
+    }
+  }
+
+  entries.sort((a, b) => {
+    if (a.protected !== b.protected) return a.protected ? -1 : 1;
+    return b.updatedAt - a.updatedAt;
+  });
+
+  const keysToRemove = [];
+  let kept = 0;
+  let bytes = 0;
+
+  for (const entry of entries) {
+    const fits =
+      entry.protected ||
+      (kept < maxItems && bytes + entry.bytes <= maxBytes);
+
+    if (fits) {
+      kept += 1;
+      bytes += entry.bytes;
+    } else {
+      keysToRemove.push(entry.key);
+    }
+  }
+
+  if (keysToRemove.length) {
+    await AsyncStorage.multiRemove(keysToRemove);
+  }
+
+  return { removed: keysToRemove.length, kept, bytes };
+}
+
+export function pruneDetallesToStorageBudget(options = {}) {
+  if (detailPrunePromise) return detailPrunePromise;
+
+  detailPrunePromise = runDetailPrune(options)
+    .catch((error) => {
+      console.log(
+        "[OFFLINE] No se pudo limitar la caché de detalles:",
+        error?.message || error,
+      );
+      return { removed: 0, kept: 0, bytes: 0 };
+    })
+    .finally(() => {
+      detailPrunePromise = null;
+    });
+
+  return detailPrunePromise;
+}
+
+async function freeSpaceForRetry(protectedOrderId = null) {
+  const result = await pruneDetallesToStorageBudget({
+    protectedOrderId,
+    maxItems: EMERGENCY_DETAIL_LIMIT,
+    maxBytes: Math.floor(DETAIL_CACHE_TARGET_BYTES * 0.65),
+  });
+
+  console.log("[OFFLINE] Espacio liberado para reintentar:", result);
+  return result;
+}
 
 /**
  * Adelgaza el detalle para que no explote storage
@@ -350,8 +472,29 @@ export async function saveOrdenTecnicoDetail(orderId, data) {
 
   try {
     await AsyncStorage.setItem(DETAIL_KEY(orderId), raw);
+
+    successfulDetailWritesSincePrune += 1;
+    if (successfulDetailWritesSincePrune >= 12) {
+      successfulDetailWritesSincePrune = 0;
+      await pruneDetallesToStorageBudget({ protectedOrderId: orderId });
+    }
+
     return true;
   } catch (e) {
+    if (isStorageFullError(e)) {
+      try {
+        await freeSpaceForRetry(orderId);
+        await AsyncStorage.setItem(DETAIL_KEY(orderId), raw);
+        return true;
+      } catch (retryError) {
+        console.log(
+          "[OFFLINE] saveOrdenTecnicoDetail RETRY ERROR:",
+          retryError?.message || retryError,
+        );
+        return false;
+      }
+    }
+
     console.log("[OFFLINE] saveOrdenTecnicoDetail ERROR:", e?.message || e);
     return false;
   }
@@ -381,6 +524,9 @@ export async function pruneDetallesNoUsados(orderIdsKeep = []) {
     );
     const toDelete = detailKeys.filter((k) => !keepSet.has(k));
     if (toDelete.length) await AsyncStorage.multiRemove(toDelete);
+
+    // Aunque todas pertenezcan a la ventana, la caché total sigue acotada.
+    await pruneDetallesToStorageBudget();
   } catch {
     // no-op
   }
