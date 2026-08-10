@@ -8,9 +8,68 @@ export const OFFLINE_DAYS_AFTER = 8;
 export const ORDENES_CACHE_TTL_MS = 60 * 60 * 1000;
 
 const LIST_KEY = (userEmail) => `ordenesTecnico:list:${userEmail || "unknown"}`;
+const DETAIL_KEY_PREFIX = "ordenesTecnico:detail:";
 const DETAIL_KEY = (orderId) =>
-  `ordenesTecnico:detail:${String(orderId || "").trim()}`;
+  `${DETAIL_KEY_PREFIX}${String(orderId || "").trim()}`;
 const META_KEY = (userEmail) => `ordenesTecnico:meta:${userEmail || "unknown"}`;
+
+/*
+ * El bloqueo vive solamente durante la ejecución actual de la app.
+ * Si Android informa SQLITE_FULL, los siguientes intentos de guardar
+ * detalles terminan inmediatamente para que la precarga no insista
+ * cientos de veces sobre un almacenamiento que ya está lleno.
+ *
+ * Al cerrar y abrir nuevamente la app, el bloqueo vuelve a comenzar
+ * desactivado. No se borra información funcional ni se cambia la
+ * ventana offline.
+ */
+let detailWritesBlockedByStorage = false;
+let storageFullWasLogged = false;
+const listMemoryFallback = new Map();
+
+export function isStorageFullError(error) {
+  const errorCode = String(
+    error?.code ??
+      error?.nativeErrorCode ??
+      "",
+  ).toLowerCase();
+
+  const message = String(
+    error?.message ||
+      error ||
+      "",
+  ).toLowerCase();
+
+  return (
+    errorCode === "13" ||
+    errorCode.includes("sqlite_full") ||
+    message.includes("sqlite_full") ||
+    message.includes("database or disk is full") ||
+    message.includes("code 13")
+  );
+}
+
+function blockDetailWritesByStorage(error, source) {
+  detailWritesBlockedByStorage = true;
+
+  if (storageFullWasLogged) {
+    return;
+  }
+
+  storageFullWasLogged = true;
+
+  console.log(
+    "[OFFLINE] Almacenamiento lleno. Se detienen los guardados de detalles durante esta ejecución:",
+    {
+      source,
+      error: error?.message || String(error || "SQLITE_FULL"),
+    },
+  );
+}
+
+export function areOrdenTecnicoDetailWritesBlocked() {
+  return detailWritesBlockedByStorage;
+}
 
 // --- helpers fecha ---
 const atStartOfDay = (d) => {
@@ -115,19 +174,62 @@ export async function saveOrdenesTecnicoList(userEmail, ordenes, window) {
     data: Array.isArray(ordenes) ? ordenes : [],
   };
 
-  await AsyncStorage.multiSet([
-    [LIST_KEY(userEmail), JSON.stringify(payload)],
-    [META_KEY(userEmail), JSON.stringify({ lastSyncAt: Date.now() })],
-  ]);
+  const listKey = LIST_KEY(userEmail);
+
+  /*
+   * La copia en memoria se actualiza antes de escribir. Si Android no
+   * puede persistirla por falta de espacio, las pantallas que vuelvan
+   * a pedir la lista durante esta ejecución seguirán recibiendo la
+   * versión completa que llegó de SAP, no una copia local anterior.
+   */
+  listMemoryFallback.set(listKey, payload);
+
+  try {
+    await AsyncStorage.multiSet([
+      [listKey, JSON.stringify(payload)],
+      [META_KEY(userEmail), JSON.stringify({ lastSyncAt: Date.now() })],
+    ]);
+
+    return true;
+  } catch (error) {
+    /*
+     * SQLITE_FULL no debe convertirse en un supuesto error de SAP.
+     * La lista recién descargada seguirá regresándose en memoria y
+     * podrá mostrarse en pantalla, aunque esta copia no haya logrado
+     * persistirse para el siguiente arranque.
+     */
+    if (isStorageFullError(error)) {
+      blockDetailWritesByStorage(
+        error,
+        "saveOrdenesTecnicoList",
+      );
+
+      return false;
+    }
+
+    throw error;
+  }
 }
 
 export async function loadOrdenesTecnicoList(userEmail) {
+  const listKey = LIST_KEY(userEmail);
+  const memoryPayload = listMemoryFallback.get(listKey) || null;
+
   try {
-    const raw = await AsyncStorage.getItem(LIST_KEY(userEmail));
-    if (!raw) return null;
-    return JSON.parse(raw);
+    const raw = await AsyncStorage.getItem(listKey);
+    const storedPayload = raw ? JSON.parse(raw) : null;
+
+    if (
+      memoryPayload &&
+      Number(memoryPayload?.updatedAt || 0) >=
+        Number(storedPayload?.updatedAt || 0)
+    ) {
+      return memoryPayload;
+    }
+
+    return storedPayload;
   } catch {
-    return null;
+    return memoryPayload;
   }
 }
 
@@ -199,6 +301,63 @@ function estimateBytes(str) {
 }
 
 const MAX_DETAIL_BYTES = 350_000; // ~350KB por detalle (ajustable)
+
+/*
+ * Estos límites aplican solamente a la precarga de detalles pesados.
+ * La lista del periodo offline se sigue guardando completa.
+ */
+export const MAX_DETAIL_CACHE_ITEMS = 140;
+export const MAX_DETAIL_CACHE_BYTES = 8_000_000;
+
+/**
+ * Obtiene el uso aproximado de la caché de detalles sin cargar todos
+ * los registros en una sola operación. Los bloques pequeños evitan
+ * crear una respuesta demasiado grande en Android.
+ */
+export async function getOrdenesTecnicoDetailCacheUsage() {
+  try {
+    const keys = await AsyncStorage.getAllKeys();
+    const detailKeys = keys.filter((key) =>
+      key.startsWith(DETAIL_KEY_PREFIX),
+    );
+
+    let estimatedBytes = 0;
+    const batchSize = 40;
+
+    for (let index = 0; index < detailKeys.length; index += batchSize) {
+      const batch = detailKeys.slice(index, index + batchSize);
+      const rows = await AsyncStorage.multiGet(batch);
+
+      rows.forEach(([, raw]) => {
+        estimatedBytes += estimateBytes(raw || "");
+      });
+    }
+
+    return {
+      ok: true,
+      count: detailKeys.length,
+      estimatedBytes,
+      orderIds: detailKeys
+        .map((key) => key.slice(DETAIL_KEY_PREFIX.length))
+        .filter(Boolean),
+    };
+  } catch (error) {
+    if (isStorageFullError(error)) {
+      blockDetailWritesByStorage(
+        error,
+        "getOrdenesTecnicoDetailCacheUsage",
+      );
+    }
+
+    return {
+      ok: false,
+      count: 0,
+      estimatedBytes: 0,
+      orderIds: [],
+      error: error?.message || String(error),
+    };
+  }
+}
 
 /**
  * Adelgaza el detalle para que no explote storage
@@ -325,6 +484,10 @@ export function shouldCacheDetailByOrder(orderLike, baseDate = new Date()) {
 }
 
 export async function saveOrdenTecnicoDetail(orderId, data) {
+  if (detailWritesBlockedByStorage) {
+    return false;
+  }
+
   const slim = sanitizeDetailForCache(data);
   const payload = { updatedAt: Date.now(), data: slim };
 
@@ -352,6 +515,15 @@ export async function saveOrdenTecnicoDetail(orderId, data) {
     await AsyncStorage.setItem(DETAIL_KEY(orderId), raw);
     return true;
   } catch (e) {
+    if (isStorageFullError(e)) {
+      blockDetailWritesByStorage(
+        e,
+        "saveOrdenTecnicoDetail",
+      );
+
+      return false;
+    }
+
     console.log("[OFFLINE] saveOrdenTecnicoDetail ERROR:", e?.message || e);
     return false;
   }
@@ -374,10 +546,10 @@ export async function pruneDetallesNoUsados(orderIdsKeep = []) {
   try {
     const keys = await AsyncStorage.getAllKeys();
     const detailKeys = keys.filter((k) =>
-      k.startsWith("ordenesTecnico:detail:"),
+      k.startsWith(DETAIL_KEY_PREFIX),
     );
     const keepSet = new Set(
-      orderIdsKeep.map((x) => `ordenesTecnico:detail:${String(x).trim()}`),
+      orderIdsKeep.map((x) => `${DETAIL_KEY_PREFIX}${String(x).trim()}`),
     );
     const toDelete = detailKeys.filter((k) => !keepSet.has(k));
     if (toDelete.length) await AsyncStorage.multiRemove(toDelete);

@@ -14,6 +14,10 @@ import {
   buildOfflineWindow,
   isCacheFresh,
   ORDENES_CACHE_TTL_MS,
+  MAX_DETAIL_CACHE_ITEMS,
+  MAX_DETAIL_CACHE_BYTES,
+  getOrdenesTecnicoDetailCacheUsage,
+  areOrdenTecnicoDetailWritesBlocked,
 } from "./ordenesTecnicoCache";
 
 /*
@@ -687,7 +691,7 @@ async function runPrefetchOrdenesTecnicoDetalles({
   force = false,
   ttlMs = ORDENES_CACHE_TTL_MS,
 }) {
-  const ids = [
+  const requestedIds = [
     ...new Set(
       (
         Array.isArray(orderIds)
@@ -701,7 +705,7 @@ async function runPrefetchOrdenesTecnicoDetalles({
     ),
   ];
 
-  if (!ids.length) {
+  if (!requestedIds.length) {
     return {
       ok: 0,
       fresh: 0,
@@ -709,6 +713,104 @@ async function runPrefetchOrdenesTecnicoDetalles({
       partial: 0,
       fail: 0,
       total: 0,
+      requestedTotal: 0,
+      limited: 0,
+      stoppedByStorage: false,
+    };
+  }
+
+  /*
+   * La lista puede contener cientos o miles de órdenes, pero sus
+   * detalles son mucho más pesados. Antes de iniciar peticiones se
+   * calcula un presupuesto estable usando lo que ya existe.
+   *
+   * Los detalles existentes sí pueden revisarse. Los detalles nuevos
+   * solamente entran mientras haya espacio dentro de ambos límites.
+   * No se elimina ningún detalle que todavía pertenezca a la ventana.
+   */
+  const cacheUsage =
+    await getOrdenesTecnicoDetailCacheUsage();
+
+  if (areOrdenTecnicoDetailWritesBlocked()) {
+    return {
+      ok: 0,
+      fresh: 0,
+      skip: 0,
+      partial: 0,
+      fail: 0,
+      total: 0,
+      requestedTotal: requestedIds.length,
+      limited: requestedIds.length,
+      stoppedByStorage: true,
+    };
+  }
+
+  const cachedIds = new Set(
+    Array.isArray(cacheUsage?.orderIds)
+      ? cacheUsage.orderIds.map((id) => String(id || "").trim())
+      : [],
+  );
+
+  let reservedItems = Number(cacheUsage?.count || 0);
+  let reservedBytes = Number(cacheUsage?.estimatedBytes || 0);
+
+  const averageDetailBytes =
+    reservedItems > 0 && reservedBytes > 0
+      ? Math.ceil(reservedBytes / reservedItems)
+      : 60_000;
+
+  const estimatedNewDetailBytes = Math.min(
+    350_000,
+    Math.max(25_000, averageDetailBytes),
+  );
+
+  const ids = [];
+
+  requestedIds.forEach((orderId) => {
+    if (cachedIds.has(orderId)) {
+      ids.push(orderId);
+      return;
+    }
+
+    const hasItemSlot =
+      reservedItems < MAX_DETAIL_CACHE_ITEMS;
+
+    const hasByteBudget =
+      reservedBytes + estimatedNewDetailBytes <=
+      MAX_DETAIL_CACHE_BYTES;
+
+    if (hasItemSlot && hasByteBudget) {
+      ids.push(orderId);
+      reservedItems += 1;
+      reservedBytes += estimatedNewDetailBytes;
+    }
+  });
+
+  const limited = Math.max(
+    0,
+    requestedIds.length - ids.length,
+  );
+
+  if (!ids.length) {
+    console.log(
+      "[prefetch] Sin presupuesto para nuevos detalles:",
+      {
+        requested: requestedIds.length,
+        cachedDetails: cacheUsage?.count || 0,
+        estimatedBytes: cacheUsage?.estimatedBytes || 0,
+      },
+    );
+
+    return {
+      ok: 0,
+      fresh: 0,
+      skip: 0,
+      partial: 0,
+      fail: 0,
+      total: 0,
+      requestedTotal: requestedIds.length,
+      limited,
+      stoppedByStorage: false,
     };
   }
 
@@ -720,12 +822,14 @@ async function runPrefetchOrdenesTecnicoDetalles({
   let skip = 0;
   let partial = 0;
   let fail = 0;
+  let stoppedByStorage = false;
 
   let currentIndex = 0;
 
   async function worker() {
     while (
-      currentIndex < ids.length
+      currentIndex < ids.length &&
+      !areOrdenTecnicoDetailWritesBlocked()
     ) {
       const index = currentIndex;
       currentIndex += 1;
@@ -792,10 +896,18 @@ async function runPrefetchOrdenesTecnicoDetalles({
               statusHint &&
               previousStatus !== nextStatus
             ) {
-              await saveOrdenTecnicoDetail(
+              const statusSaved = await saveOrdenTecnicoDetail(
                 orderId,
                 detailWithCurrentStatus,
               );
+
+              if (
+                statusSaved !== true &&
+                areOrdenTecnicoDetailWritesBlocked()
+              ) {
+                stoppedByStorage = true;
+                break;
+              }
             }
 
             console.log(
@@ -1114,6 +1226,11 @@ async function runPrefetchOrdenesTecnicoDetalles({
                 "saveOrdenTecnicoDetail returned false",
             },
           );
+
+          if (areOrdenTecnicoDetailWritesBlocked()) {
+            stoppedByStorage = true;
+            break;
+          }
         }
       } catch (error) {
         console.log(
@@ -1156,6 +1273,11 @@ async function runPrefetchOrdenesTecnicoDetalles({
     partial,
     fail,
     total: ids.length,
+    requestedTotal: requestedIds.length,
+    limited,
+    stoppedByStorage:
+      stoppedByStorage ||
+      areOrdenTecnicoDetailWritesBlocked(),
     window,
   };
 }
@@ -1166,7 +1288,7 @@ async function runPrefetchOrdenesTecnicoDetalles({
 export function prefetchOrdenesTecnicoDetalles(
   options = {},
 ) {
-  const requestedIds = [
+  const allRequestedIds = [
     ...new Set(
       (
         Array.isArray(options?.orderIds)
@@ -1179,6 +1301,21 @@ export function prefetchOrdenesTecnicoDetalles(
         .filter(Boolean),
     ),
   ];
+
+  /*
+   * Defensa adicional para cualquier llamada futura que no pase por
+   * bootstrapSyncTecnico. El orden recibido se conserva y solamente
+   * se toma la cantidad máxima permitida para detalles pesados.
+   */
+  const requestedIds = allRequestedIds.slice(
+    0,
+    MAX_DETAIL_CACHE_ITEMS,
+  );
+
+  const normalizedOptions = {
+    ...options,
+    orderIds: requestedIds,
+  };
 
   if (activePrefetchPromise) {
     /*
@@ -1193,7 +1330,7 @@ export function prefetchOrdenesTecnicoDetalles(
       );
 
     const needsForcedRun =
-      options?.force === true &&
+      normalizedOptions?.force === true &&
       !activePrefetchForce;
 
     if (
@@ -1204,13 +1341,13 @@ export function prefetchOrdenesTecnicoDetalles(
         .catch(() => null)
         .then(() =>
           prefetchOrdenesTecnicoDetalles({
-            ...options,
+            ...normalizedOptions,
             orderIds: needsForcedRun
               ? requestedIds
               : missingIds,
             force:
               needsForcedRun ||
-              options?.force === true,
+              normalizedOptions?.force === true,
           }),
         );
     }
@@ -1226,11 +1363,11 @@ export function prefetchOrdenesTecnicoDetalles(
     new Set(requestedIds);
 
   activePrefetchForce =
-    options?.force === true;
+    normalizedOptions?.force === true;
 
   activePrefetchPromise =
     runPrefetchOrdenesTecnicoDetalles(
-      options,
+      normalizedOptions,
     )
       .then((result) => {
         console.log(

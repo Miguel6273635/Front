@@ -10,6 +10,7 @@ import {
   pruneDetallesNoUsados,
   isCacheFresh,
   ORDENES_CACHE_TTL_MS,
+  MAX_DETAIL_CACHE_ITEMS,
 } from "./ordenesTecnicoCache";
 
 import {
@@ -118,6 +119,161 @@ function getOrderIds(orders = []) {
         .filter(Boolean),
     ),
   );
+}
+
+function normalizeStatusCode(value) {
+  const text = String(value ?? "").trim();
+  if (!text) return "";
+
+  const matches = text.match(/(?:^|\D)(0?[1-6]00)(?=\D|$)/g);
+
+  if (matches?.length) {
+    const last = matches[matches.length - 1].match(/0?[1-6]00/);
+    if (last?.[0]) return last[0].padStart(4, "0");
+  }
+
+  const number = Number.parseInt(text, 10);
+  return Number.isNaN(number)
+    ? text
+    : String(number).padStart(4, "0");
+}
+
+function getOrderStatusCode(order) {
+  return normalizeStatusCode(
+    order?.estatus_code ??
+      order?.userstatus ??
+      order?.Userstatus ??
+      order?.UserStatus ??
+      order?.UserStText ??
+      "",
+  );
+}
+
+function parseOrderDateMs(order) {
+  const value =
+    order?.start_date ??
+    order?.StartDate ??
+    order?.BasicStartDate ??
+    null;
+
+  if (!value) return Number.POSITIVE_INFINITY;
+
+  if (typeof value === "string" && value.startsWith("/Date(")) {
+    const milliseconds = Number.parseInt(
+      value.replace("/Date(", "").replace(")/", ""),
+      10,
+    );
+
+    return Number.isFinite(milliseconds)
+      ? milliseconds
+      : Number.POSITIVE_INFINITY;
+  }
+
+  const parsed = new Date(value).getTime();
+
+  return Number.isFinite(parsed)
+    ? parsed
+    : Number.POSITIVE_INFINITY;
+}
+
+/**
+ * Construye las pistas de estatus que utiliza la precarga para no
+ * sobrescribir con un estado anterior el valor efectivo de la lista.
+ */
+function buildStatusByOrderId(orders = []) {
+  return Object.fromEntries(
+    (Array.isArray(orders) ? orders : [])
+      .map((order) => {
+        const orderId = String(
+          order?.Orderid ||
+            order?.OrderId ||
+            order?.orderid ||
+            "",
+        ).trim();
+
+        if (!orderId) return null;
+
+        return [
+          orderId,
+          {
+            estatus_code: order?.estatus_code ?? null,
+            userstatus:
+              order?.userstatus ??
+              order?.Userstatus ??
+              order?.UserStatus ??
+              order?.UserStText ??
+              null,
+            estatus_label: order?.estatus_label ?? null,
+            isPendingSignature: order?.isPendingSignature,
+            isFinal: order?.isFinal,
+            checkin_done: order?.checkin_done,
+          },
+        ];
+      })
+      .filter(Boolean),
+  );
+}
+
+/**
+ * La lista completa se conserva. Solamente se seleccionan los
+ * candidatos cuyos detalles pesados se intentarán precargar.
+ *
+ * Primero van los estados de trabajo activo y después las fechas más
+ * cercanas al día actual. El orden final es estable por OrderId.
+ */
+function getDetailPrefetchOrderIds(orders = []) {
+  const priorityByStatus = {
+    "0200": 0,
+    "0400": 1,
+    "0600": 2,
+    "0100": 3,
+  };
+
+  const now = Date.now();
+  const uniqueOrders = new Map();
+
+  (Array.isArray(orders) ? orders : []).forEach((order) => {
+    const orderId = String(
+      order?.Orderid ||
+        order?.OrderId ||
+        order?.orderid ||
+        "",
+    ).trim();
+
+    if (orderId && !uniqueOrders.has(orderId)) {
+      uniqueOrders.set(orderId, order);
+    }
+  });
+
+  return Array.from(uniqueOrders.entries())
+    .sort(([orderIdA, orderA], [orderIdB, orderB]) => {
+      const priorityA =
+        priorityByStatus[getOrderStatusCode(orderA)] ?? 10;
+      const priorityB =
+        priorityByStatus[getOrderStatusCode(orderB)] ?? 10;
+
+      if (priorityA !== priorityB) {
+        return priorityA - priorityB;
+      }
+
+      const dateA = parseOrderDateMs(orderA);
+      const dateB = parseOrderDateMs(orderB);
+
+      const distanceA = Number.isFinite(dateA)
+        ? Math.abs(dateA - now)
+        : Number.POSITIVE_INFINITY;
+      const distanceB = Number.isFinite(dateB)
+        ? Math.abs(dateB - now)
+        : Number.POSITIVE_INFINITY;
+
+      if (distanceA !== distanceB) {
+        return distanceA - distanceB;
+      }
+
+      return orderIdA.localeCompare(orderIdB);
+    })
+    .slice(0, MAX_DETAIL_CACHE_ITEMS)
+    .map(([orderId]) => orderId);
 }
 
 /**
@@ -272,10 +428,13 @@ export async function bootstrapPrefetchOrdenesTecnico(
     );
 
     const orderIds = getOrderIds(cachedData);
+    const detailOrderIds = getDetailPrefetchOrderIds(cachedData);
+    const statusByOrderId = buildStatusByOrderId(cachedData);
 
     if (prefetchDetails) {
       startDetailsPrefetch({
-        orderIds,
+        orderIds: detailOrderIds,
+        statusByOrderId,
         ttlMs,
         reason: "cache_fresh",
       });
@@ -384,16 +543,25 @@ export async function bootstrapPrefetchOrdenesTecnico(
       sapOrdersInWindow,
     );
 
+    const orderIds = getOrderIds(effectiveOrders);
+
     /*
-     * Guardamos la lista ya reconciliada.
+     * Primero se eliminan únicamente los detalles que ya no
+     * pertenecen a la ventana. Esto libera caché reconstruible antes
+     * de intentar guardar la lista nueva.
      */
-    await saveOrdenesTecnicoList(
+    await pruneDetallesNoUsados(orderIds);
+
+    /*
+     * Guardamos la lista ya reconciliada. Si Android devuelve
+     * SQLITE_FULL, esta función regresa false en vez de lanzar un error.
+     * La lista de SAP se conserva en memoria y no desaparece de la UI.
+     */
+    const listSaved = await saveOrdenesTecnicoList(
       cleanEmail,
       effectiveOrders,
       window,
     );
-
-    const orderIds = getOrderIds(effectiveOrders);
 
     /*
      * Conserva exactamente el estatus efectivo que acaba de quedar en
@@ -401,39 +569,8 @@ export async function bootstrapPrefetchOrdenesTecnico(
      * todavía devuelva un estado anterior; estas pistas impiden que ese
      * resultado vuelva a sobrescribir el estado ya reconciliado.
      */
-    const statusByOrderId = Object.fromEntries(
-      effectiveOrders
-        .map((order) => {
-          const orderId = String(
-            order?.Orderid || order?.OrderId || order?.orderid || "",
-          ).trim();
-
-          if (!orderId) return null;
-
-          return [
-            orderId,
-            {
-              estatus_code: order?.estatus_code ?? null,
-              userstatus:
-                order?.userstatus ??
-                order?.Userstatus ??
-                order?.UserStatus ??
-                order?.UserStText ??
-                null,
-              estatus_label: order?.estatus_label ?? null,
-              isPendingSignature: order?.isPendingSignature,
-              isFinal: order?.isFinal,
-              checkin_done: order?.checkin_done,
-            },
-          ];
-        })
-        .filter(Boolean),
-    );
-
-    /*
-     * Elimina detalles que ya no pertenecen a la ventana actual.
-     */
-    await pruneDetallesNoUsados(orderIds);
+    const statusByOrderId = buildStatusByOrderId(effectiveOrders);
+    const detailOrderIds = getDetailPrefetchOrderIds(effectiveOrders);
 
     /*
      * Precarga detalles en segundo plano.
@@ -442,7 +579,7 @@ export async function bootstrapPrefetchOrdenesTecnico(
      */
     if (prefetchDetails) {
       startDetailsPrefetch({
-        orderIds,
+        orderIds: detailOrderIds,
         statusByOrderId,
         ttlMs,
         reason: "sap_updated",
@@ -454,6 +591,8 @@ export async function bootstrapPrefetchOrdenesTecnico(
       "[BOOTSTRAP TECNICO] Lista actualizada:",
       {
         count: effectiveOrders.length,
+        listSaved,
+        detailsSelected: detailOrderIds.length,
         start: window.startStr,
         end: window.endStr,
       },
@@ -467,6 +606,7 @@ export async function bootstrapPrefetchOrdenesTecnico(
       count: effectiveOrders.length,
       data: effectiveOrders,
       orderIds,
+      cacheSaved: listSaved,
       window,
     };
   } catch (error) {
@@ -489,10 +629,13 @@ export async function bootstrapPrefetchOrdenesTecnico(
      * de los detalles que todavía falten si existe conexión parcial.
      */
     const orderIds = getOrderIds(cachedData);
+    const detailOrderIds = getDetailPrefetchOrderIds(cachedData);
+    const statusByOrderId = buildStatusByOrderId(cachedData);
 
-    if (prefetchDetails && orderIds.length > 0) {
+    if (prefetchDetails && detailOrderIds.length > 0) {
       startDetailsPrefetch({
-        orderIds,
+        orderIds: detailOrderIds,
+        statusByOrderId,
         ttlMs,
         reason: "sap_error_cached_list",
       });

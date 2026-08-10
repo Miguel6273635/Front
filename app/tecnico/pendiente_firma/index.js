@@ -19,7 +19,7 @@ import * as FileSystem from "expo-file-system/legacy";
 import * as Sharing from "expo-sharing";
 
 import {
-  loadOrdenTecnicoDetail, loadOrdenesTecnicoList,
+  buildOfflineWindow, loadOrdenTecnicoDetail, loadOrdenesTecnicoList,
 } from "../../../src/offline/ordenesTecnicoCache";
 import {
   getLocalStatusPatch, setLocalStatusPatch, applyStatusPatchToOrdenes,
@@ -70,6 +70,11 @@ const PENDING_PDFS_DIR = `${FileSystem.documentDirectory}pdfs_no_enviados/`;
 const PENDING_PDFS_INDEX_KEY = "pendingFailedSignaturePdfs:index";
 const SENT_PDFS_DIR = `${FileSystem.documentDirectory}pdfs_enviados/`;
 const SENT_PDFS_INDEX_KEY = "sentSignaturePdfs:index";
+const CLIENTE_LOOKUP_CONCURRENCY = 3;
+const CLIENTE_NAME_MEMORY_CACHE = new Map();
+const CLIENTE_NAME_REMOTE_IN_FLIGHT = new Map();
+const CLIENTE_NAME_REMOTE_WAITERS = [];
+let clienteNameRemoteActive = 0;
 
 const atStartOfDay = (d) => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; };
 const atEndOfDay = (d) => { const x = new Date(d); x.setHours(23, 59, 59, 999); return x; };
@@ -91,6 +96,14 @@ const parseSapDate = (value) => {
 const getUtcYmd = (d) => {
   if (!d) return null;
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
+};
+
+const formatLocalYmd = (d) => {
+  if (!d) return "";
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
 };
 
 const isWithin = (date, start, end) => {
@@ -119,20 +132,184 @@ function getOrderId(item) {
   return String(item?.Orderid || item?.OrderId || "").trim();
 }
 
+function mergeOrdersKeepingCache(cached = [], remote = []) {
+  const map = new Map();
+
+  for (const item of Array.isArray(cached) ? cached : []) {
+    const key = getOrderId(item);
+    if (key) map.set(key, item);
+  }
+
+  for (const item of Array.isArray(remote) ? remote : []) {
+    const key = getOrderId(item);
+    if (key) map.set(key, item);
+  }
+
+  return Array.from(map.values());
+}
+
+function cleanClienteName(value) {
+  const name = safeTrim(value);
+  const normalized = normalizeGroupText(name);
+
+  if (
+    !name ||
+    normalized === "CLIENTE NO DISPONIBLE" ||
+    normalized === "SIN CLIENTE" ||
+    normalized === "NO DISPONIBLE" ||
+    normalized === "N/A" ||
+    normalized === "NA" ||
+    normalized === "-" ||
+    normalized === "—"
+  ) {
+    return "";
+  }
+
+  return name;
+}
+
+function getClienteNameFromAddressNode(node) {
+  if (!node || typeof node !== "object") return "";
+
+  const name1 = cleanClienteName(
+    node?.Name1 ||
+    node?.NAME1 ||
+    node?.name1
+  );
+  const name2 = cleanClienteName(
+    node?.Name2 ||
+    node?.NAME2 ||
+    node?.name2
+  );
+
+  return [name1, name2].filter(Boolean).join(" ").trim();
+}
+
+function getAddressNodes(source) {
+  if (!source || typeof source !== "object") return [];
+
+  const candidates = [
+    source?.ToAddresses,
+    source?.toAddresses,
+    source?.Addresses,
+    source?.addresses,
+    source?.direcciones,
+    source?.data?.ToAddresses,
+    source?.data?.toAddresses,
+    source?.data?.Addresses,
+    source?.data?.addresses,
+    source?.data?.direcciones,
+  ];
+
+  const nodes = [];
+
+  for (const candidate of candidates) {
+    if (Array.isArray(candidate) && candidate.length > 0) {
+      nodes.push(...candidate);
+      continue;
+    }
+
+    if (Array.isArray(candidate?.results) && candidate.results.length > 0) {
+      nodes.push(...candidate.results);
+      continue;
+    }
+
+    if (Array.isArray(candidate?.d?.results) && candidate.d.results.length > 0) {
+      nodes.push(...candidate.d.results);
+      continue;
+    }
+
+    if (candidate && typeof candidate === "object") {
+      nodes.push(candidate);
+    }
+  }
+
+  return nodes;
+}
+
+function extractClienteNameFromSource(source) {
+  if (!source || typeof source !== "object") return "";
+
+  const directAddressName = getClienteNameFromAddressNode(source);
+  if (directAddressName) return directAddressName;
+
+  const directCandidates = [
+    source?.cliente,
+    source?.Cliente,
+    source?.partner_name,
+    source?.PartnerName,
+    source?.customer_name,
+    source?.CustomerName,
+    source?.clienteNombre,
+    source?.ClienteNombre,
+    source?.data?.cliente,
+    source?.data?.Cliente,
+    source?.data?.partner_name,
+    source?.data?.PartnerName,
+    source?.data?.customer_name,
+    source?.data?.CustomerName,
+    source?.data?.clienteNombre,
+    source?.data?.ClienteNombre,
+  ];
+
+  for (const candidate of directCandidates) {
+    const name = cleanClienteName(candidate);
+    if (name) return name;
+  }
+
+  const addressNodes = getAddressNodes(source);
+  for (const node of addressNodes) {
+    const name = getClienteNameFromAddressNode(node);
+    if (name) return name;
+  }
+
+  return "";
+}
+
 function getClienteName(item) {
-  const name1 = safeTrim(
-    item?.Name1 ||
-    item?.NAME1 ||
-    item?.name1
-  );
+  return extractClienteNameFromSource(item) || "Cliente no disponible";
+}
 
-  if (name1) return name1;
+function mergeClienteNamesIntoCurrentOrders(current = [], enriched = []) {
+  const nameByOrderId = new Map();
 
-  return safeTrim(
-    item?.cliente ||
-    item?.partner_name ||
-    "Cliente no disponible"
-  );
+  for (const item of Array.isArray(enriched) ? enriched : []) {
+    const orderId = getOrderId(item);
+    const clienteName = extractClienteNameFromSource(item);
+    if (orderId && clienteName) nameByOrderId.set(orderId, clienteName);
+  }
+
+  return (Array.isArray(current) ? current : []).map((item) => {
+    const clienteName = nameByOrderId.get(getOrderId(item));
+    if (!clienteName) return item;
+
+    return {
+      ...item,
+      Name1: clienteName,
+      cliente: clienteName,
+    };
+  });
+}
+
+async function runClienteRemoteWithLimit(task) {
+  if (clienteNameRemoteActive >= CLIENTE_LOOKUP_CONCURRENCY) {
+    await new Promise((resolve) => {
+      CLIENTE_NAME_REMOTE_WAITERS.push(resolve);
+    });
+  } else {
+    clienteNameRemoteActive += 1;
+  }
+
+  try {
+    return await task();
+  } finally {
+    const releaseNext = CLIENTE_NAME_REMOTE_WAITERS.shift();
+    if (releaseNext) {
+      releaseNext();
+    } else {
+      clienteNameRemoteActive = Math.max(0, clienteNameRemoteActive - 1);
+    }
+  }
 }
 
 function getEquipoNumber(item) {
@@ -216,6 +393,7 @@ function buildGroupedRows(orders = []) {
   const output = [];
   let currentMonth = "";
   let currentClient = "";
+  const clientHeaderOccurrenceMap = {};
 
   for (const item of sorted) {
     const orderId = getOrderId(item);
@@ -238,10 +416,12 @@ function buildGroupedRows(orders = []) {
 
     if (fullClientKey !== currentClient) {
       const count = clientCountMap[fullClientKey] || 0;
+      const occurrence = (clientHeaderOccurrenceMap[fullClientKey] || 0) + 1;
+      clientHeaderOccurrenceMap[fullClientKey] = occurrence;
 
       output.push({
         type: "clientHeader",
-        key: `client-${fullClientKey}`,
+        key: `client-${fullClientKey}-${occurrence}`,
         title: clientName || "Cliente no disponible",
         count,
       });
@@ -577,39 +757,111 @@ function pickFirstAddress(results = []) {
   return results[0];
 }
 
-async function enrichOrdersWithToAddressesCliente({ orders, apiClient, token }) {
-  const list = Array.isArray(orders) ? orders : [];
+async function resolveClienteNameForOrder({
+  item,
+  apiClient,
+  token,
+  allowRemote,
+}) {
+  const orderId = getOrderId(item);
+  const currentName = extractClienteNameFromSource(item);
 
-  const enriched = await Promise.all(
-    list.map(async (item) => {
-      const orderId = String(item?.Orderid || item?.OrderId || "").trim();
+  if (currentName) {
+    if (orderId) CLIENTE_NAME_MEMORY_CACHE.set(orderId, currentName);
+    return currentName;
+  }
 
-      const currentName1 = safeTrim(
-        item?.Name1 ||
-        item?.NAME1 ||
-        item?.name1
-      );
+  if (!orderId) return "";
 
-      if (currentName1 || !orderId) {
-        return {
-          ...item,
-          Name1: currentName1 || item?.Name1 || "",
-          cliente: currentName1 || item?.cliente || item?.partner_name || "",
-        };
-      }
+  const memoryName = cleanClienteName(
+    CLIENTE_NAME_MEMORY_CACHE.get(orderId)
+  );
+  if (memoryName) return memoryName;
 
-      const clienteName = await fetchClienteNameFromToAddresses({
+  try {
+    const cachedDetail = await loadOrdenTecnicoDetail(orderId);
+    const localName = extractClienteNameFromSource(
+      cachedDetail?.data || cachedDetail
+    );
+
+    if (localName) {
+      CLIENTE_NAME_MEMORY_CACHE.set(orderId, localName);
+      return localName;
+    }
+  } catch (error) {
+    console.log("[PENDIENTE_FIRMA][Cliente local error]", {
+      orderId,
+      error: error?.message || error,
+    });
+  }
+
+  if (!allowRemote || !apiClient) return "";
+
+  let remotePromise = CLIENTE_NAME_REMOTE_IN_FLIGHT.get(orderId);
+
+  if (!remotePromise) {
+    remotePromise = runClienteRemoteWithLimit(() =>
+      fetchClienteNameFromToAddresses({
         apiClient,
         token,
         orderId,
+      })
+    ).finally(() => {
+      CLIENTE_NAME_REMOTE_IN_FLIGHT.delete(orderId);
+    });
+
+    CLIENTE_NAME_REMOTE_IN_FLIGHT.set(orderId, remotePromise);
+  }
+
+  const remoteName = cleanClienteName(await remotePromise);
+  if (remoteName) CLIENTE_NAME_MEMORY_CACHE.set(orderId, remoteName);
+  return remoteName;
+}
+
+async function enrichOrdersWithToAddressesCliente({
+  orders,
+  apiClient,
+  token,
+  allowRemote = false,
+  concurrency = CLIENTE_LOOKUP_CONCURRENCY,
+}) {
+  const list = Array.isArray(orders) ? orders : [];
+  if (list.length === 0) return [];
+
+  const enriched = [...list];
+  let nextIndex = 0;
+  const workerCount = Math.min(
+    list.length,
+    Math.max(1, Number(concurrency) || CLIENTE_LOOKUP_CONCURRENCY)
+  );
+
+  const worker = async () => {
+    while (true) {
+      const index = nextIndex;
+      nextIndex += 1;
+
+      if (index >= list.length) return;
+
+      const item = list[index];
+      const clienteName = await resolveClienteNameForOrder({
+        item,
+        apiClient,
+        token,
+        allowRemote,
       });
 
-      return {
-        ...item,
-        Name1: clienteName,
-        cliente: clienteName || item?.cliente || item?.partner_name || "",
-      };
-    })
+      enriched[index] = clienteName
+        ? {
+            ...item,
+            Name1: clienteName,
+            cliente: clienteName,
+          }
+        : item;
+    }
+  };
+
+  await Promise.all(
+    Array.from({ length: workerCount }, () => worker())
   );
 
   return enriched;
@@ -639,15 +891,12 @@ async function fetchClienteNameFromToAddresses({ apiClient, token, orderId }) {
       res?.data?.results ||
       [];
 
-    const firstNode = Array.isArray(results) ? results[0] : null;
+    for (const node of Array.isArray(results) ? results : []) {
+      const clienteName = getClienteNameFromAddressNode(node);
+      if (clienteName) return clienteName;
+    }
 
-    const name1 = safeTrim(
-      firstNode?.Name1 ||
-      firstNode?.NAME1 ||
-      firstNode?.name1
-    );
-
-    return name1;
+    return "";
   } catch (error) {
     console.log("[PENDIENTE_FIRMA][ToAddresses cliente error]", {
       orderId,
@@ -811,13 +1060,15 @@ export default function PendienteFirmaIndex() {
   const {
     ordenes: ordenesCompartidas,
     loadingInitial: loading,
-    refreshing,
+    refreshing: refreshingCentral,
     loadLocal,
     refresh,
   } = useOrdenesTecnico();
   const userEmail = safeStr(user?.correo || user?.email || user?.upn || user?.username).trim();
   const [isOnline, setIsOnline] = useState(true);
   const [allOrdenes, setAllOrdenes] = useState([]);
+  const [historicalOrdenes, setHistoricalOrdenes] = useState([]);
+  const [loadingHistorical, setLoadingHistorical] = useState(false);
   const [rows, setRows] = useState([]);
   const [query, setQuery] = useState("");
   const [dateMode, setDateMode] = useState("all");
@@ -862,6 +1113,7 @@ export default function PendienteFirmaIndex() {
   const [sentPdfs, setSentPdfs] = useState([]);
   const signatureRef = useRef(null);
   const queueProcessingRef = useRef(false);
+  const refreshing = refreshingCentral || loadingHistorical;
 
   const selectedIds = useMemo(() => Object.keys(selectedMap).filter((k) => !!selectedMap[k]), [selectedMap]);
   const selectedCount = selectedIds.length;
@@ -875,6 +1127,22 @@ export default function PendienteFirmaIndex() {
     if (dateMode === "year") return { start: startOfYear(yearOnly), end: endOfYear(yearOnly) };
     const s = new Date(); s.setDate(s.getDate() - 365); return { start: atStartOfDay(s), end: atEndOfDay(new Date()) };
   }, [dateMode, dayRef, weekStart, weekEnd, monthYear, yearOnly]);
+
+  const selectedRangeIsCached = useMemo(() => {
+    const offlineWindow = buildOfflineWindow(new Date());
+    const selectedStart = formatLocalYmd(start);
+    const selectedEnd = formatLocalYmd(end);
+
+    return (
+      selectedStart >= offlineWindow.startStr &&
+      selectedEnd <= offlineWindow.endStr
+    );
+  }, [start, end]);
+
+  const selectedRangeKey = useMemo(
+    () => `${formatLocalYmd(start)}:${formatLocalYmd(end)}`,
+    [start, end],
+  );
 
   const applySharedPending0400 = useCallback(async (data = []) => {
     if (!userEmail) {
@@ -892,8 +1160,27 @@ export default function PendienteFirmaIndex() {
       }
       return next;
     });
+
+    void enrichOrdersWithToAddressesCliente({
+      orders: only0400,
+      apiClient: api,
+      token,
+      allowRemote: isOnline,
+      concurrency: CLIENTE_LOOKUP_CONCURRENCY,
+    })
+      .then((enriched0400) => {
+        setAllOrdenes((current) =>
+          mergeClienteNamesIntoCurrentOrders(current, enriched0400)
+        );
+      })
+      .catch((error) => {
+        console.log("[PENDIENTE_FIRMA][Cliente enriquecimiento local error]", {
+          error: error?.message || error,
+        });
+      });
+
     return only0400;
-  }, [userEmail]);
+  }, [isOnline, token, userEmail]);
 
   // Relee la caché central sin consultar SAP.
   const reloadPending0400Local = useCallback(async () => {
@@ -907,8 +1194,99 @@ export default function PendienteFirmaIndex() {
     }
   }, [applySharedPending0400, loadLocal]);
 
+  // Consulta temporal para rangos fuera de la ventana offline.
+  // Estas órdenes viven sólo en memoria: no se guardan ni se precargan.
+  const fetchHistoricalPending0400 = useCallback(async () => {
+    if (selectedRangeIsCached) {
+      setHistoricalOrdenes([]);
+      return { ok: true, source: "cache_window", data: [] };
+    }
+
+    try {
+      setLoadingHistorical(true);
+
+      const net = await NetInfo.fetch();
+      const online = !!(
+        net?.isConnected && net?.isInternetReachable !== false
+      );
+      setIsOnline(online);
+
+      if (!online) {
+        setHistoricalOrdenes([]);
+        return { ok: false, reason: "offline", data: [] };
+      }
+
+      const okToken = await ensureValidToken();
+      if (!okToken) {
+        return { ok: false, reason: "invalid_token", data: [] };
+      }
+
+      const params = new URLSearchParams({
+        start: formatLocalYmd(start),
+        end: formatLocalYmd(end),
+        mode: "range",
+      });
+
+      console.log("[PENDIENTE_FIRMA][HISTORICO] Consulta temporal:", {
+        start: formatLocalYmd(start),
+        end: formatLocalYmd(end),
+      });
+
+      const res = await api.get(`/api/ordenes/sap/list?${params.toString()}`);
+      const remote = Array.isArray(res?.data) ? res.data : [];
+      const only0400 = await loadPending0400FromOffline(userEmail, remote);
+
+      setHistoricalOrdenes(only0400);
+
+      void enrichOrdersWithToAddressesCliente({
+        orders: only0400,
+        apiClient: api,
+        token,
+        allowRemote: true,
+        concurrency: CLIENTE_LOOKUP_CONCURRENCY,
+      })
+        .then((enriched0400) => {
+          setHistoricalOrdenes((current) =>
+            mergeClienteNamesIntoCurrentOrders(current, enriched0400)
+          );
+        })
+        .catch((error) => {
+          console.log("[PENDIENTE_FIRMA][Cliente enriquecimiento histórico error]", {
+            error: error?.message || error,
+          });
+        });
+
+      return {
+        ok: true,
+        source: "remote_temporary",
+        data: only0400,
+      };
+    } catch (error) {
+      console.log(
+        "[PENDIENTE_FIRMA][HISTORICO] Error:",
+        error?.response?.data || error?.message || error,
+      );
+      setHistoricalOrdenes([]);
+      return { ok: false, reason: "request_error", error, data: [] };
+    } finally {
+      setLoadingHistorical(false);
+    }
+  }, [
+    ensureValidToken,
+    selectedRangeIsCached,
+    selectedRangeKey,
+    start,
+    end,
+    token,
+    userEmail,
+  ]);
+
   // Solo la recarga manual fuerza la actualización central desde SAP.
   const refreshOrdenes0400 = useCallback(async () => {
+    if (!selectedRangeIsCached) {
+      return fetchHistoricalPending0400();
+    }
+
     try {
       const result = await refresh();
       const data = Array.isArray(result?.cached?.data)
@@ -921,7 +1299,13 @@ export default function PendienteFirmaIndex() {
       await reloadPending0400Local();
       return { ok: false, error: e };
     }
-  }, [applySharedPending0400, refresh, reloadPending0400Local]);
+  }, [
+    applySharedPending0400,
+    fetchHistoricalPending0400,
+    refresh,
+    reloadPending0400Local,
+    selectedRangeIsCached,
+  ]);
 
   const processPendingQueue = useCallback(async () => {
     if (queueProcessingRef.current) return;
@@ -974,6 +1358,20 @@ export default function PendienteFirmaIndex() {
   useEffect(() => {
     applySharedPending0400(ordenesCompartidas);
   }, [applySharedPending0400, ordenesCompartidas]);
+
+  useEffect(() => {
+    if (selectedRangeIsCached) {
+      setHistoricalOrdenes([]);
+      return;
+    }
+
+    fetchHistoricalPending0400();
+  }, [
+    fetchHistoricalPending0400,
+    selectedRangeIsCached,
+    selectedRangeKey,
+  ]);
+
   useEffect(() => { loadFailedPdfs(); loadSentPdfs(); }, [loadFailedPdfs, loadSentPdfs]);
   useFocusEffect(useCallback(() => {
     reloadPending0400Local();
@@ -982,12 +1380,17 @@ export default function PendienteFirmaIndex() {
   }, [reloadPending0400Local, loadFailedPdfs, loadSentPdfs]));
 
   useEffect(() => {
-    setRows((allOrdenes || []).filter((item) => {
+    const source = mergeOrdersKeepingCache(
+      allOrdenes,
+      historicalOrdenes,
+    );
+
+    setRows(source.filter((item) => {
       if (!matchesQuery(item, query)) return false;
       const sd = parseSapDate(item?.start_date);
       return sd ? isWithin(sd, start, end) : false;
     }));
-  }, [allOrdenes, query, start, end]);
+  }, [allOrdenes, historicalOrdenes, query, start, end]);
 
   useEffect(() => {
     setValidatedOrderIds((prev) => prev.filter((id) => selectedIds.includes(String(id))));
