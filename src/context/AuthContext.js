@@ -30,6 +30,16 @@ const AuthContext = createContext(null);
 */
 const LOCAL_SESSION_DAYS = 15;
 
+/*
+  PKCE / SSO:
+  - El verifier sólo vive durante el intento de login.
+  - Se conserva aunque falle un refresh de la sesión anterior.
+  - Se limpia al iniciar un login nuevo o cuando el intercambio termina bien.
+*/
+const SSO_VERIFIER_KEY = "sso_code_verifier";
+const SSO_STARTED_AT_KEY = "sso_started_at";
+const SSO_MAX_AGE_MS = 15 * 60 * 1000;
+
 function pickHomeByRole(rol_id) {
   if (rol_id === 1) return "/admin";
   if (rol_id === 2) return "/supervisor";
@@ -130,6 +140,7 @@ export const AuthProvider = ({ children }) => {
   }, []);
 
   const refreshTimerRef = useRef(null);
+  const ssoInProgressRef = useRef(false);
 
   const clearRefreshTimer = () => {
     if (refreshTimerRef.current) {
@@ -138,14 +149,97 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  async function clearSessionLocal() {
+  /* =========================
+     HELPERS SSO SEGUROS
+     ========================= */
+
+  const clearSsoAttempt = async (reason = "manual") => {
+    try {
+      await AsyncStorage.multiRemove([
+        SSO_VERIFIER_KEY,
+        SSO_STARTED_AT_KEY,
+      ]);
+
+      ssoInProgressRef.current = false;
+
+      console.log("[SSO] Intento PKCE limpiado:", reason);
+    } catch (e) {
+      console.log("[SSO] Error limpiando intento PKCE:", e?.message || e);
+    }
+  };
+
+  const getSsoAttemptState = async () => {
+    try {
+      const [verifier, startedAtRaw] = await Promise.all([
+        AsyncStorage.getItem(SSO_VERIFIER_KEY),
+        AsyncStorage.getItem(SSO_STARTED_AT_KEY),
+      ]);
+
+      const startedAt = Number(startedAtRaw || 0);
+      const ageMs =
+        Number.isFinite(startedAt) && startedAt > 0
+          ? Date.now() - startedAt
+          : null;
+
+      const fresh =
+        !!verifier &&
+        ageMs !== null &&
+        ageMs >= 0 &&
+        ageMs <= SSO_MAX_AGE_MS;
+
+      if (!verifier) {
+        ssoInProgressRef.current = false;
+      } else if (fresh) {
+        ssoInProgressRef.current = true;
+      }
+
+      return {
+        verifier: verifier || "",
+        startedAt: startedAt || 0,
+        ageMs,
+        fresh,
+      };
+    } catch (e) {
+      console.log("[SSO] Error leyendo estado PKCE:", e?.message || e);
+
+      return {
+        verifier: "",
+        startedAt: 0,
+        ageMs: null,
+        fresh: false,
+      };
+    }
+  };
+
+  const hasActiveSsoAttempt = async () => {
+    const state = await getSsoAttemptState();
+
+    if (state.verifier && !state.fresh) {
+      console.log("[SSO] Se encontró un verifier viejo; se limpiará.");
+      await clearSsoAttempt("expired_attempt");
+      return false;
+    }
+
+    return !!state.fresh;
+  };
+
+  /*
+    IMPORTANTE:
+    La limpieza NORMAL de sesión ya NO borra sso_code_verifier.
+
+    Eso evita que un refresh fallido, un 401 o una restauración de sesión
+    eliminen el PKCE mientras Microsoft está devolviendo el callback.
+
+    Sólo se borra el SSO cuando explícitamente se pide preserveSso=false,
+    o desde clearSsoAttempt().
+  */
+  async function clearSessionLocal({ preserveSso = true } = {}) {
     clearRefreshTimer();
 
     await AsyncStorage.multiRemove([
       "user",
       "token",
       "token_expires_at",
-      "sso_code_verifier",
       "local_session_until",
     ]);
 
@@ -156,6 +250,10 @@ export const AuthProvider = ({ children }) => {
       "user_json",
       "local_session_until",
     ]);
+
+    if (!preserveSso) {
+      await clearSsoAttempt("clear_session");
+    }
   }
 
   const buildApiScopes = () => {
@@ -206,6 +304,17 @@ export const AuthProvider = ({ children }) => {
 
         if (!online) {
           console.log("[AUTH] No se refresca token porque no hay internet");
+          return;
+        }
+
+        /*
+          Si justo hay un login SSO en curso, no mezclamos el refresh
+          de la sesión anterior con el PKCE actual.
+        */
+        if (await hasActiveSsoAttempt()) {
+          console.log(
+            "[AUTH] Refresh timer omitido porque hay un SSO en curso"
+          );
           return;
         }
 
@@ -344,12 +453,15 @@ export const AuthProvider = ({ children }) => {
 
       if (!graphToken) return null;
 
-      const res = await fetch("https://graph.microsoft.com/v1.0/me/photo/$value", {
-        method: "GET",
-        headers: {
-          Authorization: `Bearer ${graphToken}`,
-        },
-      });
+      const res = await fetch(
+        "https://graph.microsoft.com/v1.0/me/photo/$value",
+        {
+          method: "GET",
+          headers: {
+            Authorization: `Bearer ${graphToken}`,
+          },
+        }
+      );
 
       console.log("[GRAPH PHOTO STATUS]", res.status);
 
@@ -450,6 +562,22 @@ export const AuthProvider = ({ children }) => {
           Intentamos refresh.
         */
         if (online) {
+          /*
+            Si estamos regresando de Microsoft con un PKCE activo,
+            NO intentamos refrescar la sesión vieja.
+            El callback /auth se encargará de completar el login nuevo.
+          */
+          if (await hasActiveSsoAttempt()) {
+            console.log(
+              "[AUTH] Hay un SSO en curso; se omite refresh de sesión anterior"
+            );
+
+            setToken(storedToken || null);
+            setUser(parsedUser);
+            setOfflineMode(false);
+            return;
+          }
+
           console.log("[AUTH] Token vencido. Intentando refresh online...");
 
           const refreshed = await refreshAccessToken();
@@ -470,12 +598,14 @@ export const AuthProvider = ({ children }) => {
 
           /*
             Si hay internet y aun así no se pudo refrescar,
-            probablemente el refresh token ya expiró, fue revocado
-            o la sesión ya no es válida. Ahí sí cerramos sesión.
+            cerramos la sesión anterior, PERO conservamos un posible
+            verifier PKCE que pertenezca al login que está regresando.
           */
-          console.log("[AUTH] Refresh falló online. Cerrando sesión local.");
+          console.log(
+            "[AUTH] Refresh falló online. Limpiando sesión anterior sin tocar PKCE."
+          );
 
-          await clearSessionLocal();
+          await clearSessionLocal({ preserveSso: true });
 
           setToken(null);
           setUser(null);
@@ -567,13 +697,44 @@ export const AuthProvider = ({ children }) => {
       throw new Error("ISSUER vacío. Revisa AZURE_TENANT_ID");
     }
 
+    /*
+      Antes de iniciar un login NUEVO sí limpiamos cualquier verifier viejo.
+      De esta forma nunca reutilizamos un PKCE de otro intento.
+    */
+    await clearSsoAttempt("before_new_login");
+
     const discovery = await AuthSession.fetchDiscoveryAsync(ISSUER);
     const scopes = buildLoginScopes();
 
     const codeVerifier = await makeCodeVerifier();
     const codeChallenge = await makeCodeChallenge(codeVerifier);
+    const startedAt = Date.now();
 
-    await AsyncStorage.setItem("sso_code_verifier", codeVerifier);
+    await AsyncStorage.multiSet([
+      [SSO_VERIFIER_KEY, codeVerifier],
+      [SSO_STARTED_AT_KEY, String(startedAt)],
+    ]);
+
+    ssoInProgressRef.current = true;
+
+    /*
+      Verificación inmediata de persistencia.
+      NO imprimimos el verifier real por seguridad.
+    */
+    const verifierGuardado = await AsyncStorage.getItem(SSO_VERIFIER_KEY);
+
+    console.log("[SSO] PKCE guardado antes de abrir Microsoft:", {
+      exists: !!verifierGuardado,
+      length: verifierGuardado?.length || 0,
+      redirectUri: REDIRECT_URI,
+    });
+
+    if (!verifierGuardado) {
+      ssoInProgressRef.current = false;
+      throw new Error(
+        "No se pudo guardar el verificador de seguridad del SSO. Intenta nuevamente."
+      );
+    }
 
     const authUrl =
       `${discovery.authorizationEndpoint}` +
@@ -586,15 +747,84 @@ export const AuthProvider = ({ children }) => {
       `&code_challenge_method=S256` +
       `&prompt=select_account`;
 
-    const result = await WebBrowser.openAuthSessionAsync(authUrl, REDIRECT_URI);
+    console.log("[SSO] Abriendo Microsoft...", {
+      redirectUri: REDIRECT_URI,
+      scopes: scopes.length,
+    });
 
+    const result = await WebBrowser.openAuthSessionAsync(
+      authUrl,
+      REDIRECT_URI
+    );
+
+    console.log("[SSO] Resultado navegador:", {
+      type: result?.type || "unknown",
+      hasUrl: !!result?.url,
+    });
+
+    /*
+      IMPORTANTE:
+      Ya NO borramos sso_code_verifier aquí si Android devuelve
+      dismiss/cancel.
+
+      En algunos dispositivos el navegador y el deep-link pueden resolverse
+      casi al mismo tiempo. Borrarlo aquí puede competir con app/auth.js.
+
+      Si de verdad fue una cancelación, el verifier sobrante es inocuo y se
+      elimina automáticamente antes del siguiente login.
+    */
     if (result.type === "dismiss" || result.type === "cancel") {
-      await AsyncStorage.removeItem("sso_code_verifier");
-      return { ok: false, cancelled: true, type: result.type };
+      ssoInProgressRef.current = false;
+
+      /*
+        Damos un margen antes de borrar el PKCE.
+        En algunos Android el deep-link puede competir con el cierre
+        del navegador. Si el callback ya tomó el verifier, esta limpieza
+        tardía no le afecta; si fue una cancelación real, no dejamos
+        el intento SSO vivo indefinidamente.
+      */
+      setTimeout(async () => {
+        try {
+          const currentVerifier =
+            await AsyncStorage.getItem(SSO_VERIFIER_KEY);
+
+          if (currentVerifier === codeVerifier) {
+            await clearSsoAttempt("browser_cancel_grace_timeout");
+          }
+        } catch (e) {
+          console.log(
+            "[SSO] Error en limpieza tardía tras cancelación:",
+            e?.message || e
+          );
+        }
+      }, 15000);
+
+      return {
+        ok: false,
+        cancelled: true,
+        type: result.type,
+      };
     }
 
     if (result.type !== "success") {
-      return { ok: false, cancelled: false, type: result.type };
+      ssoInProgressRef.current = false;
+
+      setTimeout(async () => {
+        try {
+          const currentVerifier =
+            await AsyncStorage.getItem(SSO_VERIFIER_KEY);
+
+          if (currentVerifier === codeVerifier) {
+            await clearSsoAttempt("browser_non_success_grace_timeout");
+          }
+        } catch {}
+      }, 15000);
+
+      return {
+        ok: false,
+        cancelled: false,
+        type: result.type,
+      };
     }
 
     return { ok: true };
@@ -605,17 +835,28 @@ export const AuthProvider = ({ children }) => {
      ========================= */
 
   const finishSSO = async (params) => {
+    ssoInProgressRef.current = true;
+
     const code = params?.code;
     const error = params?.error;
     const errorDescription = params?.error_description;
 
+    console.log("[SSO] Callback recibido:", {
+      hasCode: !!code,
+      error: error || null,
+      hasErrorDescription: !!errorDescription,
+      redirectUri: REDIRECT_URI,
+    });
+
     if (error === "access_denied" && !code) {
-      await AsyncStorage.removeItem("sso_code_verifier");
+      await clearSsoAttempt("access_denied");
       router.replace("/(auth)/login");
       return { ok: false, cancelled: true };
     }
 
     if (error) {
+      await clearSsoAttempt(`azure_error:${String(error)}`);
+
       throw new Error(
         `SSO error: ${String(error)}${
           errorDescription ? ` - ${String(errorDescription)}` : ""
@@ -624,34 +865,78 @@ export const AuthProvider = ({ children }) => {
     }
 
     if (!code) {
+      await clearSsoAttempt("callback_without_code");
       throw new Error('No llegó "code" en callback');
+    }
+
+    const ssoState = await getSsoAttemptState();
+
+    console.log("[SSO] Estado PKCE al recibir callback:", {
+      exists: !!ssoState.verifier,
+      length: ssoState.verifier?.length || 0,
+      ageMs: ssoState.ageMs,
+      fresh: ssoState.fresh,
+    });
+
+    if (!ssoState.verifier) {
+      ssoInProgressRef.current = false;
+
+      throw new Error(
+        "Falta sso_code_verifier. El intento de inicio de sesión perdió su estado local; vuelve a intentar el acceso con Microsoft."
+      );
+    }
+
+    if (!ssoState.fresh) {
+      await clearSsoAttempt("expired_on_callback");
+
+      throw new Error(
+        "El intento de inicio de sesión expiró. Vuelve a iniciar sesión con Microsoft."
+      );
     }
 
     const discovery = await AuthSession.fetchDiscoveryAsync(ISSUER);
 
-    const codeVerifier = (await AsyncStorage.getItem("sso_code_verifier")) || "";
+    let tokenResult;
 
-    if (!codeVerifier) {
-      throw new Error("Falta sso_code_verifier (vuelve a iniciar loginSSO)");
+    try {
+      tokenResult = await AuthSession.exchangeCodeAsync(
+        {
+          clientId: AZURE_CLIENT_ID,
+          code,
+          redirectUri: REDIRECT_URI,
+          extraParams: {
+            code_verifier: ssoState.verifier,
+          },
+        },
+        discovery
+      );
+    } catch (e) {
+      /*
+        No limpiamos antes de registrar el error.
+        El próximo login lo limpiará de todas formas.
+      */
+      console.log("[SSO] Error intercambiando authorization code:", {
+        message: e?.message || String(e),
+      });
+
+      ssoInProgressRef.current = false;
+      throw e;
     }
-
-    const tokenResult = await AuthSession.exchangeCodeAsync(
-      {
-        clientId: AZURE_CLIENT_ID,
-        code,
-        redirectUri: REDIRECT_URI,
-        extraParams: { code_verifier: codeVerifier },
-      },
-      discovery
-    );
 
     const accessToken = tokenResult?.accessToken;
     const expiresIn = tokenResult?.expiresIn;
     const refreshToken = tokenResult?.refreshToken;
 
     if (!accessToken) {
+      ssoInProgressRef.current = false;
       throw new Error("No llegó accessToken. Revisa scopes/consent de Azure.");
     }
+
+    /*
+      En este punto el authorization code ya fue intercambiado con éxito.
+      El verifier ya cumplió su función y ahora sí se puede borrar sin riesgo.
+    */
+    await clearSsoAttempt("token_exchange_ok");
 
     const expAt =
       Date.now() +
@@ -671,11 +956,16 @@ export const AuthProvider = ({ children }) => {
 
     try {
       meRes = await api.get("/api/auth/me", {
-        headers: { Authorization: `Bearer ${accessToken}` },
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
       });
     } catch (e) {
       const status = e?.response?.status;
-      const detail = e?.response?.data?.detail || e?.response?.data || e?.message;
+      const detail =
+        e?.response?.data?.detail ||
+        e?.response?.data ||
+        e?.message;
 
       throw new Error(
         `No pude validar en /api/auth/me (${status || "sin status"}): ${String(
@@ -690,7 +980,10 @@ export const AuthProvider = ({ children }) => {
       throw new Error("Respuesta inválida de /api/auth/me (no viene user)");
     }
 
-    let finalUser = { ...u, photo: null };
+    let finalUser = {
+      ...u,
+      photo: null,
+    };
 
     try {
       let photo = await fetchMicrosoftProfilePhoto(accessToken);
@@ -715,8 +1008,15 @@ export const AuthProvider = ({ children }) => {
     setToken(accessToken);
     setOfflineMode(false);
 
-    await AsyncStorage.setItem("user", JSON.stringify(finalUser));
-    await authSet("user_json", JSON.stringify(finalUser));
+    await AsyncStorage.setItem(
+      "user",
+      JSON.stringify(finalUser)
+    );
+
+    await authSet(
+      "user_json",
+      JSON.stringify(finalUser)
+    );
 
     /*
       Guardamos vigencia de sesión local.
@@ -724,14 +1024,21 @@ export const AuthProvider = ({ children }) => {
     */
     const localSessionUntil = getLocalSessionUntilMs();
 
-    await AsyncStorage.setItem("local_session_until", String(localSessionUntil));
-    await authSet("local_session_until", String(localSessionUntil));
+    await AsyncStorage.setItem(
+      "local_session_until",
+      String(localSessionUntil)
+    );
 
-    await AsyncStorage.removeItem("sso_code_verifier");
+    await authSet(
+      "local_session_until",
+      String(localSessionUntil)
+    );
 
     await scheduleRefresh();
 
-    router.replace(pickHomeByRole(finalUser.rol_id));
+    router.replace(
+      pickHomeByRole(finalUser.rol_id)
+    );
 
     return { ok: true };
   };
@@ -777,7 +1084,10 @@ export const AuthProvider = ({ children }) => {
           String(localSessionUntil)
         );
 
-        await authSet("local_session_until", String(localSessionUntil));
+        await authSet(
+          "local_session_until",
+          String(localSessionUntil)
+        );
       }
 
       const validLocal = isLocalSessionValid(localSessionUntil);
@@ -787,6 +1097,17 @@ export const AuthProvider = ({ children }) => {
       }
 
       return validLocal;
+    }
+
+    /*
+      Si hay un SSO activo, NO intentamos refrescar la sesión anterior.
+      El login nuevo está a punto de reemplazar el token.
+    */
+    if (await hasActiveSsoAttempt()) {
+      console.log(
+        "[AUTH] ensureValidToken omitido temporalmente por SSO en curso"
+      );
+      return false;
     }
 
     /*
@@ -815,7 +1136,38 @@ export const AuthProvider = ({ children }) => {
      ========================= */
 
   const logout = async () => {
-    await clearSessionLocal();
+    /*
+      Si un 401 dispara logout justo mientras Microsoft está devolviendo
+      el callback, limpiamos la sesión VIEJA pero NO:
+      - borramos el verifier,
+      - cerramos el navegador,
+      - ni navegamos al login.
+
+      De esa forma app/auth.js puede terminar el SSO nuevo.
+    */
+    const ssoActive = await hasActiveSsoAttempt();
+
+    if (ssoActive) {
+      console.log(
+        "[AUTH] Logout solicitado durante SSO; se limpia sólo la sesión anterior"
+      );
+
+      await clearSessionLocal({
+        preserveSso: true,
+      });
+
+      setUser(null);
+      setToken(null);
+      setOfflineMode(false);
+      return;
+    }
+
+    /*
+      Logout normal: aquí sí limpiamos sesión y cualquier intento PKCE viejo.
+    */
+    await clearSessionLocal({
+      preserveSso: false,
+    });
 
     setUser(null);
     setToken(null);
@@ -833,33 +1185,56 @@ export const AuthProvider = ({ children }) => {
      ========================= */
 
   useEffect(() => {
-    const sub = AppState.addEventListener("change", async (state) => {
-      if (state !== "active") return;
+    const sub = AppState.addEventListener(
+      "change",
+      async (state) => {
+        if (state !== "active") return;
 
-      try {
-        if (!user) return;
+        try {
+          /*
+            Al regresar del navegador de Microsoft Android pone la app
+            nuevamente en "active". Si hay PKCE en curso, NO tocamos
+            la sesión vieja hasta que app/auth.js termine finishSSO().
+          */
+          if (await hasActiveSsoAttempt()) {
+            console.log(
+              "[AUTH] App volvió a foreground con SSO en curso; no se refresca sesión anterior"
+            );
+            return;
+          }
 
-        const online = await isOnline();
+          if (!user) return;
 
-        if (!online) {
-          console.log("[AUTH] App activa sin internet. Se mantiene sesión local.");
-          setOfflineMode(true);
-          return;
+          const online = await isOnline();
+
+          if (!online) {
+            console.log(
+              "[AUTH] App activa sin internet. Se mantiene sesión local."
+            );
+            setOfflineMode(true);
+            return;
+          }
+
+          const ok = await ensureValidToken();
+
+          /*
+            No forzamos logout aquí directamente.
+            El interceptor de api.js se encargará de cerrar sesión
+            si recibe 401 real.
+          */
+          if (!ok) {
+            console.log(
+              "[AUTH] No se pudo asegurar token al volver a foreground"
+            );
+          }
+        } catch (e) {
+          console.log(
+            "[AUTH FOREGROUND ERROR]",
+            e?.message || e
+          );
         }
-
-        const ok = await ensureValidToken();
-
-        /*
-          No forzamos logout aquí directamente.
-          El interceptor de api.js se encargará de cerrar sesión si recibe 401 real.
-        */
-        if (!ok) {
-          console.log("[AUTH] No se pudo asegurar token al volver a foreground");
-        }
-      } catch (e) {
-        console.log("[AUTH FOREGROUND ERROR]", e?.message || e);
       }
-    });
+    );
 
     return () => sub?.remove?.();
   }, [user]);

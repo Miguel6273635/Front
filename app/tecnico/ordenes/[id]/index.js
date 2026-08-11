@@ -644,7 +644,7 @@ function buildStatus0300Payload({ orderId, email, currentCode }) {
     OrderId: orderId,
     WorkOrderHeader: {
       Orderid: orderId,
-      MaterialLong: email,
+      Email: email,
     },
     WorkOrderUserStatusSet: [
       { UserStText: "0300", Langu: "ES", Inactive: "" },
@@ -2250,6 +2250,15 @@ export default function DetalleOrden() {
         Return: [],
       };
 
+      // ✅ Cambio de estatus 0200 -> 0400 usando WorkOrderBulkSet
+      const workOrderBulkEndpoint0400 =
+        "/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderBulkSet";
+
+      const payload0400Bulk = buildSingleWorkOrderBulkPayload({
+        orderId,
+        workOrderPayload: payload0400,
+      });
+
       const opsAll = Array.isArray(orden?.operaciones) ? orden.operaciones : [];
       const plantFallback = String(
         orden?.Plant || orden?.plant || orden?.centro || "",
@@ -2317,8 +2326,8 @@ export default function DetalleOrden() {
         await enqueueSap({
           type: "STATUS",
           orderId,
-          endpoint: "/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet",
-          payload: payload0400,
+          endpoint: workOrderBulkEndpoint0400,
+          payload: payload0400Bulk,
           dedupeKey: `STATUS:${orderId}:0400`,
         });
 
@@ -2372,8 +2381,8 @@ export default function DetalleOrden() {
           await enqueueSap({
             type: "STATUS",
             orderId,
-            endpoint: "/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet",
-            payload: payload0400,
+            endpoint: workOrderBulkEndpoint0400,
+            payload: payload0400Bulk,
             dedupeKey: `STATUS:${orderId}:0400`,
           });
 
@@ -2403,8 +2412,8 @@ export default function DetalleOrden() {
 
       try {
         await api.post(
-          "/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet",
-          payload0400,
+          workOrderBulkEndpoint0400,
+          payload0400Bulk,
           { timeout: 300000 }
         );
         statusOk = true;
@@ -2417,8 +2426,8 @@ export default function DetalleOrden() {
           await enqueueSap({
             type: "STATUS",
             orderId,
-            endpoint: "/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet",
-            payload: payload0400,
+            endpoint: workOrderBulkEndpoint0400,
+            payload: payload0400Bulk,
             dedupeKey: `STATUS:${orderId}:0400`,
           });
 
@@ -2492,15 +2501,15 @@ export default function DetalleOrden() {
       try {
         statusResult = await postWithBackgroundFallback({
           apiInstance: api,
-          endpoint: "/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet",
-          payload: payload0400,
+          endpoint: workOrderBulkEndpoint0400,
+          payload: payload0400Bulk,
           timeoutMs: BG_TIMEOUT_MS,
           enqueueFn: enqueueSap,
           queueItem: {
             type: "STATUS",
             orderId,
-            endpoint: "/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet",
-            payload: payload0400,
+            endpoint: workOrderBulkEndpoint0400,
+            payload: payload0400Bulk,
             dedupeKey: `STATUS:${orderId}:0400`,
           },
         });

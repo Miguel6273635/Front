@@ -1593,7 +1593,7 @@ export default function PendienteFirmaIndex() {
                   if (!pdfResult.base64) throw new Error("El PDF se generó vacío.");
 
                   toWorkOrders.push({
-                    OrderId: orderId, WorkOrderHeader: { Orderid: orderId, MaterialLong: email },
+                    OrderId: orderId, WorkOrderHeader: { Orderid: orderId, Email: email },
                     WorkOrderUserStatusSet: [{ UserStText: "0300", Langu: "ES", Inactive: "" }, { UserStText: "0400", Langu: "ES", Inactive: "X" }],
                     Attachments: [{ DocId: orderId, FileName: fileName, MimeType: "application/pdf", Base64: pdfResult.base64 }],
                   });
