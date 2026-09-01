@@ -1,5 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-
+import * as FileSystem from "expo-file-system/legacy";
 // Ventana requerida: 30 días antes y 8 días después
 export const OFFLINE_DAYS_BEFORE = 30;
 export const OFFLINE_DAYS_AFTER = 8;
@@ -13,6 +13,104 @@ const DETAIL_KEY = (orderId) =>
   `${DETAIL_KEY_PREFIX}${String(orderId || "").trim()}`;
 const META_KEY = (userEmail) => `ordenesTecnico:meta:${userEmail || "unknown"}`;
 
+const LIST_FILE_DIR =
+  `${FileSystem.documentDirectory}ordenesTecnicoLists/`;
+
+function normalizeUserEmail(userEmail) {
+  return String(userEmail || "unknown")
+    .trim()
+    .toLowerCase();
+}
+
+function safeUserFileName(userEmail) {
+  return encodeURIComponent(
+    normalizeUserEmail(userEmail)
+  ).replace(/%/g, "_");
+}
+
+function LIST_FILE(userEmail) {
+  return `${LIST_FILE_DIR}${safeUserFileName(
+    userEmail
+  )}.json`;
+}
+
+async function ensureListDirectory() {
+  const info = await FileSystem.getInfoAsync(
+    LIST_FILE_DIR
+  );
+
+  if (!info.exists) {
+    await FileSystem.makeDirectoryAsync(
+      LIST_FILE_DIR,
+      {
+        intermediates: true,
+      }
+    );
+  }
+}
+
+/*
+ * Elimina solamente las COPIAS antiguas de la lista
+ * del técnico que estaban guardadas en AsyncStorage.
+ *
+ * NO toca:
+ * - detalles
+ * - sapQueue
+ * - status patches
+ * - formularios
+ * - auth
+ */
+async function removeLegacyOrdenesListStorage(
+  userEmail
+) {
+  try {
+    const email =
+      normalizeUserEmail(userEmail);
+
+    const keys =
+      await AsyncStorage.getAllKeys();
+
+    const toDelete = keys.filter((key) => {
+      const lower =
+        String(key || "").toLowerCase();
+
+      const isOldList =
+        lower ===
+        `ordenestecnico:list:${email}`;
+
+      const isOldChunk =
+        lower.startsWith(
+          "ordenestecnico:listchunk:"
+        ) &&
+        lower.includes(email);
+
+      return isOldList || isOldChunk;
+    });
+
+    if (toDelete.length) {
+      await AsyncStorage.multiRemove(
+        toDelete
+      );
+
+      console.log(
+        "[OFFLINE] Lista antigua de AsyncStorage eliminada:",
+        {
+          userEmail: email,
+          keysRemoved: toDelete.length,
+        }
+      );
+    }
+  } catch (error) {
+    /*
+     * Esta limpieza no es crítica.
+     * Si falla, no impedimos que funcione la lista nueva.
+     */
+    console.log(
+      "[OFFLINE] No se pudo limpiar lista legacy:",
+      error?.message || error
+    );
+  }
+}
 /*
  * El bloqueo vive solamente durante la ejecución actual de la app.
  * Si Android informa SQLITE_FULL, los siguientes intentos de guardar
@@ -177,26 +275,96 @@ export async function saveOrdenesTecnicoList(userEmail, ordenes, window) {
   const listKey = LIST_KEY(userEmail);
 
   /*
-   * La copia en memoria se actualiza antes de escribir. Si Android no
-   * puede persistirla por falta de espacio, las pantallas que vuelvan
-   * a pedir la lista durante esta ejecución seguirán recibiendo la
-   * versión completa que llegó de SAP, no una copia local anterior.
+   * Siempre conservamos una copia en memoria durante la ejecución actual.
+   * Si por cualquier motivo la escritura física falla, la UI todavía
+   * puede seguir trabajando con la lista recién obtenida desde SAP.
    */
   listMemoryFallback.set(listKey, payload);
 
   try {
-    await AsyncStorage.multiSet([
-      [listKey, JSON.stringify(payload)],
-      [META_KEY(userEmail), JSON.stringify({ lastSyncAt: Date.now() })],
-    ]);
+    await ensureListDirectory();
+
+    const fileUri = LIST_FILE(userEmail);
+    const raw = JSON.stringify(payload);
+
+    /*
+     * 1. Guardamos la lista grande como archivo.
+     *
+     * Ya NO se guarda la lista completa dentro de AsyncStorage para evitar:
+     * - Row too big to fit into CursorWindow
+     * - crecimiento innecesario de la base de AsyncStorage
+     * - SQLITE_FULL por una lista grande
+     */
+    await FileSystem.writeAsStringAsync(
+      fileUri,
+      raw,
+      {
+        encoding: FileSystem.EncodingType.UTF8,
+      },
+    );
+
+    /*
+     * 2. Validamos que el archivo recién escrito realmente pueda leerse
+     * y que contenga una estructura válida ANTES de borrar la copia vieja.
+     */
+    const validationRaw = await FileSystem.readAsStringAsync(
+      fileUri,
+      {
+        encoding: FileSystem.EncodingType.UTF8,
+      },
+    );
+
+    const validationPayload = validationRaw
+      ? JSON.parse(validationRaw)
+      : null;
+
+    if (
+      !validationPayload ||
+      !Array.isArray(validationPayload.data)
+    ) {
+      throw new Error(
+        "La lista offline guardada no pasó la validación.",
+      );
+    }
+
+    /*
+     * 3. Sólo después de tener una copia nueva válida eliminamos
+     * las versiones antiguas de la lista guardadas en AsyncStorage.
+     *
+     * Esto incluye:
+     * - ordenesTecnico:list:<usuario>
+     * - ordenesTecnico:listChunk:<usuario>:N
+     *
+     * NO se eliminan detalles, colas, estatus, formularios ni auth.
+     */
+    await removeLegacyOrdenesListStorage(userEmail);
+
+    /*
+     * 4. En AsyncStorage sólo dejamos metadata pequeña.
+     */
+    await AsyncStorage.setItem(
+      META_KEY(userEmail),
+      JSON.stringify({
+        lastSyncAt: payload.updatedAt,
+      }),
+    );
+
+    console.log(
+      "[OFFLINE] Lista técnico guardada en archivo:",
+      {
+        userEmail: normalizeUserEmail(userEmail),
+        orders: payload.data.length,
+        characters: raw.length,
+        fileUri,
+      },
+    );
 
     return true;
   } catch (error) {
     /*
-     * SQLITE_FULL no debe convertirse en un supuesto error de SAP.
-     * La lista recién descargada seguirá regresándose en memoria y
-     * podrá mostrarse en pantalla, aunque esta copia no haya logrado
-     * persistirse para el siguiente arranque.
+     * Si el dispositivo realmente se quedó sin espacio,
+     * detenemos nuevas escrituras pesadas de detalles durante
+     * esta ejecución, pero conservamos la lista en memoria.
      */
     if (isStorageFullError(error)) {
       blockDetailWritesByStorage(
@@ -207,7 +375,16 @@ export async function saveOrdenesTecnicoList(userEmail, ordenes, window) {
       return false;
     }
 
-    throw error;
+    console.log(
+      "[OFFLINE] Error guardando lista técnico:",
+      error?.message || error,
+    );
+
+    /*
+     * No lanzamos el error porque la lista recién obtenida
+     * sigue disponible mediante listMemoryFallback.
+     */
+    return false;
   }
 }
 
@@ -215,9 +392,69 @@ export async function loadOrdenesTecnicoList(userEmail) {
   const listKey = LIST_KEY(userEmail);
   const memoryPayload = listMemoryFallback.get(listKey) || null;
 
+  /*
+   * PRIMERA OPCIÓN:
+   * leemos desde el nuevo archivo fuera de AsyncStorage.
+   */
+  try {
+    const fileUri = LIST_FILE(userEmail);
+    const info = await FileSystem.getInfoAsync(fileUri);
+
+    if (info.exists) {
+      const raw = await FileSystem.readAsStringAsync(
+        fileUri,
+        {
+          encoding: FileSystem.EncodingType.UTF8,
+        },
+      );
+
+      const filePayload = raw
+        ? JSON.parse(raw)
+        : null;
+
+      if (
+        filePayload &&
+        Array.isArray(filePayload.data)
+      ) {
+        /*
+         * Si durante esta misma ejecución existe una versión
+         * todavía más reciente en memoria, usamos esa.
+         */
+        if (
+          memoryPayload &&
+          Number(memoryPayload?.updatedAt || 0) >=
+            Number(filePayload?.updatedAt || 0)
+        ) {
+          return memoryPayload;
+        }
+
+        return filePayload;
+      }
+    }
+  } catch (error) {
+    console.log(
+      "[OFFLINE] No se pudo leer lista desde archivo:",
+      {
+        userEmail: normalizeUserEmail(userEmail),
+        error: error?.message || error,
+      },
+    );
+  }
+
+  /*
+   * SEGUNDA OPCIÓN:
+   * compatibilidad con instalaciones anteriores.
+   *
+   * Si todavía existe la lista antigua en AsyncStorage intentamos
+   * leerla. Esto permite una transición segura hasta que SAP
+   * descargue nuevamente la lista y saveOrdenesTecnicoList()
+   * la migre al nuevo archivo.
+   */
   try {
     const raw = await AsyncStorage.getItem(listKey);
-    const storedPayload = raw ? JSON.parse(raw) : null;
+    const storedPayload = raw
+      ? JSON.parse(raw)
+      : null;
 
     if (
       memoryPayload &&
@@ -228,7 +465,20 @@ export async function loadOrdenesTecnicoList(userEmail) {
     }
 
     return storedPayload;
-  } catch {
+  } catch (error) {
+    /*
+     * Un "Row too big to fit into CursorWindow" en una lista legacy
+     * ya no rompe la aplicación. Simplemente usamos memoria si existe
+     * y dejamos que la próxima sincronización online cree el archivo nuevo.
+     */
+    console.log(
+      "[OFFLINE] Lista antigua no legible:",
+      {
+        userEmail: normalizeUserEmail(userEmail),
+        error: error?.message || error,
+      },
+    );
+
     return memoryPayload;
   }
 }

@@ -1,6 +1,6 @@
 // app/tecnico/ordenes/[orderid]/mantto-freno-em-eh.js
-// Diseño moderno tipo wizard para Mantenimiento Freno EM/EH
-// Sin validaciones bloqueantes para poder visualizar el PDF.
+// Diseño simple y técnico para Mantenimiento Freno EM/EH.
+// Mantiene la vista previa del PDF sin validaciones bloqueantes.
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
@@ -29,24 +29,23 @@ import { useAuth } from "../../../../src/context/AuthContext";
 import { buildManttoFrenoEmEhHtml } from "../../../../src/services/templates/mantto_freno_em_eh/buildManttoFrenoEmEhHtml";
 
 const UI = {
-  bg: "#EEF3F8",
+  bg: "#F4F6F8",
   card: "#FFFFFF",
   cardSoft: "#F8FAFC",
-  border: "#DDE6F0",
-  borderDark: "#CBD5E1",
-  text: "#0F172A",
-  muted: "#64748B",
-  muted2: "#94A3B8",
-  blue: "#0B2E6D",
-  blue2: "#2563EB",
-  blueSoft: "#EAF1FF",
-  green: "#16A34A",
-  greenSoft: "#DCFCE7",
-  yellow: "#F59E0B",
-  yellowSoft: "#FEF3C7",
-  red: "#DC2626",
-  redSoft: "#FEE2E2",
-  dark: "#111827",
+  border: "#E4E7EC",
+  borderDark: "#D0D5DD",
+  text: "#172033",
+  muted: "#667085",
+  muted2: "#98A2B3",
+  blue: "#123A72",
+  blue2: "#123A72",
+  blueSoft: "#EFF4FF",
+  green: "#15803D",
+  greenSoft: "#F0FDF4",
+  yellow: "#B45309",
+  yellowSoft: "#FFFBEB",
+  red: "#B42318",
+  redSoft: "#FEF3F2",
 };
 
 const STEPS = [
@@ -259,7 +258,7 @@ const Toggle = ({ value, onValueChange }) => (
   <Switch
     value={!!value}
     onValueChange={onValueChange}
-    trackColor={{ false: "#CBD5E1", true: "#93C5FD" }}
+    trackColor={{ false: "#D0D5DD", true: "#AFC7E8" }}
     thumbColor={value ? UI.blue : "#FFFFFF"}
   />
 );
@@ -732,14 +731,36 @@ export default function ManttoFrenoEmEhScreen() {
     setActiveStep((s) => Math.max(s - 1, 0));
   };
 
-  const renderProgress = () => (
-    <View style={styles.progressCard}>
-      <Text style={styles.progressTitle}>Avance del formulario</Text>
+  const renderStepIndicator = () => (
+    <View style={styles.stepperCard}>
+      <View style={styles.stepperTopRow}>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.stepperEyebrow}>
+            Paso {activeStep + 1} de {STEPS.length}
+          </Text>
+          <Text style={styles.stepperCurrentTitle}>
+            {STEPS[activeStep].title}
+          </Text>
+        </View>
+
+        <Text style={styles.stepperPercent}>
+          {Math.round(((activeStep + 1) / STEPS.length) * 100)}%
+        </Text>
+      </View>
+
+      <View style={styles.progressTrack}>
+        <View
+          style={[
+            styles.progressFill,
+            { width: `${((activeStep + 1) / STEPS.length) * 100}%` },
+          ]}
+        />
+      </View>
 
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.stepsScroll}
+        contentContainerStyle={styles.stepLinks}
       >
         {STEPS.map((step, index) => {
           const active = index === activeStep;
@@ -748,44 +769,40 @@ export default function ManttoFrenoEmEhScreen() {
           return (
             <TouchableOpacity
               key={step.key}
-              activeOpacity={0.86}
+              activeOpacity={0.82}
               onPress={() => setActiveStep(index)}
               style={[
-                styles.stepItem,
-                active && styles.stepItemActive,
-                done && styles.stepItemDone,
+                styles.stepLink,
+                active && styles.stepLinkActive,
+                done && styles.stepLinkDone,
               ]}
             >
               <View
                 style={[
-                  styles.stepNumber,
-                  active && styles.stepNumberActive,
-                  done && styles.stepNumberDone,
+                  styles.stepDot,
+                  active && styles.stepDotActive,
+                  done && styles.stepDotDone,
                 ]}
               >
                 <Text
                   style={[
-                    styles.stepNumberText,
-                    (active || done) && styles.stepNumberTextActive,
+                    styles.stepDotText,
+                    (active || done) && styles.stepDotTextActive,
                   ]}
                 >
                   {index + 1}
                 </Text>
               </View>
 
-              <View>
-                <Text
-                  style={[
-                    styles.stepName,
-                    active && styles.stepNameActive,
-                    done && styles.stepNameDone,
-                  ]}
-                >
-                  {step.title}
-                </Text>
-
-                <Text style={styles.stepShort}>{step.short}</Text>
-              </View>
+              <Text
+                style={[
+                  styles.stepLinkText,
+                  active && styles.stepLinkTextActive,
+                  done && styles.stepLinkTextDone,
+                ]}
+              >
+                {step.short}
+              </Text>
             </TouchableOpacity>
           );
         })}
@@ -1483,37 +1500,25 @@ export default function ManttoFrenoEmEhScreen() {
         keyboardShouldPersistTaps="handled"
         contentContainerStyle={styles.content}
       >
-        <View style={styles.hero}>
-          <View style={styles.heroTop}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.heroKicker}>Formato técnico</Text>
-              <Text style={styles.heroTitle}>Mantenimiento de freno EM/EH</Text>
-              <Text style={styles.heroText}>
-                Captura revisión antes/después, fotos y resultado final. Puedes
-                previsualizar el PDF aunque falten campos.
-              </Text>
-            </View>
-
-            <View style={styles.heroBadge}>
-              <Text style={styles.heroBadgeText}>PDF libre</Text>
-            </View>
+        <View style={styles.introCard}>
+          <View style={styles.introTextWrap}>
+            <Text style={styles.introTitle}>Reporte de mantenimiento</Text>
+            <Text style={styles.introText}>
+              Captura la revisión antes y después, evidencia fotográfica y resultado final. Puedes revisar el PDF en cualquier momento.
+            </Text>
           </View>
 
-          <View style={styles.statsRow}>
-            <StatBox label="Fotos" value={photoCount} />
-            <StatBox label="Hallazgos" value={issueCount} tone={issueCount > 0 ? "yellow" : "green"} />
-            <StatBox label="Paso" value={`${activeStep + 1}/${STEPS.length}`} tone="red" />
-          </View>
+          <TouchableOpacity
+            style={styles.introPreviewButton}
+            onPress={abrirPreviewPdf}
+            disabled={generatingPdf}
+            activeOpacity={0.82}
+          >
+            <Text style={styles.introPreviewButtonText}>Ver PDF</Text>
+          </TouchableOpacity>
         </View>
 
-        {renderProgress()}
-
-        <View style={styles.activeStepHeader}>
-          <Text style={styles.activeStepSmall}>
-            Paso {activeStep + 1} de {STEPS.length}
-          </Text>
-          <Text style={styles.activeStepTitle}>{STEPS[activeStep].title}</Text>
-        </View>
+        {renderStepIndicator()}
 
         {renderStepContent()}
 
@@ -1649,8 +1654,9 @@ const styles = StyleSheet.create({
   },
 
   content: {
-    padding: 16,
-    paddingBottom: 120,
+    paddingHorizontal: 14,
+    paddingTop: 14,
+    paddingBottom: 118,
   },
 
   hero: {
@@ -1869,13 +1875,9 @@ const styles = StyleSheet.create({
     backgroundColor: UI.card,
     borderWidth: 1,
     borderColor: UI.border,
-    borderRadius: 24,
+    borderRadius: 16,
     padding: 15,
-    marginTop: 10,
-    shadowColor: "#0F172A",
-    shadowOpacity: 0.04,
-    shadowRadius: 10,
-    elevation: 1,
+    marginTop: 12,
   },
 
   sectionTop: {
@@ -1884,14 +1886,14 @@ const styles = StyleSheet.create({
 
   sectionTitle: {
     color: UI.text,
-    fontSize: 17,
-    fontWeight: "900",
+    fontSize: 16,
+    fontWeight: "800",
   },
 
   sectionSubtitle: {
     color: UI.muted,
     fontSize: 12,
-    fontWeight: "700",
+    fontWeight: "500",
     lineHeight: 17,
     marginTop: 3,
   },
@@ -1905,36 +1907,36 @@ const styles = StyleSheet.create({
   infoItem: {
     flexGrow: 1,
     flexBasis: "46%",
-    minWidth: 150,
-    backgroundColor: UI.cardSoft,
-    borderRadius: 16,
-    padding: 12,
-    borderWidth: 1,
-    borderColor: UI.border,
+    minWidth: 145,
+    backgroundColor: "#FFFFFF",
+    borderBottomWidth: 1,
+    borderBottomColor: UI.border,
+    paddingVertical: 10,
+    paddingHorizontal: 2,
   },
 
   infoLabel: {
     color: UI.muted,
     fontSize: 10,
-    fontWeight: "900",
+    fontWeight: "700",
     textTransform: "uppercase",
-    letterSpacing: 0.5,
-    marginBottom: 5,
+    letterSpacing: 0.4,
+    marginBottom: 4,
   },
 
   infoValue: {
     color: UI.text,
     fontSize: 14,
-    fontWeight: "900",
+    fontWeight: "700",
     lineHeight: 18,
   },
 
   label: {
     color: UI.muted,
     fontSize: 11,
-    fontWeight: "900",
+    fontWeight: "700",
     textTransform: "uppercase",
-    letterSpacing: 0.4,
+    letterSpacing: 0.35,
     marginBottom: 6,
   },
 
@@ -1942,18 +1944,18 @@ const styles = StyleSheet.create({
     backgroundColor: "#FFFFFF",
     borderWidth: 1,
     borderColor: UI.borderDark,
-    borderRadius: 15,
-    paddingHorizontal: 13,
+    borderRadius: 10,
+    paddingHorizontal: 12,
     paddingVertical: Platform.OS === "ios" ? 12 : 9,
-    minHeight: 45,
+    minHeight: 44,
     color: UI.text,
     fontSize: 14,
-    fontWeight: "800",
+    fontWeight: "600",
     marginBottom: 10,
   },
 
   textArea: {
-    minHeight: 125,
+    minHeight: 118,
     paddingTop: 12,
     textAlignVertical: "top",
   },
@@ -1961,28 +1963,28 @@ const styles = StyleSheet.create({
   fieldRow: {
     flexDirection: "row",
     flexWrap: "wrap",
-    gap: 11,
-    marginTop: 10,
+    gap: 10,
+    marginTop: 8,
   },
 
   field: {
     flexGrow: 1,
     flexBasis: 0,
-    minWidth: 170,
+    minWidth: 165,
   },
 
   fieldSmall: {
-    minWidth: 112,
+    minWidth: 108,
   },
 
   fieldWide: {
-    minWidth: 230,
+    minWidth: 225,
   },
 
   chipsWrap: {
     flexDirection: "row",
     flexWrap: "wrap",
-    gap: 9,
+    gap: 8,
     marginBottom: 12,
   },
 
@@ -1990,7 +1992,7 @@ const styles = StyleSheet.create({
     backgroundColor: "#FFFFFF",
     borderWidth: 1,
     borderColor: UI.borderDark,
-    borderRadius: 999,
+    borderRadius: 10,
     paddingVertical: 9,
     paddingHorizontal: 13,
   },
@@ -2018,7 +2020,7 @@ const styles = StyleSheet.create({
   chipText: {
     color: UI.text,
     fontSize: 12,
-    fontWeight: "900",
+    fontWeight: "700",
   },
 
   chipTextActive: {
@@ -2028,16 +2030,16 @@ const styles = StyleSheet.create({
   groupPill: {
     alignSelf: "flex-start",
     backgroundColor: UI.blueSoft,
-    borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 7,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
     marginBottom: 10,
   },
 
   groupPillText: {
     color: UI.blue,
     fontSize: 12,
-    fontWeight: "900",
+    fontWeight: "700",
   },
 
   divider: {
@@ -2047,12 +2049,12 @@ const styles = StyleSheet.create({
   },
 
   boolCard: {
-    backgroundColor: UI.cardSoft,
-    borderWidth: 1,
-    borderColor: UI.border,
-    borderRadius: 18,
-    padding: 13,
-    marginBottom: 10,
+    backgroundColor: "#FFFFFF",
+    borderBottomWidth: 1,
+    borderBottomColor: UI.border,
+    paddingVertical: 12,
+    paddingHorizontal: 2,
+    marginBottom: 0,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
@@ -2062,13 +2064,13 @@ const styles = StyleSheet.create({
   boolTitle: {
     color: UI.text,
     fontSize: 14,
-    fontWeight: "900",
+    fontWeight: "700",
   },
 
   boolHint: {
     color: UI.muted,
     fontSize: 11,
-    fontWeight: "700",
+    fontWeight: "500",
     marginTop: 2,
   },
 
@@ -2081,7 +2083,7 @@ const styles = StyleSheet.create({
   boolValue: {
     color: UI.text,
     fontSize: 12,
-    fontWeight: "900",
+    fontWeight: "700",
   },
 
   statusBlock: {
@@ -2091,10 +2093,8 @@ const styles = StyleSheet.create({
 
   photoSummary: {
     backgroundColor: UI.blueSoft,
-    borderWidth: 1,
-    borderColor: "#BFDBFE",
-    borderRadius: 18,
-    padding: 14,
+    borderRadius: 10,
+    padding: 12,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
@@ -2103,66 +2103,66 @@ const styles = StyleSheet.create({
 
   photoSummaryTitle: {
     color: UI.blue,
-    fontWeight: "900",
-    fontSize: 14,
+    fontWeight: "700",
+    fontSize: 13,
   },
 
   photoSummaryValue: {
     color: UI.blue,
-    fontWeight: "900",
-    fontSize: 22,
+    fontWeight: "800",
+    fontSize: 20,
   },
 
   photoGroupTitle: {
     color: UI.text,
-    fontSize: 15,
-    fontWeight: "900",
-    marginTop: 12,
-    marginBottom: 10,
+    fontSize: 14,
+    fontWeight: "800",
+    marginTop: 14,
+    marginBottom: 8,
   },
 
   photoField: {
-    backgroundColor: UI.cardSoft,
+    backgroundColor: "#FFFFFF",
     borderWidth: 1,
     borderColor: UI.border,
-    borderRadius: 18,
-    padding: 12,
-    marginBottom: 10,
+    borderRadius: 12,
+    padding: 11,
+    marginBottom: 9,
     flexDirection: "row",
     alignItems: "center",
     gap: 10,
   },
 
   photoFieldActive: {
-    backgroundColor: UI.greenSoft,
-    borderColor: "#86EFAC",
+    backgroundColor: "#FFFFFF",
+    borderColor: "#A6D5B5",
   },
 
   photoIcon: {
-    width: 36,
-    height: 36,
-    borderRadius: 14,
-    backgroundColor: UI.blue,
+    width: 32,
+    height: 32,
+    borderRadius: 9,
+    backgroundColor: UI.blueSoft,
     alignItems: "center",
     justifyContent: "center",
   },
 
   photoIconText: {
-    color: "#FFFFFF",
-    fontSize: 18,
-    fontWeight: "900",
+    color: UI.blue,
+    fontSize: 16,
+    fontWeight: "800",
   },
 
   photoLabel: {
     color: UI.text,
-    fontSize: 14,
-    fontWeight: "900",
+    fontSize: 13,
+    fontWeight: "700",
   },
 
   photoStatus: {
     color: UI.muted,
     fontSize: 11,
-    fontWeight: "800",
+    fontWeight: "500",
     marginTop: 2,
   },
 
@@ -2179,43 +2179,43 @@ const styles = StyleSheet.create({
 
   photoBtn: {
     backgroundColor: UI.blue,
-    paddingHorizontal: 11,
-    paddingVertical: 8,
-    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 8,
   },
 
   photoBtnText: {
     color: "#FFFFFF",
-    fontSize: 11,
-    fontWeight: "900",
+    fontSize: 10.5,
+    fontWeight: "700",
   },
 
   photoBtnLight: {
     backgroundColor: "#FFFFFF",
     borderWidth: 1,
-    borderColor: UI.blue,
-    paddingHorizontal: 11,
-    paddingVertical: 8,
-    borderRadius: 999,
+    borderColor: UI.borderDark,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 8,
   },
 
   photoBtnLightText: {
-    color: UI.blue,
-    fontSize: 11,
-    fontWeight: "900",
+    color: UI.text,
+    fontSize: 10.5,
+    fontWeight: "700",
   },
 
   photoRemoveBtn: {
     backgroundColor: UI.redSoft,
-    paddingHorizontal: 11,
-    paddingVertical: 8,
-    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 8,
   },
 
   photoRemoveText: {
     color: UI.red,
-    fontSize: 11,
-    fontWeight: "900",
+    fontSize: 10.5,
+    fontWeight: "700",
   },
 
   navRow: {
@@ -2229,10 +2229,10 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: "#FFFFFF",
     borderWidth: 1,
-    borderColor: UI.blue,
-    borderRadius: 16,
+    borderColor: UI.borderDark,
+    borderRadius: 10,
     alignItems: "center",
-    paddingVertical: 14,
+    paddingVertical: 13,
   },
 
   navBtnPrimary: {
@@ -2240,9 +2240,9 @@ const styles = StyleSheet.create({
     backgroundColor: UI.blue,
     borderWidth: 1,
     borderColor: UI.blue,
-    borderRadius: 16,
+    borderRadius: 10,
     alignItems: "center",
-    paddingVertical: 14,
+    paddingVertical: 13,
   },
 
   navBtnDisabled: {
@@ -2250,15 +2250,15 @@ const styles = StyleSheet.create({
   },
 
   navBtnText: {
-    color: UI.blue,
+    color: UI.text,
     fontSize: 14,
-    fontWeight: "900",
+    fontWeight: "700",
   },
 
   navBtnPrimaryText: {
     color: "#FFFFFF",
     fontSize: 14,
-    fontWeight: "900",
+    fontWeight: "700",
   },
 
   navBtnTextDisabled: {
@@ -2272,10 +2272,10 @@ const styles = StyleSheet.create({
     bottom: 0,
     flexDirection: "row",
     gap: 10,
-    paddingHorizontal: 16,
-    paddingTop: 12,
-    paddingBottom: Platform.OS === "ios" ? 26 : 14,
-    backgroundColor: "rgba(238,243,248,0.97)",
+    paddingHorizontal: 14,
+    paddingTop: 10,
+    paddingBottom: Platform.OS === "ios" ? 24 : 12,
+    backgroundColor: "#FFFFFF",
     borderTopWidth: 1,
     borderTopColor: UI.border,
   },
@@ -2284,32 +2284,32 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: "#FFFFFF",
     borderWidth: 1,
-    borderColor: UI.blue,
-    borderRadius: 17,
+    borderColor: UI.borderDark,
+    borderRadius: 10,
     alignItems: "center",
     justifyContent: "center",
-    minHeight: 52,
+    minHeight: 48,
   },
 
   previewBtnText: {
-    color: UI.blue,
+    color: UI.text,
     fontSize: 14,
-    fontWeight: "900",
+    fontWeight: "700",
   },
 
   shareBtn: {
     flex: 1,
     backgroundColor: UI.blue,
-    borderRadius: 17,
+    borderRadius: 10,
     alignItems: "center",
     justifyContent: "center",
-    minHeight: 52,
+    minHeight: 48,
   },
 
   shareBtnText: {
     color: "#FFFFFF",
     fontSize: 14,
-    fontWeight: "900",
+    fontWeight: "700",
   },
 
   modalBackdrop: {
@@ -2322,44 +2322,46 @@ const styles = StyleSheet.create({
   previewCard: {
     flex: 1,
     backgroundColor: "#FFFFFF",
-    borderRadius: 24,
+    borderRadius: 16,
     overflow: "hidden",
   },
 
   previewHeader: {
-    backgroundColor: UI.blue,
+    backgroundColor: "#FFFFFF",
     padding: 14,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
+    borderBottomWidth: 1,
+    borderBottomColor: UI.border,
   },
 
   previewKicker: {
-    color: "#BFDBFE",
-    fontSize: 11,
-    fontWeight: "900",
+    color: UI.muted,
+    fontSize: 10,
+    fontWeight: "700",
     textTransform: "uppercase",
-    letterSpacing: 0.8,
+    letterSpacing: 0.6,
   },
 
   previewTitle: {
-    color: "#FFFFFF",
+    color: UI.text,
     fontSize: 17,
-    fontWeight: "900",
+    fontWeight: "800",
     marginTop: 1,
   },
 
   previewClose: {
-    backgroundColor: "rgba(255,255,255,0.15)",
-    paddingVertical: 9,
-    paddingHorizontal: 13,
-    borderRadius: 999,
+    backgroundColor: UI.cardSoft,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 9,
   },
 
   previewCloseText: {
-    color: "#FFFFFF",
+    color: UI.text,
     fontSize: 12,
-    fontWeight: "900",
+    fontWeight: "700",
   },
 
   webview: {
@@ -2372,4 +2374,167 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: UI.border,
   },
+
+  introCard: {
+    backgroundColor: UI.card,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: UI.border,
+    padding: 15,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+  },
+
+  introTextWrap: {
+    flex: 1,
+  },
+
+  introTitle: {
+    color: UI.text,
+    fontSize: 17,
+    fontWeight: "800",
+  },
+
+  introText: {
+    color: UI.muted,
+    fontSize: 12.5,
+    lineHeight: 18,
+    marginTop: 4,
+    fontWeight: "500",
+  },
+
+  introPreviewButton: {
+    backgroundColor: UI.blueSoft,
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    minHeight: 40,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  introPreviewButtonText: {
+    color: UI.blue,
+    fontSize: 12,
+    fontWeight: "800",
+  },
+
+  stepperCard: {
+    backgroundColor: UI.card,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: UI.border,
+    padding: 15,
+    marginTop: 12,
+  },
+
+  stepperTopRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    gap: 10,
+  },
+
+  stepperEyebrow: {
+    color: UI.muted,
+    fontSize: 11,
+    fontWeight: "700",
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },
+
+  stepperCurrentTitle: {
+    color: UI.text,
+    fontSize: 18,
+    fontWeight: "800",
+    marginTop: 2,
+  },
+
+  stepperPercent: {
+    color: UI.blue,
+    fontSize: 13,
+    fontWeight: "800",
+    marginTop: 2,
+  },
+
+  progressTrack: {
+    height: 5,
+    backgroundColor: "#EAECF0",
+    borderRadius: 999,
+    overflow: "hidden",
+    marginTop: 13,
+  },
+
+  progressFill: {
+    height: "100%",
+    backgroundColor: UI.blue,
+    borderRadius: 999,
+  },
+
+  stepLinks: {
+    gap: 8,
+    paddingTop: 14,
+    paddingRight: 8,
+  },
+
+  stepLink: {
+    minWidth: 86,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+    paddingHorizontal: 9,
+    paddingVertical: 7,
+    borderRadius: 10,
+    backgroundColor: UI.cardSoft,
+  },
+
+  stepLinkActive: {
+    backgroundColor: UI.blueSoft,
+  },
+
+  stepLinkDone: {
+    backgroundColor: "#F6F8FA",
+  },
+
+  stepDot: {
+    width: 23,
+    height: 23,
+    borderRadius: 7,
+    backgroundColor: "#EAECF0",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  stepDotActive: {
+    backgroundColor: UI.blue,
+  },
+
+  stepDotDone: {
+    backgroundColor: "#667085",
+  },
+
+  stepDotText: {
+    color: UI.muted,
+    fontSize: 10,
+    fontWeight: "800",
+  },
+
+  stepDotTextActive: {
+    color: "#FFFFFF",
+  },
+
+  stepLinkText: {
+    color: UI.muted,
+    fontSize: 11,
+    fontWeight: "700",
+  },
+
+  stepLinkTextActive: {
+    color: UI.blue,
+  },
+
+  stepLinkTextDone: {
+    color: UI.text,
+  },
+
 });

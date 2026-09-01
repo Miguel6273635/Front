@@ -2,7 +2,7 @@
 import React from "react";
 import { View, Text, TouchableOpacity, StyleSheet } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-//import FormatosOrdenMultiSelect from "./FormatosOrdenMultiSelect";
+import FormatosOrdenMultiSelect from "./FormatosOrdenMultiSelect";
 
 function normalizeCode(code) {
   if (code === null || code === undefined) return "";
@@ -297,12 +297,12 @@ export default function EncabezadoDetalleOrden({
       </View>
 
       
-      {/*
+      
       <FormatosOrdenMultiSelect
         FIORI={FIORI}
         orderid={orden?.Orderid || id}
       />
-      */}
+      
       
 
       <Text style={styles?.sectionKicker || local.sectionKicker}>
