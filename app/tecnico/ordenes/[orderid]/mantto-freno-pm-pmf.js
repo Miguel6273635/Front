@@ -1,6 +1,6 @@
 // app/tecnico/ordenes/[orderid]/mantto-freno-pm-pmf.js
-// Diseño moderno tipo wizard para Mantenimiento Freno PM/PMF
-// Sin validaciones bloqueantes para poder visualizar el PDF.
+// Diseño simple y técnico para Mantenimiento Freno PM/PMF.
+// Mantiene la vista previa del PDF sin validaciones bloqueantes.
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
@@ -28,23 +28,23 @@ import { useAuth } from "../../../../src/context/AuthContext";
 import { buildManttoFrenoPmPmfHtml } from "../../../../src/services/templates/mantto_freno_pm_pmf/buildManttoFrenoPmPmfHtml";
 
 const UI = {
-  bg: "#EEF3F8",
+  bg: "#F4F6F8",
   card: "#FFFFFF",
   cardSoft: "#F8FAFC",
-  border: "#DDE6F0",
-  borderDark: "#CBD5E1",
-  text: "#0F172A",
-  muted: "#64748B",
-  muted2: "#94A3B8",
-  blue: "#0B2E6D",
-  blue2: "#2563EB",
-  blueSoft: "#EAF1FF",
-  green: "#16A34A",
-  greenSoft: "#DCFCE7",
-  yellow: "#F59E0B",
-  yellowSoft: "#FEF3C7",
-  red: "#DC2626",
-  redSoft: "#FEE2E2",
+  border: "#E4E7EC",
+  borderDark: "#D0D5DD",
+  text: "#172033",
+  muted: "#667085",
+  muted2: "#98A2B3",
+  blue: "#123A72",
+  blue2: "#123A72",
+  blueSoft: "#EFF4FF",
+  green: "#15803D",
+  greenSoft: "#F0FDF4",
+  yellow: "#B45309",
+  yellowSoft: "#FFFBEB",
+  red: "#B42318",
+  redSoft: "#FEF3F2",
 };
 
 const STEPS = [
@@ -146,7 +146,7 @@ const Toggle = ({ value, onValueChange }) => (
   <Switch
     value={!!value}
     onValueChange={onValueChange}
-    trackColor={{ false: "#CBD5E1", true: "#93C5FD" }}
+    trackColor={{ false: "#D0D5DD", true: "#AFC7E8" }}
     thumbColor={value ? UI.blue : "#FFFFFF"}
   />
 );
@@ -239,7 +239,7 @@ function BienMalField({ label, description, value, onChange }) {
     <View style={[styles.checkCard, isMal && styles.checkCardBad]}>
       <View style={styles.checkTop}>
         <View style={[styles.checkIcon, isMal && styles.checkIconBad]}>
-          <Text style={styles.checkIconText}>{isMal ? "!" : "✓"}</Text>
+          <Text style={[styles.checkIconText, isMal && styles.checkIconTextBad]}>{isMal ? "!" : "✓"}</Text>
         </View>
 
         <View style={{ flex: 1 }}>
@@ -512,14 +512,36 @@ export default function ManttoFrenoPmPmfScreen() {
     setActiveStep((s) => Math.max(s - 1, 0));
   };
 
-  const renderProgress = () => (
-    <View style={styles.progressCard}>
-      <Text style={styles.progressTitle}>Avance del formulario</Text>
+  const renderStepIndicator = () => (
+    <View style={styles.stepperCard}>
+      <View style={styles.stepperTopRow}>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.stepperEyebrow}>
+            Paso {activeStep + 1} de {STEPS.length}
+          </Text>
+          <Text style={styles.stepperCurrentTitle}>
+            {STEPS[activeStep].title}
+          </Text>
+        </View>
+
+        <Text style={styles.stepperPercent}>
+          {Math.round(((activeStep + 1) / STEPS.length) * 100)}%
+        </Text>
+      </View>
+
+      <View style={styles.progressTrack}>
+        <View
+          style={[
+            styles.progressFill,
+            { width: `${((activeStep + 1) / STEPS.length) * 100}%` },
+          ]}
+        />
+      </View>
 
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.stepsScroll}
+        contentContainerStyle={styles.stepLinks}
       >
         {STEPS.map((step, index) => {
           const active = index === activeStep;
@@ -528,44 +550,40 @@ export default function ManttoFrenoPmPmfScreen() {
           return (
             <TouchableOpacity
               key={step.key}
-              activeOpacity={0.86}
+              activeOpacity={0.82}
               onPress={() => setActiveStep(index)}
               style={[
-                styles.stepItem,
-                active && styles.stepItemActive,
-                done && styles.stepItemDone,
+                styles.stepLink,
+                active && styles.stepLinkActive,
+                done && styles.stepLinkDone,
               ]}
             >
               <View
                 style={[
-                  styles.stepNumber,
-                  active && styles.stepNumberActive,
-                  done && styles.stepNumberDone,
+                  styles.stepDot,
+                  active && styles.stepDotActive,
+                  done && styles.stepDotDone,
                 ]}
               >
                 <Text
                   style={[
-                    styles.stepNumberText,
-                    (active || done) && styles.stepNumberTextActive,
+                    styles.stepDotText,
+                    (active || done) && styles.stepDotTextActive,
                   ]}
                 >
                   {index + 1}
                 </Text>
               </View>
 
-              <View>
-                <Text
-                  style={[
-                    styles.stepName,
-                    active && styles.stepNameActive,
-                    done && styles.stepNameDone,
-                  ]}
-                >
-                  {step.title}
-                </Text>
-
-                <Text style={styles.stepShort}>{step.short}</Text>
-              </View>
+              <Text
+                style={[
+                  styles.stepLinkText,
+                  active && styles.stepLinkTextActive,
+                  done && styles.stepLinkTextDone,
+                ]}
+              >
+                {step.short}
+              </Text>
             </TouchableOpacity>
           );
         })}
@@ -877,37 +895,25 @@ export default function ManttoFrenoPmPmfScreen() {
         keyboardShouldPersistTaps="handled"
         contentContainerStyle={styles.content}
       >
-        <View style={styles.hero}>
-          <View style={styles.heroTop}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.heroKicker}>Formato técnico</Text>
-              <Text style={styles.heroTitle}>Mantenimiento de freno PM/PMF</Text>
-              <Text style={styles.heroText}>
-                Captura inspección visual, operación, componentes y resultado.
-                Puedes previsualizar el PDF aunque falten campos.
-              </Text>
-            </View>
-
-            <View style={styles.heroBadge}>
-              <Text style={styles.heroBadgeText}>PDF libre</Text>
-            </View>
+        <View style={styles.introCard}>
+          <View style={styles.introTextWrap}>
+            <Text style={styles.introTitle}>Reporte de mantenimiento</Text>
+            <Text style={styles.introText}>
+              Completa la inspección del freno por secciones. Puedes revisar el PDF en cualquier momento aunque existan campos vacíos.
+            </Text>
           </View>
 
-          <View style={styles.statsRow}>
-            <StatBox label="Hallazgos" value={issueCount} tone={issueCount > 0 ? "yellow" : "green"} />
-            <StatBox label="Paso" value={`${activeStep + 1}/${STEPS.length}`} />
-            <StatBox label="Orden" value={auto.orden ? "OK" : "—"} tone="red" />
-          </View>
+          <TouchableOpacity
+            style={styles.introPreviewButton}
+            onPress={abrirPreviewPdf}
+            disabled={generatingPdf}
+            activeOpacity={0.82}
+          >
+            <Text style={styles.introPreviewButtonText}>Ver PDF</Text>
+          </TouchableOpacity>
         </View>
 
-        {renderProgress()}
-
-        <View style={styles.activeStepHeader}>
-          <Text style={styles.activeStepSmall}>
-            Paso {activeStep + 1} de {STEPS.length}
-          </Text>
-          <Text style={styles.activeStepTitle}>{STEPS[activeStep].title}</Text>
-        </View>
+        {renderStepIndicator()}
 
         {renderStepContent()}
 
@@ -1051,8 +1057,9 @@ const styles = StyleSheet.create({
   },
 
   content: {
-    padding: 16,
-    paddingBottom: 120,
+    paddingHorizontal: 14,
+    paddingTop: 14,
+    paddingBottom: 118,
   },
 
   hero: {
@@ -1271,13 +1278,9 @@ const styles = StyleSheet.create({
     backgroundColor: UI.card,
     borderWidth: 1,
     borderColor: UI.border,
-    borderRadius: 24,
+    borderRadius: 16,
     padding: 15,
-    marginTop: 10,
-    shadowColor: "#0F172A",
-    shadowOpacity: 0.04,
-    shadowRadius: 10,
-    elevation: 1,
+    marginTop: 12,
   },
 
   sectionTop: {
@@ -1286,14 +1289,14 @@ const styles = StyleSheet.create({
 
   sectionTitle: {
     color: UI.text,
-    fontSize: 17,
-    fontWeight: "900",
+    fontSize: 16,
+    fontWeight: "800",
   },
 
   sectionSubtitle: {
     color: UI.muted,
     fontSize: 12,
-    fontWeight: "700",
+    fontWeight: "500",
     lineHeight: 17,
     marginTop: 3,
   },
@@ -1307,36 +1310,36 @@ const styles = StyleSheet.create({
   infoItem: {
     flexGrow: 1,
     flexBasis: "46%",
-    minWidth: 150,
-    backgroundColor: UI.cardSoft,
-    borderRadius: 16,
-    padding: 12,
-    borderWidth: 1,
-    borderColor: UI.border,
+    minWidth: 145,
+    backgroundColor: "#FFFFFF",
+    borderBottomWidth: 1,
+    borderBottomColor: UI.border,
+    paddingVertical: 10,
+    paddingHorizontal: 2,
   },
 
   infoLabel: {
     color: UI.muted,
     fontSize: 10,
-    fontWeight: "900",
+    fontWeight: "700",
     textTransform: "uppercase",
-    letterSpacing: 0.5,
-    marginBottom: 5,
+    letterSpacing: 0.4,
+    marginBottom: 4,
   },
 
   infoValue: {
     color: UI.text,
     fontSize: 14,
-    fontWeight: "900",
+    fontWeight: "700",
     lineHeight: 18,
   },
 
   label: {
     color: UI.muted,
     fontSize: 11,
-    fontWeight: "900",
+    fontWeight: "700",
     textTransform: "uppercase",
-    letterSpacing: 0.4,
+    letterSpacing: 0.35,
     marginBottom: 6,
   },
 
@@ -1344,18 +1347,18 @@ const styles = StyleSheet.create({
     backgroundColor: "#FFFFFF",
     borderWidth: 1,
     borderColor: UI.borderDark,
-    borderRadius: 15,
-    paddingHorizontal: 13,
+    borderRadius: 10,
+    paddingHorizontal: 12,
     paddingVertical: Platform.OS === "ios" ? 12 : 9,
-    minHeight: 45,
+    minHeight: 44,
     color: UI.text,
     fontSize: 14,
-    fontWeight: "800",
+    fontWeight: "600",
     marginBottom: 10,
   },
 
   textArea: {
-    minHeight: 125,
+    minHeight: 118,
     paddingTop: 12,
     textAlignVertical: "top",
   },
@@ -1363,43 +1366,43 @@ const styles = StyleSheet.create({
   fieldRow: {
     flexDirection: "row",
     flexWrap: "wrap",
-    gap: 11,
-    marginTop: 10,
+    gap: 10,
+    marginTop: 8,
   },
 
   field: {
     flexGrow: 1,
     flexBasis: 0,
-    minWidth: 170,
+    minWidth: 165,
   },
 
   fieldSmall: {
-    minWidth: 112,
+    minWidth: 108,
   },
 
   fieldWide: {
-    minWidth: 230,
+    minWidth: 225,
   },
 
   chipsWrap: {
     flexDirection: "row",
     flexWrap: "wrap",
-    gap: 9,
+    gap: 8,
     marginBottom: 12,
   },
 
   chipsWrapMini: {
     flexDirection: "row",
     flexWrap: "wrap",
-    gap: 9,
-    marginTop: 12,
+    gap: 8,
+    marginTop: 10,
   },
 
   chip: {
     backgroundColor: "#FFFFFF",
     borderWidth: 1,
     borderColor: UI.borderDark,
-    borderRadius: 999,
+    borderRadius: 10,
     paddingVertical: 9,
     paddingHorizontal: 13,
   },
@@ -1427,7 +1430,7 @@ const styles = StyleSheet.create({
   chipText: {
     color: UI.text,
     fontSize: 12,
-    fontWeight: "900",
+    fontWeight: "700",
   },
 
   chipTextActive: {
@@ -1435,30 +1438,30 @@ const styles = StyleSheet.create({
   },
 
   checkCard: {
-    backgroundColor: UI.cardSoft,
+    backgroundColor: "#FFFFFF",
     borderWidth: 1,
     borderColor: UI.border,
-    borderRadius: 20,
-    padding: 13,
-    marginBottom: 11,
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 9,
   },
 
   checkCardBad: {
-    backgroundColor: "#FFF7ED",
-    borderColor: "#FDBA74",
+    backgroundColor: UI.redSoft,
+    borderColor: "#F5C2BD",
   },
 
   checkTop: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 11,
+    gap: 10,
   },
 
   checkIcon: {
-    width: 36,
-    height: 36,
-    borderRadius: 14,
-    backgroundColor: UI.green,
+    width: 30,
+    height: 30,
+    borderRadius: 8,
+    backgroundColor: UI.greenSoft,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -1468,29 +1471,29 @@ const styles = StyleSheet.create({
   },
 
   checkIconText: {
-    color: "#FFFFFF",
-    fontSize: 16,
-    fontWeight: "900",
+    color: UI.green,
+    fontSize: 14,
+    fontWeight: "800",
   },
 
   checkTitle: {
     color: UI.text,
-    fontSize: 14,
-    fontWeight: "900",
+    fontSize: 13.5,
+    fontWeight: "700",
   },
 
   checkDesc: {
     color: UI.muted,
     fontSize: 11,
-    fontWeight: "700",
+    fontWeight: "500",
     marginTop: 2,
     lineHeight: 16,
   },
 
   statusPill: {
-    paddingHorizontal: 10,
-    paddingVertical: 7,
-    borderRadius: 999,
+    paddingHorizontal: 9,
+    paddingVertical: 6,
+    borderRadius: 8,
   },
 
   statusPillOk: {
@@ -1502,8 +1505,8 @@ const styles = StyleSheet.create({
   },
 
   statusPillText: {
-    fontSize: 11,
-    fontWeight: "900",
+    fontSize: 10.5,
+    fontWeight: "700",
   },
 
   statusPillTextOk: {
@@ -1518,24 +1521,22 @@ const styles = StyleSheet.create({
     backgroundColor: UI.cardSoft,
     borderWidth: 1,
     borderColor: UI.border,
-    borderRadius: 20,
-    padding: 13,
+    borderRadius: 12,
+    padding: 12,
     marginBottom: 14,
-    flexDirection: "row",
     gap: 12,
-    alignItems: "center",
   },
 
   resultTitle: {
     color: UI.text,
     fontSize: 14,
-    fontWeight: "900",
+    fontWeight: "700",
   },
 
   resultHint: {
     color: UI.muted,
     fontSize: 11,
-    fontWeight: "700",
+    fontWeight: "500",
     marginTop: 2,
     lineHeight: 16,
   },
@@ -1544,7 +1545,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     flexWrap: "wrap",
     gap: 8,
-    justifyContent: "flex-end",
+    marginTop: 10,
   },
 
   navRow: {
@@ -1558,10 +1559,10 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: "#FFFFFF",
     borderWidth: 1,
-    borderColor: UI.blue,
-    borderRadius: 16,
+    borderColor: UI.borderDark,
+    borderRadius: 10,
     alignItems: "center",
-    paddingVertical: 14,
+    paddingVertical: 13,
   },
 
   navBtnPrimary: {
@@ -1569,9 +1570,9 @@ const styles = StyleSheet.create({
     backgroundColor: UI.blue,
     borderWidth: 1,
     borderColor: UI.blue,
-    borderRadius: 16,
+    borderRadius: 10,
     alignItems: "center",
-    paddingVertical: 14,
+    paddingVertical: 13,
   },
 
   navBtnDisabled: {
@@ -1579,15 +1580,15 @@ const styles = StyleSheet.create({
   },
 
   navBtnText: {
-    color: UI.blue,
+    color: UI.text,
     fontSize: 14,
-    fontWeight: "900",
+    fontWeight: "700",
   },
 
   navBtnPrimaryText: {
     color: "#FFFFFF",
     fontSize: 14,
-    fontWeight: "900",
+    fontWeight: "700",
   },
 
   navBtnTextDisabled: {
@@ -1601,10 +1602,10 @@ const styles = StyleSheet.create({
     bottom: 0,
     flexDirection: "row",
     gap: 10,
-    paddingHorizontal: 16,
-    paddingTop: 12,
-    paddingBottom: Platform.OS === "ios" ? 26 : 14,
-    backgroundColor: "rgba(238,243,248,0.97)",
+    paddingHorizontal: 14,
+    paddingTop: 10,
+    paddingBottom: Platform.OS === "ios" ? 24 : 12,
+    backgroundColor: "#FFFFFF",
     borderTopWidth: 1,
     borderTopColor: UI.border,
   },
@@ -1613,32 +1614,32 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: "#FFFFFF",
     borderWidth: 1,
-    borderColor: UI.blue,
-    borderRadius: 17,
+    borderColor: UI.borderDark,
+    borderRadius: 10,
     alignItems: "center",
     justifyContent: "center",
-    minHeight: 52,
+    minHeight: 48,
   },
 
   previewBtnText: {
-    color: UI.blue,
+    color: UI.text,
     fontSize: 14,
-    fontWeight: "900",
+    fontWeight: "700",
   },
 
   shareBtn: {
     flex: 1,
     backgroundColor: UI.blue,
-    borderRadius: 17,
+    borderRadius: 10,
     alignItems: "center",
     justifyContent: "center",
-    minHeight: 52,
+    minHeight: 48,
   },
 
   shareBtnText: {
     color: "#FFFFFF",
     fontSize: 14,
-    fontWeight: "900",
+    fontWeight: "700",
   },
 
   modalBackdrop: {
@@ -1651,44 +1652,46 @@ const styles = StyleSheet.create({
   previewCard: {
     flex: 1,
     backgroundColor: "#FFFFFF",
-    borderRadius: 24,
+    borderRadius: 16,
     overflow: "hidden",
   },
 
   previewHeader: {
-    backgroundColor: UI.blue,
+    backgroundColor: "#FFFFFF",
     padding: 14,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
+    borderBottomWidth: 1,
+    borderBottomColor: UI.border,
   },
 
   previewKicker: {
-    color: "#BFDBFE",
-    fontSize: 11,
-    fontWeight: "900",
+    color: UI.muted,
+    fontSize: 10,
+    fontWeight: "700",
     textTransform: "uppercase",
-    letterSpacing: 0.8,
+    letterSpacing: 0.6,
   },
 
   previewTitle: {
-    color: "#FFFFFF",
+    color: UI.text,
     fontSize: 17,
-    fontWeight: "900",
+    fontWeight: "800",
     marginTop: 1,
   },
 
   previewClose: {
-    backgroundColor: "rgba(255,255,255,0.15)",
-    paddingVertical: 9,
-    paddingHorizontal: 13,
-    borderRadius: 999,
+    backgroundColor: UI.cardSoft,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 9,
   },
 
   previewCloseText: {
-    color: "#FFFFFF",
+    color: UI.text,
     fontSize: 12,
-    fontWeight: "900",
+    fontWeight: "700",
   },
 
   webview: {
@@ -1701,4 +1704,172 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: UI.border,
   },
+
+  introCard: {
+    backgroundColor: UI.card,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: UI.border,
+    padding: 15,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+  },
+
+  introTextWrap: {
+    flex: 1,
+  },
+
+  introTitle: {
+    color: UI.text,
+    fontSize: 17,
+    fontWeight: "800",
+  },
+
+  introText: {
+    color: UI.muted,
+    fontSize: 12.5,
+    lineHeight: 18,
+    marginTop: 4,
+    fontWeight: "500",
+  },
+
+  introPreviewButton: {
+    backgroundColor: UI.blueSoft,
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    minHeight: 40,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  introPreviewButtonText: {
+    color: UI.blue,
+    fontSize: 12,
+    fontWeight: "800",
+  },
+
+  stepperCard: {
+    backgroundColor: UI.card,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: UI.border,
+    padding: 15,
+    marginTop: 12,
+  },
+
+  stepperTopRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    gap: 10,
+  },
+
+  stepperEyebrow: {
+    color: UI.muted,
+    fontSize: 11,
+    fontWeight: "700",
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },
+
+  stepperCurrentTitle: {
+    color: UI.text,
+    fontSize: 18,
+    fontWeight: "800",
+    marginTop: 2,
+  },
+
+  stepperPercent: {
+    color: UI.blue,
+    fontSize: 13,
+    fontWeight: "800",
+    marginTop: 2,
+  },
+
+  progressTrack: {
+    height: 5,
+    backgroundColor: "#EAECF0",
+    borderRadius: 999,
+    overflow: "hidden",
+    marginTop: 13,
+  },
+
+  progressFill: {
+    height: "100%",
+    backgroundColor: UI.blue,
+    borderRadius: 999,
+  },
+
+  stepLinks: {
+    gap: 8,
+    paddingTop: 14,
+    paddingRight: 8,
+  },
+
+  stepLink: {
+    minWidth: 86,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+    paddingHorizontal: 9,
+    paddingVertical: 7,
+    borderRadius: 10,
+    backgroundColor: UI.cardSoft,
+  },
+
+  stepLinkActive: {
+    backgroundColor: UI.blueSoft,
+  },
+
+  stepLinkDone: {
+    backgroundColor: "#F6F8FA",
+  },
+
+  stepDot: {
+    width: 23,
+    height: 23,
+    borderRadius: 7,
+    backgroundColor: "#EAECF0",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  stepDotActive: {
+    backgroundColor: UI.blue,
+  },
+
+  stepDotDone: {
+    backgroundColor: "#667085",
+  },
+
+  stepDotText: {
+    color: UI.muted,
+    fontSize: 10,
+    fontWeight: "800",
+  },
+
+  stepDotTextActive: {
+    color: "#FFFFFF",
+  },
+
+  stepLinkText: {
+    color: UI.muted,
+    fontSize: 11,
+    fontWeight: "700",
+  },
+
+  stepLinkTextActive: {
+    color: UI.blue,
+  },
+
+  stepLinkTextDone: {
+    color: UI.text,
+  },
+
+
+  checkIconTextBad: {
+    color: "#FFFFFF",
+  },
+
 });

@@ -10,6 +10,7 @@ import React, {
 } from "react";
 
 import { initDb, outboxReplaceRequestUrl } from "./db";
+import { logStorageDiagnostics } from "./storageDiagnostics";
 import { subscribeOnline } from "./net";
 import { runOutboxSync } from "./syncEngine";
 import { processSapQueue } from "./sapQueue";
@@ -32,11 +33,23 @@ export function OfflineProvider({ children, ensureValidToken }) {
       try {
         await initDb();
 
-        // ✅ MIGRACIÓN: arregla jobs viejos encolados con URL incorrecta
         await outboxReplaceRequestUrl(
           "/api/aviso-averia/sap",
           "/api/aviso-averia/create"
         );
+
+        // ===========================================
+        // DIAGNÓSTICO TEMPORAL DE ALMACENAMIENTO
+        // NO BORRA NI MODIFICA INFORMACIÓN
+        // ===========================================
+        try {
+          await logStorageDiagnostics();
+        } catch (storageError) {
+          console.log(
+            "[STORAGE][DIAG] Error ejecutando diagnóstico:",
+            storageError?.message || storageError
+          );
+        }
 
         if (mounted) setDbReady(true);
       } catch (e) {

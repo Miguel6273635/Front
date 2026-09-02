@@ -1,8 +1,10 @@
-// app/tecnico/ordenes/[orderid]/reporte-emergencia.js
-// Reporte de emergencia — diseño moderno tipo wizard
-// Sin validaciones bloqueantes para visualizar PDF aunque falten datos.
+// app/tecnico/ordenes/[orderid]/requisicion-materiales.js
+// Requisición de materiales — formulario independiente y rediseñado.
+// Compatible con:
+// src/services/templates/requisicion_materiales/buildRequisicionMaterialesHtml.js
+// Sin validaciones bloqueantes para permitir vista previa del PDF aun con campos vacíos.
 
-import React, { useEffect, useMemo, useState, useCallback } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   View,
   Text,
@@ -15,71 +17,74 @@ import {
   Modal,
   ActivityIndicator,
 } from "react-native";
-import AsyncStorage from "@react-native-async-storage/async-storage";
-import DateTimePicker from "@react-native-community/datetimepicker";
 import { useLocalSearchParams } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { WebView } from "react-native-webview";
-
+import DateTimePicker from "@react-native-community/datetimepicker";
 import * as Print from "expo-print";
 import * as Sharing from "expo-sharing";
 
 import Header from "../../../../src/components/Header";
 import { useAuth } from "../../../../src/context/AuthContext";
-import { buildReporteEmergenciaHtml } from "../../../../src/services/templates/reporte_emergencia/buildReporteEmergenciaHtml";
+import { buildRequisicionMaterialesHtml } from "../../../../src/services/templates/requisicion_materiales/buildRequisicionMaterialesHtml";
 
 const UI = {
-  bg: "#EEF3F8",
+  bg: "#F4F6F8",
   card: "#FFFFFF",
   cardSoft: "#F8FAFC",
-  border: "#DDE6F0",
+  border: "#E2E8F0",
   borderDark: "#CBD5E1",
-  text: "#0F172A",
-  muted: "#64748B",
-  muted2: "#94A3B8",
-  blue: "#0B2E6D",
-  blue2: "#2563EB",
-  blueSoft: "#EAF1FF",
-  green: "#16A34A",
-  greenSoft: "#DCFCE7",
-  yellow: "#F59E0B",
-  yellowSoft: "#FEF3C7",
-  red: "#DC2626",
-  redSoft: "#FEE2E2",
-  dark: "#111827",
+  text: "#172033",
+  muted: "#667085",
+  muted2: "#98A2B3",
+  primary: "#123A72",
+  primarySoft: "#EDF3FA",
+  success: "#16865C",
+  successSoft: "#EAF7F1",
+  warning: "#B26A00",
+  warningSoft: "#FFF6E6",
+  danger: "#C43A3A",
+  dangerSoft: "#FFF0F0",
+  dark: "#1F2937",
 };
 
 const STEPS = [
-  { key: "general", title: "General", short: "Cliente" },
-  { key: "tiempos", title: "Tiempos", short: "Horarios" },
-  { key: "servicio", title: "Servicio", short: "Reporte" },
-  { key: "refacciones", title: "Refacciones", short: "Piezas" },
-  { key: "cliente", title: "Cliente", short: "Firma" },
+  { key: "general", title: "General", short: "Entrega" },
+  { key: "materiales", title: "Materiales", short: "Partidas" },
+  { key: "responsables", title: "Responsables", short: "Firmas" },
+  { key: "incidencia", title: "Incidencia", short: "Causas" },
+];
+
+const INCIDENCIAS = [
+  "Solicitud nueva",
+  "Reposición por daño",
+  "Reposición por extravío",
+  "Reposición por robo",
 ];
 
 const pad2 = (n) => String(n).padStart(2, "0");
 
-const formatDateDMY = (d) =>
-  `${pad2(d.getDate())}/${pad2(d.getMonth() + 1)}/${d.getFullYear()}`;
+function safe(v) {
+  return String(v ?? "").trim();
+}
 
-const formatTimeHM = (d) => `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+function formatDateDMY(d) {
+  return `${pad2(d.getDate())}/${pad2(d.getMonth() + 1)}/${d.getFullYear()}`;
+}
 
-const safeStr = (v) => String(v ?? "").trim();
+function parseDMYToDate(value) {
+  const [dd, mm, yyyy] = String(value || "")
+    .split("/")
+    .map((x) => Number(x));
 
-const newMecanico = (nombre = "", principal = false) => ({
-  nombre,
-  principal,
-});
+  if (!dd || !mm || !yyyy) return new Date();
 
-const newRefaccion = () => ({
-  cantidad: "",
-  descripcion: "",
-  cargoCliente: "No",
-  codigoInterno: "",
-});
+  const parsed = new Date(yyyy, mm - 1, dd);
+  return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
+}
 
 function getUserName(user) {
-  return safeStr(
+  return safe(
     user?.nombre ||
       user?.name ||
       user?.fullName ||
@@ -91,135 +96,121 @@ function getUserName(user) {
   );
 }
 
+function newMaterial() {
+  return {
+    codigoDynamics: "",
+    codigoMrp: "",
+    descripcion: "",
+    cantidad: "",
+    um: "",
+    observaciones: "",
+  };
+}
+
+function createDefaultForm(userName = "") {
+  return {
+    almacen: "",
+    depto: "",
+    seccion: "",
+    elDia: "",
+    mx: "",
+    direccionRazonSocial: "",
+
+    materiales: [newMaterial(), newMaterial()],
+
+    emitidaPorFecha: "",
+    emitidaPor: userName,
+    surtidaPorFecha: "",
+    surtidaPor: "",
+    recibidaPorFecha: "",
+    recibidaPor: "",
+
+    incidencia: "",
+    causas: "",
+  };
+}
+
 const Label = ({ children, style }) => (
   <Text style={[styles.label, style]}>{children}</Text>
 );
 
-const Input = ({
+function Input({
   label,
   value,
   onChangeText,
   placeholder,
   multiline = false,
-  editable = true,
-  keyboardType = "default",
   icon,
-}) => (
-  <View style={styles.inputBlock}>
-    <Label>{label}</Label>
-
-    <View
-      style={[
-        styles.inputWrap,
-        multiline && styles.inputWrapMultiline,
-        !editable && styles.readonly,
-      ]}
-    >
-      {icon ? (
-        <Ionicons
-          name={icon}
-          size={17}
-          color={UI.muted}
-          style={{ marginTop: multiline ? 12 : 0 }}
-        />
-      ) : null}
-
-      <TextInput
-        style={[styles.input, multiline && styles.textArea]}
-        value={String(value ?? "")}
-        onChangeText={onChangeText}
-        placeholder={placeholder}
-        placeholderTextColor={UI.muted2}
-        multiline={multiline}
-        editable={editable}
-        keyboardType={keyboardType}
-      />
-    </View>
-  </View>
-);
-
-const Chip = ({ active, children, onPress, tone = "blue" }) => {
-  const activeStyle =
-    tone === "green"
-      ? styles.chipGreen
-      : tone === "yellow"
-      ? styles.chipYellow
-      : tone === "red"
-      ? styles.chipRed
-      : styles.chipBlue;
-
-  return (
-    <TouchableOpacity
-      activeOpacity={0.86}
-      onPress={onPress}
-      style={[styles.chip, active && activeStyle]}
-    >
-      <Text style={[styles.chipText, active && styles.chipTextActive]}>
-        {children}
-      </Text>
-    </TouchableOpacity>
-  );
-};
-
-function ChipsYesNo({ label, value, onChange }) {
+  keyboardType = "default",
+  editable = true,
+}) {
   return (
     <View style={styles.inputBlock}>
-      <Label>{label}</Label>
+      {!!label && <Label>{label}</Label>}
 
-      <View style={styles.chipsWrap}>
-        {["Sí", "No"].map((opt) => (
-          <Chip
-            key={opt}
-            active={value === opt}
-            tone={opt === "Sí" ? "green" : "blue"}
-            onPress={() => onChange(opt)}
-          >
-            {opt}
-          </Chip>
-        ))}
+      <View
+        style={[
+          styles.inputWrap,
+          multiline && styles.inputWrapMultiline,
+          !editable && styles.readonlyWrap,
+        ]}
+      >
+        {icon ? (
+          <Ionicons
+            name={icon}
+            size={17}
+            color={UI.muted}
+            style={{ marginTop: multiline ? 12 : 0 }}
+          />
+        ) : null}
+
+        <TextInput
+          value={String(value ?? "")}
+          onChangeText={onChangeText}
+          placeholder={placeholder}
+          placeholderTextColor={UI.muted2}
+          multiline={multiline}
+          keyboardType={keyboardType}
+          editable={editable}
+          style={[styles.input, multiline && styles.textArea]}
+        />
       </View>
     </View>
   );
 }
 
-function PickerButton({
-  label,
-  value,
-  placeholder,
-  onPress,
-  icon = "time-outline",
-}) {
+function DateButton({ label, value, onPress }) {
   return (
     <View style={styles.inputBlock}>
       <Label>{label}</Label>
 
       <TouchableOpacity
+        style={styles.dateButton}
         onPress={onPress}
-        style={styles.pickerBox}
-        activeOpacity={0.9}
+        activeOpacity={0.88}
       >
-        <View style={styles.pickerLeft}>
-          <Ionicons name={icon} size={17} color={UI.blue} />
-          <Text style={[styles.pickerText, !value && { color: UI.muted2 }]}>
-            {value || placeholder}
+        <View style={styles.dateButtonLeft}>
+          <Ionicons name="calendar-outline" size={17} color={UI.primary} />
+          <Text style={[styles.dateButtonText, !value && styles.placeholderText]}>
+            {value || "DD/MM/AAAA"}
           </Text>
         </View>
 
-        <Ionicons name="chevron-down-outline" size={18} color={UI.muted} />
+        <Ionicons name="chevron-down-outline" size={17} color={UI.muted} />
       </TouchableOpacity>
     </View>
   );
 }
 
-function SectionBox({ title, subtitle, icon, children }) {
+function Section({ title, subtitle, icon, children }) {
   return (
-    <View style={styles.sectionBox}>
-      <View style={styles.sectionTop}>
+    <View style={styles.section}>
+      <View style={styles.sectionHeader}>
         <View style={styles.sectionIcon}>
           <Ionicons
             name={icon || "document-text-outline"}
             size={18}
-            color={UI.blue}
+            color={UI.primary}
           />
         </View>
 
@@ -230,35 +221,6 @@ function SectionBox({ title, subtitle, icon, children }) {
       </View>
 
       {children}
-    </View>
-  );
-}
-
-function InfoItem({ label, value }) {
-  return (
-    <View style={styles.infoItem}>
-      <Text style={styles.infoLabel}>{label}</Text>
-      <Text style={styles.infoValue} numberOfLines={2}>
-        {value || "—"}
-      </Text>
-    </View>
-  );
-}
-
-function StatBox({ label, value, tone = "blue" }) {
-  const toneStyle =
-    tone === "green"
-      ? styles.statGreen
-      : tone === "yellow"
-      ? styles.statYellow
-      : tone === "red"
-      ? styles.statRed
-      : styles.statBlue;
-
-  return (
-    <View style={[styles.statBox, toneStyle]}>
-      <Text style={styles.statValue}>{value}</Text>
-      <Text style={styles.statLabel}>{label}</Text>
     </View>
   );
 }
@@ -281,281 +243,263 @@ function Field({ children, small = false, wide = false }) {
   );
 }
 
-export default function ReporteEmergenciaForm() {
+function SummaryItem({ label, value }) {
+  return (
+    <View style={styles.summaryItem}>
+      <Text style={styles.summaryLabel}>{label}</Text>
+      <Text numberOfLines={2} style={styles.summaryValue}>
+        {safe(value) || "—"}
+      </Text>
+    </View>
+  );
+}
+
+function Choice({ label, active, onPress, icon }) {
+  return (
+    <TouchableOpacity
+      onPress={onPress}
+      activeOpacity={0.86}
+      style={[styles.choice, active && styles.choiceActive]}
+    >
+      <View style={[styles.choiceMark, active && styles.choiceMarkActive]}>
+        {active ? (
+          <Ionicons name="checkmark" size={14} color="#FFFFFF" />
+        ) : null}
+      </View>
+
+      <View style={{ flex: 1 }}>
+        <Text style={[styles.choiceText, active && styles.choiceTextActive]}>
+          {label}
+        </Text>
+      </View>
+
+      {icon ? (
+        <Ionicons
+          name={icon}
+          size={17}
+          color={active ? UI.primary : UI.muted2}
+        />
+      ) : null}
+    </TouchableOpacity>
+  );
+}
+
+function MaterialCard({ item, index, onChange, onRemove, canRemove }) {
+  const hasData =
+    safe(item.codigoDynamics) ||
+    safe(item.codigoMrp) ||
+    safe(item.descripcion) ||
+    safe(item.cantidad) ||
+    safe(item.um) ||
+    safe(item.observaciones);
+
+  return (
+    <View style={[styles.materialCard, hasData && styles.materialCardActive]}>
+      <View style={styles.materialHeader}>
+        <View style={styles.materialNumber}>
+          <Text style={styles.materialNumberText}>{index + 1}</Text>
+        </View>
+
+        <View style={{ flex: 1 }}>
+          <Text style={styles.materialTitle}>Material {index + 1}</Text>
+          <Text style={styles.materialSubtitle}>
+            {hasData ? "Partida capturada" : "Partida vacía"}
+          </Text>
+        </View>
+
+        {canRemove ? (
+          <TouchableOpacity
+            onPress={onRemove}
+            activeOpacity={0.82}
+            style={styles.removeButton}
+          >
+            <Ionicons name="trash-outline" size={17} color={UI.danger} />
+            <Text style={styles.removeButtonText}>Quitar</Text>
+          </TouchableOpacity>
+        ) : null}
+      </View>
+
+      <FieldRow>
+        <Field>
+          <Input
+            label="Código Dynamics"
+            value={item.codigoDynamics}
+            onChangeText={(v) => onChange("codigoDynamics", v)}
+            placeholder="Código"
+            icon="barcode-outline"
+          />
+        </Field>
+
+        <Field>
+          <Input
+            label="Código MRP"
+            value={item.codigoMrp}
+            onChangeText={(v) => onChange("codigoMrp", v)}
+            placeholder="Código MRP"
+            icon="pricetag-outline"
+          />
+        </Field>
+      </FieldRow>
+
+      <Input
+        label="Descripción"
+        value={item.descripcion}
+        onChangeText={(v) => onChange("descripcion", v)}
+        placeholder="Descripción del material"
+        icon="cube-outline"
+      />
+
+      <FieldRow>
+        <Field small>
+          <Input
+            label="Cantidad"
+            value={item.cantidad}
+            onChangeText={(v) => onChange("cantidad", v)}
+            placeholder="0"
+            keyboardType="numeric"
+            icon="calculator-outline"
+          />
+        </Field>
+
+        <Field small>
+          <Input
+            label="U / M"
+            value={item.um}
+            onChangeText={(v) => onChange("um", v)}
+            placeholder="PZA"
+            icon="resize-outline"
+          />
+        </Field>
+      </FieldRow>
+
+      <Input
+        label="Observaciones"
+        value={item.observaciones}
+        onChangeText={(v) => onChange("observaciones", v)}
+        placeholder="Observaciones de la partida"
+        multiline
+        icon="chatbox-ellipses-outline"
+      />
+    </View>
+  );
+}
+
+export default function RequisicionMaterialesForm() {
   const { orderid } = useLocalSearchParams();
   const { user } = useAuth();
 
-  const tecnicoPrincipal = getUserName(user);
-  const safeOrderId = safeStr(orderid || "SIN_ORDEN");
+  const tecnicoNombre = getUserName(user);
+  const currentOrder = useMemo(() => safe(orderid), [orderid]);
 
-  const draftKey = useMemo(
-    () => `reporte_emergencia:${safeOrderId || "local"}`,
-    [safeOrderId]
-  );
-
+  const [form, setForm] = useState(() => createDefaultForm(tecnicoNombre));
   const [activeStep, setActiveStep] = useState(0);
+  const [dateTarget, setDateTarget] = useState(null);
 
-  const [fecha, setFecha] = useState(new Date());
-  const [showDatePicker, setShowDatePicker] = useState(false);
-
-  const [mx, setMx] = useState("");
-  const [razonSocial, setRazonSocial] = useState("");
-  const [direccion, setDireccion] = useState("");
-
-  const [horaEntrada, setHoraEntrada] = useState("");
-  const [horaSalida, setHoraSalida] = useState("");
-  const [horaLlamada, setHoraLlamada] = useState("");
-
-  const [showEntradaPicker, setShowEntradaPicker] = useState(false);
-  const [showSalidaPicker, setShowSalidaPicker] = useState(false);
-  const [showLlamadaPicker, setShowLlamadaPicker] = useState(false);
-
-  const [mecanicos, setMecanicos] = useState([
-    newMecanico(tecnicoPrincipal, true),
-  ]);
-
-  const [supervisor, setSupervisor] = useState("");
-  const [ct, setCt] = useState("");
-
-  const [reporte, setReporte] = useState("");
-  const [estadoEquipo, setEstadoEquipo] = useState("");
-  const [analisisFalla, setAnalisisFalla] = useState("");
-  const [formasCorreccion, setFormasCorreccion] = useState("");
-  const [notas, setNotas] = useState("");
-
-  const [refacciones, setRefacciones] = useState([
-    newRefaccion(),
-    newRefaccion(),
-  ]);
-
-  const [entregoRefUsadas, setEntregoRefUsadas] = useState("No");
-  const [firmaCliente, setFirmaCliente] = useState("");
-  const [nombreCliente, setNombreCliente] = useState("");
-  const [puestoCliente, setPuestoCliente] = useState("");
-
-  const [showPreview, setShowPreview] = useState(false);
+  const [previewVisible, setPreviewVisible] = useState(false);
   const [previewHtml, setPreviewHtml] = useState("");
   const [pdfUri, setPdfUri] = useState(null);
   const [generatingPdf, setGeneratingPdf] = useState(false);
 
   useEffect(() => {
-    if (!tecnicoPrincipal) return;
+    if (!tecnicoNombre) return;
 
-    setMecanicos((prev) => {
-      const arr = Array.isArray(prev) && prev.length ? prev : [];
-
-      if (!arr.length) {
-        return [newMecanico(tecnicoPrincipal, true)];
-      }
-
-      const first = arr[0] || {};
-
-      if (first.principal && first.nombre) return arr;
-
-      return [
-        {
-          ...first,
-          nombre: first.nombre || tecnicoPrincipal,
-          principal: true,
-        },
-        ...arr.slice(1),
-      ];
+    setForm((prev) => {
+      if (safe(prev.emitidaPor)) return prev;
+      return { ...prev, emitidaPor: tecnicoNombre };
     });
-  }, [tecnicoPrincipal]);
+  }, [tecnicoNombre]);
 
-  const buildPayload = useCallback(() => {
-    const mecLimpios = mecanicos
-      .map((m, idx) => ({
-        nombre: safeStr(m?.nombre),
-        principal: idx === 0 || !!m?.principal,
-      }))
-      .filter((m, idx) => m.nombre || idx === 0);
+  const invalidatePdf = () => setPdfUri(null);
 
-    return {
-      orderid: safeOrderId || "SIN_ORDEN",
-      numeroReporte: safeOrderId || "SIN_ORDEN",
-      fechaIso: fecha?.toISOString?.() || new Date().toISOString(),
-      fechaDMY: fecha ? formatDateDMY(fecha) : "",
-      mx: safeStr(mx),
-      razonSocial: safeStr(razonSocial),
-      direccion: safeStr(direccion),
-      horaEntrada: safeStr(horaEntrada),
-      horaSalida: safeStr(horaSalida),
-      horaLlamada: safeStr(horaLlamada),
-      mecanicos: mecLimpios.length
-        ? mecLimpios
-        : [newMecanico(tecnicoPrincipal || "", true)],
-      supervisor: safeStr(supervisor),
-      ct: safeStr(ct),
-      reporte: safeStr(reporte),
-      estadoEquipo: safeStr(estadoEquipo),
-      analisisFalla: safeStr(analisisFalla),
-      formasCorreccion: safeStr(formasCorreccion),
-      notas: safeStr(notas),
-      refacciones: refacciones.map((r) => ({
-        cantidad: safeStr(r.cantidad),
-        descripcion: safeStr(r.descripcion),
-        cargoCliente: r.cargoCliente || "No",
-        codigoInterno: safeStr(r.codigoInterno),
-      })),
-      entregoRefUsadas: entregoRefUsadas || "No",
-      firmaCliente: safeStr(firmaCliente),
-      nombreCliente: safeStr(nombreCliente),
-      puestoCliente: safeStr(puestoCliente),
-    };
-  }, [
-    safeOrderId,
-    fecha,
-    mx,
-    razonSocial,
-    direccion,
-    horaEntrada,
-    horaSalida,
-    horaLlamada,
-    mecanicos,
-    supervisor,
-    ct,
-    reporte,
-    estadoEquipo,
-    analisisFalla,
-    formasCorreccion,
-    notas,
-    refacciones,
-    entregoRefUsadas,
-    firmaCliente,
-    nombreCliente,
-    puestoCliente,
-    tecnicoPrincipal,
-  ]);
+  const patchForm = (patch) => {
+    invalidatePdf();
+    setForm((prev) => ({ ...prev, ...patch }));
+  };
 
-  const loadDraft = useCallback(async () => {
-    try {
-      const s = await AsyncStorage.getItem(draftKey);
-      if (!s) return;
+  const updateMaterial = (index, field, value) => {
+    invalidatePdf();
 
-      const d = JSON.parse(s);
+    setForm((prev) => ({
+      ...prev,
+      materiales: prev.materiales.map((item, i) =>
+        i === index ? { ...item, [field]: value } : item
+      ),
+    }));
+  };
 
-      if (d.fechaIso || d.fecha) {
-        const nextDate = new Date(d.fechaIso || d.fecha);
-        if (!Number.isNaN(nextDate.getTime())) setFecha(nextDate);
+  const addMaterial = () => {
+    invalidatePdf();
+    setForm((prev) => ({
+      ...prev,
+      materiales: [...prev.materiales, newMaterial()],
+    }));
+  };
+
+  const removeMaterial = (index) => {
+    invalidatePdf();
+
+    setForm((prev) => {
+      if (prev.materiales.length <= 1) {
+        return { ...prev, materiales: [newMaterial()] };
       }
 
-      setMx(d.mx ?? "");
-      setRazonSocial(d.razonSocial ?? "");
-      setDireccion(d.direccion ?? "");
-
-      setHoraEntrada(d.horaEntrada ?? "");
-      setHoraSalida(d.horaSalida ?? "");
-      setHoraLlamada(d.horaLlamada ?? "");
-
-      const draftMecs =
-        Array.isArray(d.mecanicos) && d.mecanicos.length
-          ? d.mecanicos
-          : [newMecanico(tecnicoPrincipal, true)];
-
-      setMecanicos(
-        draftMecs.map((m, idx) => ({
-          nombre: safeStr(m?.nombre),
-          principal: idx === 0,
-        }))
-      );
-
-      setSupervisor(d.supervisor ?? "");
-      setCt(d.ct ?? "");
-
-      setReporte(d.reporte ?? "");
-      setEstadoEquipo(d.estadoEquipo ?? "");
-      setAnalisisFalla(d.analisisFalla ?? "");
-      setFormasCorreccion(d.formasCorreccion ?? "");
-      setNotas(d.notas ?? "");
-
-      setRefacciones(
-        Array.isArray(d.refacciones) && d.refacciones.length
-          ? d.refacciones
-          : [newRefaccion()]
-      );
-
-      setEntregoRefUsadas(d.entregoRefUsadas ?? "No");
-      setFirmaCliente(d.firmaCliente ?? "");
-      setNombreCliente(d.nombreCliente ?? "");
-      setPuestoCliente(d.puestoCliente ?? "");
-    } catch (e) {
-      console.error(e);
-      Alert.alert("Error", "No se pudo cargar el borrador.");
-    }
-  }, [draftKey, tecnicoPrincipal]);
-
-  useEffect(() => {
-    loadDraft();
-  }, [loadDraft]);
-
-  const saveDraft = useCallback(async () => {
-    try {
-      await AsyncStorage.setItem(draftKey, JSON.stringify(buildPayload()));
-      Alert.alert("Borrador guardado", "Se guardó localmente.");
-    } catch (e) {
-      console.error(e);
-      Alert.alert("Error", "No se pudo guardar el borrador.");
-    }
-  }, [draftKey, buildPayload]);
-
-  const addMecanico = () =>
-    setMecanicos((prev) => [...prev, newMecanico("", false)]);
-
-  const removeMecanico = (idx) => {
-    if (idx === 0) {
-      Alert.alert(
-        "No disponible",
-        "El mecánico principal no se puede eliminar."
-      );
-      return;
-    }
-
-    setMecanicos((prev) => prev.filter((_, i) => i !== idx));
-  };
-
-  const updateMecanico = (idx, val) => {
-    setMecanicos((prev) =>
-      prev.map((m, i) => (i === idx ? { ...m, nombre: val } : m))
-    );
-  };
-
-  const addRef = () => {
-    setRefacciones((prev) => [...prev, newRefaccion()]);
-  };
-
-  const removeRef = (idx) => {
-    setRefacciones((prev) => {
-      if (prev.length <= 1) return [newRefaccion()];
-      return prev.filter((_, i) => i !== idx);
+      return {
+        ...prev,
+        materiales: prev.materiales.filter((_, i) => i !== index),
+      };
     });
   };
 
-  const updateRef = (idx, field, val) => {
-    setRefacciones((prev) =>
-      prev.map((r, i) => (i === idx ? { ...r, [field]: val } : r))
-    );
+  const getDateValue = (target) => {
+    if (target === "elDia") return form.elDia;
+    if (target === "emitidaPorFecha") return form.emitidaPorFecha;
+    if (target === "surtidaPorFecha") return form.surtidaPorFecha;
+    if (target === "recibidaPorFecha") return form.recibidaPorFecha;
+    return "";
   };
 
-  const onChangeDate = (_e, selectedDate) => {
-    if (Platform.OS === "android") setShowDatePicker(false);
-    if (selectedDate) setFecha(selectedDate);
+  const setDateValue = (target, value) => {
+    if (!target) return;
+    patchForm({ [target]: value });
   };
 
-  const openTime = (which) => {
-    if (which === "entrada") setShowEntradaPicker(true);
-    if (which === "salida") setShowSalidaPicker(true);
-    if (which === "llamada") setShowLlamadaPicker(true);
+  const onChangeDate = (_event, selectedDate) => {
+    if (Platform.OS === "android") setDateTarget(null);
+    if (!selectedDate || !dateTarget) return;
+
+    setDateValue(dateTarget, formatDateDMY(selectedDate));
   };
 
-  const onChangeTime = (setter, setShow) => (_e, selectedDate) => {
-    if (Platform.OS === "android") setShow(false);
-    if (selectedDate) setter(formatTimeHM(selectedDate));
-  };
+  const buildPayload = () => ({
+    almacen: safe(form.almacen),
+    depto: safe(form.depto),
+    seccion: safe(form.seccion),
+    elDia: safe(form.elDia),
+    mx: safe(form.mx),
+    direccionRazonSocial: safe(form.direccionRazonSocial),
+    materiales: (Array.isArray(form.materiales) ? form.materiales : []).map(
+      (item) => ({
+        codigoDynamics: safe(item.codigoDynamics),
+        codigoMrp: safe(item.codigoMrp),
+        descripcion: safe(item.descripcion),
+        cantidad: safe(item.cantidad),
+        um: safe(item.um),
+        observaciones: safe(item.observaciones),
+      })
+    ),
+    emitidaPorFecha: safe(form.emitidaPorFecha),
+    emitidaPor: safe(form.emitidaPor),
+    surtidaPorFecha: safe(form.surtidaPorFecha),
+    surtidaPor: safe(form.surtidaPor),
+    recibidaPorFecha: safe(form.recibidaPorFecha),
+    recibidaPor: safe(form.recibidaPor),
+    incidencia: safe(form.incidencia),
+    causas: safe(form.causas),
+  });
 
   const generarPdfLocal = async () => {
     const payload = buildPayload();
-    const html = buildReporteEmergenciaHtml(payload);
+    const html = buildRequisicionMaterialesHtml(payload);
 
     const result = await Print.printToFileAsync({
       html,
@@ -571,24 +515,23 @@ export default function ReporteEmergenciaForm() {
     };
   };
 
-  const generarPreviewPdf = async () => {
+  const abrirPreviewPdf = async () => {
     try {
       setGeneratingPdf(true);
       setPreviewHtml("");
-      setPdfUri(null);
-      setShowPreview(true);
+      setPreviewVisible(true);
 
       await generarPdfLocal();
     } catch (e) {
-      console.log("[REPORTE EMERGENCIA PDF] error:", e);
-      setShowPreview(false);
+      console.log("[REQUISICION MATERIALES] preview error:", e);
+      setPreviewVisible(false);
       Alert.alert("Error", "No se pudo generar la vista previa del PDF.");
     } finally {
       setGeneratingPdf(false);
     }
   };
 
-  const abrirPdf = async () => {
+  const compartirPdf = async () => {
     try {
       setGeneratingPdf(true);
 
@@ -603,94 +546,67 @@ export default function ReporteEmergenciaForm() {
 
       if (!canShare) {
         Alert.alert(
-          "No disponible",
-          "Este dispositivo no permite abrir/compartir archivos."
+          "PDF generado",
+          "El archivo se generó, pero este dispositivo no permite compartirlo."
         );
         return;
       }
 
       await Sharing.shareAsync(uri, {
         mimeType: "application/pdf",
-        dialogTitle: "Abrir / compartir reporte de emergencia",
+        dialogTitle: "Compartir requisición de materiales",
       });
     } catch (e) {
-      console.warn("No se pudo abrir PDF:", e?.message || e);
-      Alert.alert("Error", "No se pudo abrir el PDF.");
+      console.log("[REQUISICION MATERIALES] compartirPdf error:", e);
+      Alert.alert("Error", "No se pudo generar o compartir el PDF.");
     } finally {
       setGeneratingPdf(false);
     }
   };
 
-  const guardarLocal = async () => {
-    const payload = buildPayload();
+  const materialCount = useMemo(() => {
+    return form.materiales.filter(
+      (item) =>
+        safe(item.codigoDynamics) ||
+        safe(item.codigoMrp) ||
+        safe(item.descripcion) ||
+        safe(item.cantidad) ||
+        safe(item.um) ||
+        safe(item.observaciones)
+    ).length;
+  }, [form.materiales]);
 
-    console.log("REPORTE_EMERGENCIA_OUTPUT =>", JSON.stringify(payload, null, 2));
+  const progress = Math.round(((activeStep + 1) / STEPS.length) * 100);
 
-    try {
-      await AsyncStorage.setItem(draftKey, JSON.stringify(payload));
-    } catch {}
-
-    Alert.alert(
-      "Datos guardados",
-      "Se guardó localmente. No se aplicaron validaciones obligatorias."
-    );
+  const goNext = () => {
+    setActiveStep((prev) => Math.min(prev + 1, STEPS.length - 1));
   };
 
-  const filledCount = useMemo(() => {
-    const values = [
-      mx,
-      razonSocial,
-      direccion,
-      horaEntrada,
-      horaSalida,
-      horaLlamada,
-      supervisor,
-      ct,
-      reporte,
-      estadoEquipo,
-      analisisFalla,
-      formasCorreccion,
-      notas,
-      nombreCliente,
-      puestoCliente,
-    ];
-
-    return values.filter((v) => !!safeStr(v)).length;
-  }, [
-    mx,
-    razonSocial,
-    direccion,
-    horaEntrada,
-    horaSalida,
-    horaLlamada,
-    supervisor,
-    ct,
-    reporte,
-    estadoEquipo,
-    analisisFalla,
-    formasCorreccion,
-    notas,
-    nombreCliente,
-    puestoCliente,
-  ]);
-
-  const refCount = useMemo(() => {
-    return refacciones.filter(
-      (r) => safeStr(r.cantidad) || safeStr(r.descripcion) || safeStr(r.codigoInterno)
-    ).length;
-  }, [refacciones]);
-
-  const goNext = () => setActiveStep((s) => Math.min(s + 1, STEPS.length - 1));
-  const goBack = () => setActiveStep((s) => Math.max(s - 1, 0));
+  const goBack = () => {
+    setActiveStep((prev) => Math.max(prev - 1, 0));
+  };
 
   const renderProgress = () => (
-    <View style={styles.progressCard}>
-      <Text style={styles.progressTitle}>Avance del reporte</Text>
+    <View style={styles.progressPanel}>
+      <View style={styles.progressHeader}>
+        <View>
+          <Text style={styles.progressEyebrow}>
+            Paso {activeStep + 1} de {STEPS.length}
+          </Text>
+          <Text style={styles.progressCurrent}>{STEPS[activeStep].title}</Text>
+        </View>
+
+        <Text style={styles.progressPercent}>{progress}%</Text>
+      </View>
+
+      <View style={styles.progressTrack}>
+        <View style={[styles.progressFill, { width: `${progress}%` }]} />
+      </View>
 
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.stepsScroll}
+        contentContainerStyle={styles.stepList}
       >
         {STEPS.map((step, index) => {
           const active = index === activeStep;
@@ -699,37 +615,40 @@ export default function ReporteEmergenciaForm() {
           return (
             <TouchableOpacity
               key={step.key}
-              activeOpacity={0.86}
               onPress={() => setActiveStep(index)}
+              activeOpacity={0.86}
               style={[
-                styles.stepItem,
-                active && styles.stepItemActive,
-                done && styles.stepItemDone,
+                styles.stepButton,
+                active && styles.stepButtonActive,
+                done && styles.stepButtonDone,
               ]}
             >
               <View
                 style={[
-                  styles.stepNumber,
-                  active && styles.stepNumberActive,
-                  done && styles.stepNumberDone,
+                  styles.stepDot,
+                  active && styles.stepDotActive,
+                  done && styles.stepDotDone,
                 ]}
               >
-                <Text
-                  style={[
-                    styles.stepNumberText,
-                    (active || done) && styles.stepNumberTextActive,
-                  ]}
-                >
-                  {index + 1}
-                </Text>
+                {done ? (
+                  <Ionicons name="checkmark" size={12} color="#FFFFFF" />
+                ) : (
+                  <Text
+                    style={[
+                      styles.stepDotText,
+                      active && styles.stepDotTextActive,
+                    ]}
+                  >
+                    {index + 1}
+                  </Text>
+                )}
               </View>
 
               <View>
                 <Text
                   style={[
-                    styles.stepName,
-                    active && styles.stepNameActive,
-                    done && styles.stepNameDone,
+                    styles.stepTitle,
+                    active && styles.stepTitleActive,
                   ]}
                 >
                   {step.title}
@@ -745,469 +664,331 @@ export default function ReporteEmergenciaForm() {
 
   const renderGeneral = () => (
     <>
-      <SectionBox
+      <Section
+        title="Requisición de materiales"
+        subtitle="Información que aparecerá en el encabezado del formato."
         icon="document-text-outline"
-        title="Resumen del reporte"
-        subtitle="Datos principales del servicio de emergencia."
       >
-        <View style={styles.infoGrid}>
-          <InfoItem label="Número de reporte" value={safeOrderId || "SIN_ORDEN"} />
-          <InfoItem label="Fecha" value={formatDateDMY(fecha)} />
-          <InfoItem label="Técnico principal" value={tecnicoPrincipal} />
+        <View style={styles.summaryGrid}>
+          <SummaryItem label="Orden actual" value={currentOrder || "Sin orden"} />
+          <SummaryItem label="MX" value={form.mx} />
+          <SummaryItem label="Almacén" value={form.almacen} />
+          <SummaryItem label="Entrega" value={form.elDia} />
         </View>
-      </SectionBox>
+      </Section>
 
-      <SectionBox
-        icon="calendar-outline"
-        title="Fecha del reporte"
-        subtitle="Selecciona la fecha de atención."
-      >
-        <PickerButton
-          label="Fecha"
-          value={formatDateDMY(fecha)}
-          placeholder="Selecciona fecha"
-          icon="calendar-outline"
-          onPress={() => setShowDatePicker(true)}
-        />
-
-        {showDatePicker && (
-          <DateTimePicker
-            value={fecha}
-            mode="date"
-            display={Platform.OS === "ios" ? "spinner" : "default"}
-            onChange={onChangeDate}
-          />
-        )}
-      </SectionBox>
-
-      <SectionBox
-        icon="business-outline"
-        title="Servicio efectuado en"
-        subtitle="Datos del cliente, ubicación o equipo."
+      <Section
+        title="Destino de la requisición"
+        subtitle="Captura almacén, departamento, sección y fecha de entrega."
+        icon="storefront-outline"
       >
         <Input
-          label="MX"
-          value={mx}
-          onChangeText={setMx}
-          placeholder="MX..."
-          icon="barcode-outline"
-        />
-
-        <Input
-          label="Razón social"
-          value={razonSocial}
-          onChangeText={setRazonSocial}
-          placeholder="Empresa / Cliente"
+          label="Al almacén"
+          value={form.almacen}
+          onChangeText={(v) => patchForm({ almacen: v })}
+          placeholder="Nombre o clave del almacén"
           icon="business-outline"
         />
 
-        <Input
-          label="Dirección"
-          value={direccion}
-          onChangeText={setDireccion}
-          placeholder="Calle, No., Col., Ciudad..."
-          icon="location-outline"
-        />
-      </SectionBox>
-    </>
-  );
-
-  const renderTiempos = () => (
-    <>
-      <SectionBox
-        icon="time-outline"
-        title="Horarios del servicio"
-        subtitle="Entrada, salida y hora de llamada."
-      >
         <FieldRow>
           <Field>
-            <PickerButton
-              label="Entrada"
-              value={horaEntrada}
-              placeholder="HH:MM"
-              onPress={() => openTime("entrada")}
+            <Input
+              label="Departamento"
+              value={form.depto}
+              onChangeText={(v) => patchForm({ depto: v })}
+              placeholder="Departamento"
+              icon="folder-open-outline"
             />
           </Field>
 
           <Field>
-            <PickerButton
-              label="Salida"
-              value={horaSalida}
-              placeholder="HH:MM"
-              onPress={() => openTime("salida")}
-            />
-          </Field>
-
-          <Field>
-            <PickerButton
-              label="Hora de llamada"
-              value={horaLlamada}
-              placeholder="HH:MM"
-              onPress={() => openTime("llamada")}
+            <Input
+              label="Sección"
+              value={form.seccion}
+              onChangeText={(v) => patchForm({ seccion: v })}
+              placeholder="Sección"
+              icon="layers-outline"
             />
           </Field>
         </FieldRow>
 
-        {showEntradaPicker && (
-          <DateTimePicker
-            value={new Date()}
-            mode="time"
-            is24Hour
-            display={Platform.OS === "ios" ? "spinner" : "default"}
-            onChange={onChangeTime(setHoraEntrada, setShowEntradaPicker)}
-          />
-        )}
+        <DateButton
+          label="Entregar el día"
+          value={form.elDia}
+          onPress={() => setDateTarget("elDia")}
+        />
+      </Section>
 
-        {showSalidaPicker && (
-          <DateTimePicker
-            value={new Date()}
-            mode="time"
-            is24Hour
-            display={Platform.OS === "ios" ? "spinner" : "default"}
-            onChange={onChangeTime(setHoraSalida, setShowSalidaPicker)}
-          />
-        )}
-
-        {showLlamadaPicker && (
-          <DateTimePicker
-            value={new Date()}
-            mode="time"
-            is24Hour
-            display={Platform.OS === "ios" ? "spinner" : "default"}
-            onChange={onChangeTime(setHoraLlamada, setShowLlamadaPicker)}
-          />
-        )}
-      </SectionBox>
-
-      <SectionBox
-        icon="people-outline"
-        title="Mecánicos"
-        subtitle="El primer mecánico se toma automáticamente del usuario."
-      >
-        {mecanicos.map((m, idx) => {
-          const isPrincipal = idx === 0 || !!m.principal;
-
-          return (
-            <View key={`mecanico-${idx}`} style={styles.rowCard}>
-              <View style={styles.rowHeader}>
-                <View>
-                  <Text style={styles.rowTitle}>Mecánico {idx + 1}</Text>
-                  {isPrincipal ? (
-                    <Text style={styles.rowSub}>Principal automático</Text>
-                  ) : (
-                    <Text style={styles.rowSub}>Apoyo en servicio</Text>
-                  )}
-                </View>
-
-                {!isPrincipal ? (
-                  <TouchableOpacity onPress={() => removeMecanico(idx)}>
-                    <Text style={styles.removeTxt}>Eliminar</Text>
-                  </TouchableOpacity>
-                ) : null}
-              </View>
-
-              <Input
-                label="Nombre"
-                value={m.nombre}
-                onChangeText={(v) => updateMecanico(idx, v)}
-                placeholder="Nombre del mecánico"
-                editable={!isPrincipal}
-                icon="person-outline"
-              />
-            </View>
-          );
-        })}
-
-        <TouchableOpacity style={styles.secondary} onPress={addMecanico}>
-          <Ionicons name="add-circle-outline" size={18} color="#fff" />
-          <Text style={styles.secondaryText}>Agregar mecánico</Text>
-        </TouchableOpacity>
-      </SectionBox>
-
-      <SectionBox
-        icon="reader-outline"
-        title="Datos adicionales"
-        subtitle="Supervisor y CT."
+      <Section
+        title="Ubicación / cliente"
+        subtitle="Datos de identificación que aparecen en el costado derecho del formato."
+        icon="location-outline"
       >
         <Input
-          label="Supervisor"
-          value={supervisor}
-          onChangeText={setSupervisor}
-          placeholder="Nombre del supervisor"
-          icon="person-circle-outline"
+          label="MX"
+          value={form.mx}
+          onChangeText={(v) => patchForm({ mx: v })}
+          placeholder="MX"
+          icon="barcode-outline"
         />
 
         <Input
-          label="CT"
-          value={ct}
-          onChangeText={setCt}
-          placeholder="Código / clave"
-          icon="keypad-outline"
+          label="Dirección / Razón social"
+          value={form.direccionRazonSocial}
+          onChangeText={(v) => patchForm({ direccionRazonSocial: v })}
+          placeholder="Dirección, cliente o razón social"
+          multiline
+          icon="location-outline"
         />
-      </SectionBox>
+      </Section>
     </>
   );
 
-  const renderServicio = () => (
-    <>
-      <SectionBox
-        icon="document-text-outline"
-        title="Reporte"
-        subtitle="Describe el motivo y detalle general del servicio."
-      >
-        <Input
-          label="Detalle del reporte"
-          value={reporte}
-          onChangeText={setReporte}
-          placeholder="Descripción general del reporte..."
-          multiline
-        />
-      </SectionBox>
-
-      <SectionBox
-        icon="construct-outline"
-        title="Estado de equipo"
-        subtitle="Condiciones encontradas al llegar al sitio."
-      >
-        <Input
-          label="Estado"
-          value={estadoEquipo}
-          onChangeText={setEstadoEquipo}
-          placeholder="Operando / detenido / condiciones encontradas..."
-          multiline
-        />
-      </SectionBox>
-
-      <SectionBox
-        icon="search-outline"
-        title="Análisis de falla"
-        subtitle="Diagnóstico o causa raíz identificada."
-      >
-        <Input
-          label="Análisis"
-          value={analisisFalla}
-          onChangeText={setAnalisisFalla}
-          placeholder="Causa raíz o diagnóstico..."
-          multiline
-        />
-      </SectionBox>
-
-      <SectionBox
-        icon="hammer-outline"
-        title="Formas de corrección"
-        subtitle="Acciones realizadas durante el servicio."
-      >
-        <Input
-          label="Corrección"
-          value={formasCorreccion}
-          onChangeText={setFormasCorreccion}
-          placeholder="Acciones realizadas..."
-          multiline
-        />
-      </SectionBox>
-
-      <SectionBox
-        icon="clipboard-outline"
-        title="Notas"
-        subtitle="Observaciones adicionales."
-      >
-        <Input
-          label="Notas"
-          value={notas}
-          onChangeText={setNotas}
-          placeholder="Observaciones adicionales..."
-          multiline
-        />
-      </SectionBox>
-    </>
-  );
-
-  const renderRefacciones = () => (
-    <SectionBox
+  const renderMateriales = () => (
+    <Section
+      title="Materiales solicitados"
+      subtitle="El PDF conserva al menos 8 renglones; aquí puedes agregar las partidas que necesites."
       icon="cube-outline"
-      title="Refacciones utilizadas"
-      subtitle="Agrega las piezas utilizadas durante el servicio."
     >
-      {refacciones.map((r, idx) => (
-        <View key={`refaccion-${idx}`} style={styles.rowCard}>
-          <View style={styles.rowHeader}>
-            <View>
-              <Text style={styles.rowTitle}>Refacción {idx + 1}</Text>
-              <Text style={styles.rowSub}>Pieza utilizada o dañada</Text>
-            </View>
-
-            <TouchableOpacity onPress={() => removeRef(idx)}>
-              <Text style={styles.removeTxt}>Eliminar</Text>
-            </TouchableOpacity>
-          </View>
-
-          <FieldRow>
-            <Field small>
-              <Input
-                label="Cantidad"
-                value={r.cantidad}
-                onChangeText={(v) => updateRef(idx, "cantidad", v)}
-                placeholder="1"
-                keyboardType="numeric"
-                icon="calculator-outline"
-              />
-            </Field>
-
-            <Field>
-              <Input
-                label="Código interno"
-                value={r.codigoInterno}
-                onChangeText={(v) => updateRef(idx, "codigoInterno", v)}
-                placeholder="200-..."
-                icon="pricetag-outline"
-              />
-            </Field>
-          </FieldRow>
-
-          <Input
-            label="Descripción"
-            value={r.descripcion}
-            onChangeText={(v) => updateRef(idx, "descripcion", v)}
-            placeholder="Descripción de la refacción"
-            icon="cube-outline"
-          />
-
-          <ChipsYesNo
-            label="¿Con cargo al cliente?"
-            value={r.cargoCliente}
-            onChange={(opt) => updateRef(idx, "cargoCliente", opt)}
-          />
+      <View style={styles.materialSummary}>
+        <View>
+          <Text style={styles.materialSummaryTitle}>Partidas capturadas</Text>
+          <Text style={styles.materialSummaryText}>
+            {materialCount === 1
+              ? "1 material con información"
+              : `${materialCount} materiales con información`}
+          </Text>
         </View>
+
+        <View style={styles.materialSummaryBadge}>
+          <Text style={styles.materialSummaryBadgeText}>{materialCount}</Text>
+        </View>
+      </View>
+
+      {form.materiales.map((item, index) => (
+        <MaterialCard
+          key={`material-${index}`}
+          item={item}
+          index={index}
+          canRemove={form.materiales.length > 1}
+          onChange={(field, value) => updateMaterial(index, field, value)}
+          onRemove={() => removeMaterial(index)}
+        />
       ))}
 
-      <TouchableOpacity style={styles.secondary} onPress={addRef}>
-        <Ionicons name="add-circle-outline" size={18} color="#fff" />
-        <Text style={styles.secondaryText}>Agregar refacción</Text>
+      <TouchableOpacity
+        style={styles.addButton}
+        onPress={addMaterial}
+        activeOpacity={0.88}
+      >
+        <Ionicons name="add-circle-outline" size={19} color={UI.primary} />
+        <Text style={styles.addButtonText}>Agregar material</Text>
       </TouchableOpacity>
-    </SectionBox>
+    </Section>
   );
 
-  const renderCliente = () => (
+  const renderResponsables = () => (
     <>
-      <SectionBox
-        icon="checkmark-done-outline"
-        title="Confirmación del cliente"
-        subtitle="Entrega de refacciones y datos de quien recibe."
+      <Section
+        title="Emitida por"
+        subtitle="Persona que genera la requisición."
+        icon="create-outline"
       >
-        <ChipsYesNo
-          label="¿Le fueron entregadas las refacciones utilizadas o dañadas?"
-          value={entregoRefUsadas}
-          onChange={setEntregoRefUsadas}
-        />
-
         <Input
-          label="Firma"
-          value={firmaCliente}
-          onChangeText={setFirmaCliente}
-          placeholder="Firma / referencia"
-          icon="create-outline"
-        />
-
-        <Input
-          label="Nombre"
-          value={nombreCliente}
-          onChangeText={setNombreCliente}
-          placeholder="Nombre del cliente"
+          label="Nombre / firma"
+          value={form.emitidaPor}
+          onChangeText={(v) => patchForm({ emitidaPor: v })}
+          placeholder="Nombre de quien emite"
           icon="person-outline"
         />
 
-        <Input
-          label="Puesto"
-          value={puestoCliente}
-          onChangeText={setPuestoCliente}
-          placeholder="Puesto"
-          icon="briefcase-outline"
+        <DateButton
+          label="Fecha"
+          value={form.emitidaPorFecha}
+          onPress={() => setDateTarget("emitidaPorFecha")}
         />
-      </SectionBox>
+      </Section>
 
-      <SectionBox
-        icon="save-outline"
-        title="Guardar información"
-        subtitle="Puedes guardar localmente sin validar campos obligatorios."
+      <Section
+        title="Surtida por"
+        subtitle="Persona de almacén que surte los materiales."
+        icon="archive-outline"
       >
-        <TouchableOpacity style={styles.primaryDark} onPress={guardarLocal}>
-          <Ionicons name="checkmark-circle-outline" size={18} color="#fff" />
-          <Text style={styles.primaryDarkText}>Guardar local</Text>
+        <Input
+          label="Nombre / firma"
+          value={form.surtidaPor}
+          onChangeText={(v) => patchForm({ surtidaPor: v })}
+          placeholder="Nombre de quien surte"
+          icon="person-outline"
+        />
+
+        <DateButton
+          label="Fecha"
+          value={form.surtidaPorFecha}
+          onPress={() => setDateTarget("surtidaPorFecha")}
+        />
+      </Section>
+
+      <Section
+        title="Recibida por"
+        subtitle="Persona que recibe físicamente los materiales."
+        icon="checkmark-done-outline"
+      >
+        <Input
+          label="Nombre / firma"
+          value={form.recibidaPor}
+          onChangeText={(v) => patchForm({ recibidaPor: v })}
+          placeholder="Nombre de quien recibe"
+          icon="person-outline"
+        />
+
+        <DateButton
+          label="Fecha"
+          value={form.recibidaPorFecha}
+          onPress={() => setDateTarget("recibidaPorFecha")}
+        />
+      </Section>
+    </>
+  );
+
+  const renderIncidencia = () => (
+    <>
+      <Section
+        title="Tipo de incidencia"
+        subtitle="Selecciona la opción que se marcará con una X en el PDF."
+        icon="alert-circle-outline"
+      >
+        <View style={styles.choiceList}>
+          {INCIDENCIAS.map((item, index) => (
+            <Choice
+              key={item}
+              label={`${index + 1}. ${item}`}
+              active={form.incidencia === item}
+              onPress={() => patchForm({ incidencia: item })}
+              icon={
+                index === 0
+                  ? "add-circle-outline"
+                  : index === 1
+                  ? "build-outline"
+                  : index === 2
+                  ? "help-circle-outline"
+                  : "shield-outline"
+              }
+            />
+          ))}
+        </View>
+      </Section>
+
+      <Section
+        title="Causas"
+        subtitle="Describe el motivo de la solicitud o reposición."
+        icon="reader-outline"
+      >
+        <Input
+          label="Descripción de causas"
+          value={form.causas}
+          onChangeText={(v) => patchForm({ causas: v })}
+          placeholder="Describe brevemente las causas..."
+          multiline
+          icon="create-outline"
+        />
+      </Section>
+
+      <View style={styles.readyCard}>
+        <View style={styles.readyIcon}>
+          <Ionicons name="document-text-outline" size={22} color={UI.primary} />
+        </View>
+
+        <View style={{ flex: 1 }}>
+          <Text style={styles.readyTitle}>Documento listo para revisar</Text>
+          <Text style={styles.readyText}>
+            No hay validaciones bloqueantes. Puedes abrir la vista previa aun si
+            faltan datos y regresar a corregirlos después.
+          </Text>
+        </View>
+
+        <TouchableOpacity
+          style={styles.readyButton}
+          onPress={abrirPreviewPdf}
+          activeOpacity={0.88}
+        >
+          <Ionicons name="eye-outline" size={17} color={UI.primary} />
+          <Text style={styles.readyButtonText}>Ver PDF</Text>
         </TouchableOpacity>
-      </SectionBox>
+      </View>
     </>
   );
 
   const renderStepContent = () => {
     if (activeStep === 0) return renderGeneral();
-    if (activeStep === 1) return renderTiempos();
-    if (activeStep === 2) return renderServicio();
-    if (activeStep === 3) return renderRefacciones();
-    return renderCliente();
+    if (activeStep === 1) return renderMateriales();
+    if (activeStep === 2) return renderResponsables();
+    return renderIncidencia();
   };
 
   return (
     <View style={styles.container}>
-      <Header title="Reporte de emergencia" />
+      <Header title="Requisición de materiales" />
 
       <ScrollView
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
         contentContainerStyle={styles.content}
       >
-        <View style={styles.hero}>
-          <View style={styles.heroTop}>
-            <View style={styles.heroIcon}>
-              <Ionicons name="alert-circle-outline" size={25} color="#fff" />
-            </View>
-
-            <View style={{ flex: 1 }}>
-              <Text style={styles.heroKicker}>Formato técnico</Text>
-              <Text style={styles.heroTitle}>Reporte de emergencia</Text>
-              <Text style={styles.heroSub}>
-                Captura manual del servicio. Puedes visualizar el PDF aunque
-                todavía falten datos.
-              </Text>
-            </View>
-
-            <View style={styles.heroBadge}>
-              <Text style={styles.heroBadgeText}>PDF libre</Text>
-            </View>
+        <View style={styles.introCard}>
+          <View style={styles.introIcon}>
+            <Ionicons name="cube-outline" size={23} color={UI.primary} />
           </View>
 
-          <View style={styles.statsRow}>
-            <StatBox label="Campos" value={filledCount} />
-            <StatBox label="Refacciones" value={refCount} tone="yellow" />
-            <StatBox
-              label="Paso"
-              value={`${activeStep + 1}/${STEPS.length}`}
-              tone="green"
-            />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.introKicker}>Formato de almacén</Text>
+            <Text style={styles.introTitle}>Requisición de materiales</Text>
+            <Text style={styles.introText}>
+              Captura materiales, responsables e incidencia de forma sencilla.
+            </Text>
           </View>
+
+          <TouchableOpacity
+            onPress={abrirPreviewPdf}
+            activeOpacity={0.86}
+            style={styles.introPdfButton}
+          >
+            <Ionicons name="eye-outline" size={16} color={UI.primary} />
+            <Text style={styles.introPdfButtonText}>Ver PDF</Text>
+          </TouchableOpacity>
         </View>
 
         {renderProgress()}
-
-        <View style={styles.activeStepHeader}>
-          <Text style={styles.activeStepSmall}>
-            Paso {activeStep + 1} de {STEPS.length}
-          </Text>
-          <Text style={styles.activeStepTitle}>{STEPS[activeStep].title}</Text>
-        </View>
-
         {renderStepContent()}
+
+        {dateTarget && (
+          <DateTimePicker
+            value={parseDMYToDate(getDateValue(dateTarget))}
+            mode="date"
+            display={Platform.OS === "ios" ? "spinner" : "default"}
+            onChange={onChangeDate}
+          />
+        )}
 
         <View style={styles.navRow}>
           <TouchableOpacity
-            style={[styles.navBtn, activeStep === 0 && styles.navBtnDisabled]}
+            style={[
+              styles.navButton,
+              activeStep === 0 && styles.navButtonDisabled,
+            ]}
             onPress={goBack}
             disabled={activeStep === 0}
             activeOpacity={0.86}
           >
+            <Ionicons
+              name="chevron-back-outline"
+              size={18}
+              color={activeStep === 0 ? UI.muted2 : UI.primary}
+            />
             <Text
               style={[
-                styles.navBtnText,
-                activeStep === 0 && styles.navBtnTextDisabled,
+                styles.navButtonText,
+                activeStep === 0 && styles.navButtonTextDisabled,
               ]}
             >
               Anterior
@@ -1216,8 +997,8 @@ export default function ReporteEmergenciaForm() {
 
           <TouchableOpacity
             style={[
-              styles.navBtnPrimary,
-              activeStep === STEPS.length - 1 && styles.navBtnDisabled,
+              styles.navButtonPrimary,
+              activeStep === STEPS.length - 1 && styles.navButtonDisabled,
             ]}
             onPress={goNext}
             disabled={activeStep === STEPS.length - 1}
@@ -1225,81 +1006,81 @@ export default function ReporteEmergenciaForm() {
           >
             <Text
               style={[
-                styles.navBtnPrimaryText,
-                activeStep === STEPS.length - 1 && styles.navBtnTextDisabled,
+                styles.navButtonPrimaryText,
+                activeStep === STEPS.length - 1 &&
+                  styles.navButtonPrimaryTextDisabled,
               ]}
             >
               Siguiente
             </Text>
+            <Ionicons
+              name="chevron-forward-outline"
+              size={18}
+              color={
+                activeStep === STEPS.length - 1 ? UI.muted2 : "#FFFFFF"
+              }
+            />
           </TouchableOpacity>
         </View>
       </ScrollView>
 
       <View style={styles.bottomBar}>
         <TouchableOpacity
-          style={styles.draftBtn}
-          onPress={saveDraft}
+          style={styles.previewButton}
+          onPress={abrirPreviewPdf}
+          disabled={generatingPdf}
           activeOpacity={0.9}
         >
-          <Ionicons name="save-outline" size={18} color={UI.blue} />
-          <Text style={styles.draftBtnText}>Borrador</Text>
+          <Ionicons name="eye-outline" size={18} color={UI.primary} />
+          <Text style={styles.previewButtonText}>Vista previa</Text>
         </TouchableOpacity>
 
         <TouchableOpacity
-          style={styles.previewBtn}
-          onPress={generarPreviewPdf}
+          style={styles.shareButton}
+          onPress={compartirPdf}
           disabled={generatingPdf}
           activeOpacity={0.9}
         >
           {generatingPdf ? (
-            <ActivityIndicator color="#fff" />
+            <ActivityIndicator color="#FFFFFF" />
           ) : (
             <>
-              <Ionicons name="eye-outline" size={18} color="#fff" />
-              <Text style={styles.previewBtnText}>Vista previa</Text>
+              <Ionicons name="share-social-outline" size={18} color="#FFFFFF" />
+              <Text style={styles.shareButtonText}>Compartir PDF</Text>
             </>
           )}
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.shareBtn}
-          onPress={abrirPdf}
-          disabled={generatingPdf}
-          activeOpacity={0.9}
-        >
-          <Ionicons name="share-social-outline" size={18} color="#fff" />
-          <Text style={styles.shareBtnText}>PDF</Text>
         </TouchableOpacity>
       </View>
 
       <Modal
-        visible={showPreview}
+        visible={previewVisible}
         transparent
         animationType="slide"
         statusBarTranslucent
-        onRequestClose={() => setShowPreview(false)}
+        onRequestClose={() => setPreviewVisible(false)}
       >
         <View style={styles.modalBackdrop}>
           <View style={styles.modalCard}>
             <View style={styles.modalHeader}>
-              <View>
+              <View style={{ flex: 1 }}>
                 <Text style={styles.modalKicker}>Documento</Text>
-                <Text style={styles.modalTitle}>Vista previa del reporte</Text>
+                <Text style={styles.modalTitle}>Vista previa de requisición</Text>
               </View>
 
               <TouchableOpacity
-                onPress={() => setShowPreview(false)}
-                style={styles.modalCloseBtn}
+                onPress={() => setPreviewVisible(false)}
+                style={styles.modalClose}
+                activeOpacity={0.86}
               >
-                <Ionicons name="close" size={20} color="#fff" />
+                <Ionicons name="close" size={20} color={UI.text} />
               </TouchableOpacity>
             </View>
 
             <View style={styles.webWrap}>
               {generatingPdf || !previewHtml ? (
                 <View style={styles.loadingBox}>
-                  <ActivityIndicator size="large" color={UI.blue} />
-                  <Text style={styles.loadingText}>Generando PDF…</Text>
+                  <ActivityIndicator size="large" color={UI.primary} />
+                  <Text style={styles.loadingText}>Generando documento…</Text>
                 </View>
               ) : (
                 <WebView
@@ -1312,14 +1093,31 @@ export default function ReporteEmergenciaForm() {
 
             <View style={styles.modalFooter}>
               <TouchableOpacity
-                style={styles.footerLight}
-                onPress={() => setShowPreview(false)}
+                style={styles.modalSecondary}
+                onPress={() => setPreviewVisible(false)}
+                activeOpacity={0.86}
               >
-                <Text style={styles.footerLightText}>Cerrar</Text>
+                <Text style={styles.modalSecondaryText}>Cerrar</Text>
               </TouchableOpacity>
 
-              <TouchableOpacity style={styles.footerPrimary} onPress={abrirPdf}>
-                <Text style={styles.footerPrimaryText}>Abrir / compartir PDF</Text>
+              <TouchableOpacity
+                style={styles.modalPrimary}
+                onPress={compartirPdf}
+                disabled={generatingPdf}
+                activeOpacity={0.86}
+              >
+                {generatingPdf ? (
+                  <ActivityIndicator color="#FFFFFF" />
+                ) : (
+                  <>
+                    <Ionicons
+                      name="share-social-outline"
+                      size={17}
+                      color="#FFFFFF"
+                    />
+                    <Text style={styles.modalPrimaryText}>Compartir PDF</Text>
+                  </>
+                )}
               </TouchableOpacity>
             </View>
           </View>
@@ -1329,18 +1127,6 @@ export default function ReporteEmergenciaForm() {
   );
 }
 
-const elev = (multiplier = 1) =>
-  Platform.select({
-    ios: {
-      shadowColor: "#000",
-      shadowOpacity: 0.08 * multiplier,
-      shadowRadius: 8 * multiplier,
-      shadowOffset: { width: 0, height: 3 * multiplier },
-    },
-    android: { elevation: 2 * multiplier },
-    default: {},
-  });
-
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -1348,549 +1134,632 @@ const styles = StyleSheet.create({
   },
 
   content: {
-    padding: 16,
-    paddingBottom: 126,
+    paddingHorizontal: 15,
+    paddingTop: 14,
+    paddingBottom: 122,
   },
 
-  hero: {
-    backgroundColor: UI.blue,
-    borderRadius: 28,
-    padding: 18,
-    ...elev(0.9),
-  },
-
-  heroTop: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    gap: 12,
-  },
-
-  heroIcon: {
-    width: 46,
-    height: 46,
-    borderRadius: 16,
-    backgroundColor: "rgba(255,255,255,0.16)",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-
-  heroKicker: {
-    color: "#BFDBFE",
-    fontSize: 11,
-    fontWeight: "900",
-    textTransform: "uppercase",
-    letterSpacing: 0.9,
-    marginBottom: 4,
-  },
-
-  heroTitle: {
-    color: "#FFFFFF",
-    fontSize: 24,
-    fontWeight: "900",
-    lineHeight: 30,
-  },
-
-  heroSub: {
-    color: "#DBEAFE",
-    fontSize: 13,
-    fontWeight: "700",
-    lineHeight: 19,
-    marginTop: 7,
-  },
-
-  heroBadge: {
-    backgroundColor: "rgba(255,255,255,0.15)",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.22)",
-    borderRadius: 999,
-    paddingHorizontal: 11,
-    paddingVertical: 8,
-  },
-
-  heroBadgeText: {
-    color: "#FFFFFF",
-    fontSize: 11,
-    fontWeight: "900",
-  },
-
-  statsRow: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 10,
-    marginTop: 16,
-  },
-
-  statBox: {
-    flexGrow: 1,
-    minWidth: 82,
-    borderRadius: 18,
-    paddingVertical: 11,
-    paddingHorizontal: 10,
-    alignItems: "center",
-  },
-
-  statBlue: {
-    backgroundColor: "rgba(255,255,255,0.13)",
-  },
-
-  statGreen: {
-    backgroundColor: "rgba(22,163,74,0.28)",
-  },
-
-  statYellow: {
-    backgroundColor: "rgba(245,158,11,0.28)",
-  },
-
-  statRed: {
-    backgroundColor: "rgba(220,38,38,0.26)",
-  },
-
-  statValue: {
-    color: "#FFFFFF",
-    fontSize: 19,
-    fontWeight: "900",
-  },
-
-  statLabel: {
-    color: "#DBEAFE",
-    fontSize: 11,
-    fontWeight: "800",
-    marginTop: 2,
-  },
-
-  progressCard: {
+  introCard: {
     backgroundColor: UI.card,
     borderWidth: 1,
     borderColor: UI.border,
-    borderRadius: 22,
+    borderRadius: 18,
     padding: 14,
-    marginTop: 14,
-  },
-
-  progressTitle: {
-    color: UI.text,
-    fontSize: 14,
-    fontWeight: "900",
-    marginBottom: 10,
-  },
-
-  stepsScroll: {
-    gap: 10,
-    paddingRight: 10,
-  },
-
-  stepItem: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 9,
-    minWidth: 130,
-    backgroundColor: UI.cardSoft,
-    borderWidth: 1,
-    borderColor: UI.border,
-    borderRadius: 18,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+    gap: 11,
   },
 
-  stepItemActive: {
-    backgroundColor: UI.blueSoft,
-    borderColor: "#93C5FD",
-  },
-
-  stepItemDone: {
-    backgroundColor: UI.greenSoft,
-    borderColor: "#86EFAC",
-  },
-
-  stepNumber: {
-    width: 30,
-    height: 30,
-    borderRadius: 11,
-    backgroundColor: "#E2E8F0",
+  introIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: 13,
+    backgroundColor: UI.primarySoft,
     alignItems: "center",
     justifyContent: "center",
   },
 
-  stepNumberActive: {
-    backgroundColor: UI.blue,
+  introKicker: {
+    color: UI.muted,
+    fontSize: 10,
+    fontWeight: "800",
+    textTransform: "uppercase",
+    letterSpacing: 0.7,
   },
 
-  stepNumberDone: {
-    backgroundColor: UI.green,
+  introTitle: {
+    color: UI.text,
+    fontSize: 18,
+    fontWeight: "900",
+    marginTop: 2,
   },
 
-  stepNumberText: {
+  introText: {
     color: UI.muted,
     fontSize: 12,
+    lineHeight: 17,
+    marginTop: 3,
+  },
+
+  introPdfButton: {
+    borderWidth: 1,
+    borderColor: "#C9D8EA",
+    backgroundColor: UI.primarySoft,
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+  },
+
+  introPdfButtonText: {
+    color: UI.primary,
+    fontSize: 11,
     fontWeight: "900",
   },
 
-  stepNumberTextActive: {
+  progressPanel: {
+    marginTop: 12,
+    backgroundColor: UI.card,
+    borderWidth: 1,
+    borderColor: UI.border,
+    borderRadius: 18,
+    padding: 13,
+  },
+
+  progressHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 10,
+  },
+
+  progressEyebrow: {
+    color: UI.muted,
+    fontSize: 10,
+    fontWeight: "800",
+    textTransform: "uppercase",
+    letterSpacing: 0.6,
+  },
+
+  progressCurrent: {
+    color: UI.text,
+    fontSize: 15,
+    fontWeight: "900",
+    marginTop: 2,
+  },
+
+  progressPercent: {
+    color: UI.primary,
+    fontSize: 13,
+    fontWeight: "900",
+  },
+
+  progressTrack: {
+    height: 5,
+    borderRadius: 99,
+    backgroundColor: "#E8EDF3",
+    overflow: "hidden",
+  },
+
+  progressFill: {
+    height: "100%",
+    borderRadius: 99,
+    backgroundColor: UI.primary,
+  },
+
+  stepList: {
+    gap: 8,
+    paddingTop: 12,
+    paddingRight: 6,
+  },
+
+  stepButton: {
+    minWidth: 112,
+    borderRadius: 13,
+    borderWidth: 1,
+    borderColor: UI.border,
+    backgroundColor: UI.cardSoft,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+
+  stepButtonActive: {
+    backgroundColor: UI.primarySoft,
+    borderColor: "#C1D2E7",
+  },
+
+  stepButtonDone: {
+    backgroundColor: UI.successSoft,
+    borderColor: "#C9E8DA",
+  },
+
+  stepDot: {
+    width: 25,
+    height: 25,
+    borderRadius: 8,
+    backgroundColor: "#E8EDF3",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  stepDotActive: {
+    backgroundColor: UI.primary,
+  },
+
+  stepDotDone: {
+    backgroundColor: UI.success,
+  },
+
+  stepDotText: {
+    color: UI.muted,
+    fontSize: 11,
+    fontWeight: "900",
+  },
+
+  stepDotTextActive: {
     color: "#FFFFFF",
   },
 
-  stepName: {
+  stepTitle: {
     color: UI.text,
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: "900",
   },
 
-  stepNameActive: {
-    color: UI.blue,
-  },
-
-  stepNameDone: {
-    color: UI.green,
+  stepTitleActive: {
+    color: UI.primary,
   },
 
   stepShort: {
     color: UI.muted,
-    fontSize: 10,
-    fontWeight: "800",
+    fontSize: 9,
     marginTop: 1,
   },
 
-  activeStepHeader: {
-    marginTop: 16,
-    marginBottom: 8,
-  },
-
-  activeStepSmall: {
-    color: UI.blue2,
-    fontSize: 11,
-    fontWeight: "900",
-    textTransform: "uppercase",
-    letterSpacing: 0.8,
-  },
-
-  activeStepTitle: {
-    color: UI.text,
-    fontSize: 21,
-    fontWeight: "900",
-    marginTop: 2,
-  },
-
-  sectionBox: {
+  section: {
+    marginTop: 12,
     backgroundColor: UI.card,
     borderWidth: 1,
     borderColor: UI.border,
-    borderRadius: 24,
-    padding: 15,
-    marginTop: 10,
-    ...elev(0.35),
+    borderRadius: 18,
+    padding: 14,
   },
 
-  sectionTop: {
+  sectionHeader: {
     flexDirection: "row",
-    gap: 10,
     alignItems: "center",
+    gap: 10,
     marginBottom: 14,
   },
 
   sectionIcon: {
-    width: 36,
-    height: 36,
-    borderRadius: 13,
-    backgroundColor: UI.blueSoft,
+    width: 34,
+    height: 34,
+    borderRadius: 11,
     alignItems: "center",
     justifyContent: "center",
+    backgroundColor: UI.primarySoft,
   },
 
   sectionTitle: {
     color: UI.text,
-    fontSize: 17,
+    fontSize: 16,
     fontWeight: "900",
   },
 
   sectionSubtitle: {
     color: UI.muted,
-    fontSize: 12,
-    fontWeight: "700",
-    lineHeight: 17,
-    marginTop: 3,
+    fontSize: 11,
+    lineHeight: 16,
+    marginTop: 2,
   },
 
-  infoGrid: {
+  summaryGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
-    gap: 10,
+    gap: 8,
   },
 
-  infoItem: {
+  summaryItem: {
     flexGrow: 1,
     flexBasis: "46%",
-    minWidth: 150,
-    backgroundColor: UI.cardSoft,
-    borderRadius: 16,
-    padding: 12,
+    minWidth: 135,
     borderWidth: 1,
     borderColor: UI.border,
+    backgroundColor: UI.cardSoft,
+    borderRadius: 12,
+    paddingHorizontal: 11,
+    paddingVertical: 10,
   },
 
-  infoLabel: {
+  summaryLabel: {
     color: UI.muted,
-    fontSize: 10,
-    fontWeight: "900",
+    fontSize: 9,
+    fontWeight: "800",
     textTransform: "uppercase",
-    letterSpacing: 0.5,
-    marginBottom: 5,
+    letterSpacing: 0.4,
   },
 
-  infoValue: {
+  summaryValue: {
     color: UI.text,
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: "900",
-    lineHeight: 18,
+    marginTop: 4,
   },
 
   inputBlock: {
-    marginBottom: 12,
+    marginBottom: 11,
   },
 
   label: {
     color: UI.muted,
-    fontSize: 11,
-    fontWeight: "900",
+    fontSize: 10,
+    fontWeight: "800",
     textTransform: "uppercase",
-    letterSpacing: 0.4,
+    letterSpacing: 0.35,
     marginBottom: 6,
   },
 
   inputWrap: {
+    minHeight: 44,
     borderWidth: 1,
     borderColor: UI.borderDark,
-    borderRadius: 15,
-    paddingHorizontal: 12,
+    borderRadius: 12,
     backgroundColor: "#FFFFFF",
+    paddingHorizontal: 11,
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
-    minHeight: 45,
   },
 
   inputWrapMultiline: {
     alignItems: "flex-start",
   },
 
+  readonlyWrap: {
+    backgroundColor: "#F1F4F7",
+  },
+
   input: {
     flex: 1,
-    paddingVertical: Platform.OS === "ios" ? 12 : 9,
-    fontSize: 14,
-    fontWeight: "800",
     color: UI.text,
+    fontSize: 13,
+    fontWeight: "700",
+    paddingVertical: Platform.OS === "ios" ? 12 : 9,
   },
 
   textArea: {
-    height: 112,
+    minHeight: 92,
     textAlignVertical: "top",
+    paddingTop: 11,
   },
 
-  readonly: {
-    backgroundColor: "#EEF3F8",
-  },
-
-  pickerBox: {
+  dateButton: {
+    minHeight: 44,
     borderWidth: 1,
     borderColor: UI.borderDark,
-    borderRadius: 15,
-    paddingVertical: 13,
-    paddingHorizontal: 12,
+    borderRadius: 12,
     backgroundColor: "#FFFFFF",
+    paddingHorizontal: 11,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    minHeight: 45,
   },
 
-  pickerLeft: {
+  dateButtonLeft: {
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
   },
 
-  pickerText: {
-    fontSize: 14,
-    fontWeight: "900",
+  dateButtonText: {
     color: UI.text,
+    fontSize: 13,
+    fontWeight: "800",
+  },
+
+  placeholderText: {
+    color: UI.muted2,
   },
 
   fieldRow: {
     flexDirection: "row",
     flexWrap: "wrap",
-    gap: 11,
+    gap: 10,
   },
 
   field: {
     flexGrow: 1,
     flexBasis: 0,
-    minWidth: 170,
+    minWidth: 150,
   },
 
   fieldSmall: {
-    minWidth: 110,
+    minWidth: 105,
   },
 
   fieldWide: {
-    minWidth: 230,
+    minWidth: 220,
   },
 
-  chipsWrap: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 9,
-  },
-
-  chip: {
-    backgroundColor: "#FFFFFF",
+  materialSummary: {
+    backgroundColor: UI.primarySoft,
     borderWidth: 1,
-    borderColor: UI.borderDark,
-    borderRadius: 999,
-    paddingVertical: 9,
-    paddingHorizontal: 13,
-  },
-
-  chipBlue: {
-    backgroundColor: UI.blue,
-    borderColor: UI.blue,
-  },
-
-  chipGreen: {
-    backgroundColor: UI.green,
-    borderColor: UI.green,
-  },
-
-  chipYellow: {
-    backgroundColor: UI.yellow,
-    borderColor: UI.yellow,
-  },
-
-  chipRed: {
-    backgroundColor: UI.red,
-    borderColor: UI.red,
-  },
-
-  chipText: {
-    color: UI.text,
-    fontSize: 12,
-    fontWeight: "900",
-  },
-
-  chipTextActive: {
-    color: "#FFFFFF",
-  },
-
-  rowCard: {
-    borderWidth: 1,
-    borderColor: UI.border,
-    borderRadius: 20,
-    padding: 13,
+    borderColor: "#D0DDEA",
+    borderRadius: 13,
+    padding: 12,
     marginBottom: 12,
-    backgroundColor: UI.cardSoft,
-  },
-
-  rowHeader: {
     flexDirection: "row",
-    justifyContent: "space-between",
     alignItems: "center",
-    marginBottom: 8,
+    justifyContent: "space-between",
   },
 
-  rowTitle: {
+  materialSummaryTitle: {
+    color: UI.primary,
+    fontSize: 13,
     fontWeight: "900",
-    color: UI.text,
-    fontSize: 14,
   },
 
-  rowSub: {
-    marginTop: 2,
+  materialSummaryText: {
     color: UI.muted,
-    fontWeight: "800",
-    fontSize: 11,
+    fontSize: 10,
+    marginTop: 2,
   },
 
-  removeTxt: {
-    color: UI.red,
-    fontWeight: "900",
-    fontSize: 12,
-  },
-
-  secondary: {
-    backgroundColor: UI.text,
-    padding: 14,
-    borderRadius: 15,
+  materialSummaryBadge: {
+    minWidth: 34,
+    height: 34,
+    borderRadius: 11,
+    backgroundColor: UI.primary,
     alignItems: "center",
     justifyContent: "center",
+    paddingHorizontal: 8,
+  },
+
+  materialSummaryBadgeText: {
+    color: "#FFFFFF",
+    fontSize: 13,
+    fontWeight: "900",
+  },
+
+  materialCard: {
+    borderWidth: 1,
+    borderColor: UI.border,
+    borderRadius: 14,
+    backgroundColor: UI.cardSoft,
+    padding: 12,
+    marginBottom: 10,
+  },
+
+  materialCardActive: {
+    borderColor: "#C9D8EA",
+    backgroundColor: "#FBFCFE",
+  },
+
+  materialHeader: {
     flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
+    marginBottom: 11,
+  },
+
+  materialNumber: {
+    width: 30,
+    height: 30,
+    borderRadius: 9,
+    backgroundColor: UI.primary,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  materialNumberText: {
+    color: "#FFFFFF",
+    fontSize: 12,
+    fontWeight: "900",
+  },
+
+  materialTitle: {
+    color: UI.text,
+    fontSize: 13,
+    fontWeight: "900",
+  },
+
+  materialSubtitle: {
+    color: UI.muted,
+    fontSize: 10,
+    marginTop: 1,
+  },
+
+  removeButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 7,
+    borderRadius: 9,
+    backgroundColor: UI.dangerSoft,
+  },
+
+  removeButtonText: {
+    color: UI.danger,
+    fontSize: 10,
+    fontWeight: "900",
+  },
+
+  addButton: {
+    minHeight: 45,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#C4D4E7",
+    backgroundColor: UI.primarySoft,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
     gap: 7,
   },
 
-  secondaryText: {
-    color: "#fff",
+  addButtonText: {
+    color: UI.primary,
+    fontSize: 13,
     fontWeight: "900",
-    fontSize: 14,
   },
 
-  primaryDark: {
-    backgroundColor: UI.text,
-    padding: 15,
-    borderRadius: 16,
-    alignItems: "center",
-    justifyContent: "center",
-    flexDirection: "row",
+  choiceList: {
     gap: 8,
   },
 
-  primaryDarkText: {
-    color: "#FFFFFF",
+  choice: {
+    minHeight: 47,
+    borderWidth: 1,
+    borderColor: UI.border,
+    borderRadius: 12,
+    backgroundColor: UI.cardSoft,
+    paddingHorizontal: 11,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
+  },
+
+  choiceActive: {
+    backgroundColor: UI.primarySoft,
+    borderColor: "#BFD0E5",
+  },
+
+  choiceMark: {
+    width: 21,
+    height: 21,
+    borderRadius: 7,
+    borderWidth: 1,
+    borderColor: UI.borderDark,
+    backgroundColor: "#FFFFFF",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  choiceMarkActive: {
+    borderColor: UI.primary,
+    backgroundColor: UI.primary,
+  },
+
+  choiceText: {
+    color: UI.text,
+    fontSize: 12,
+    fontWeight: "800",
+  },
+
+  choiceTextActive: {
+    color: UI.primary,
+  },
+
+  readyCard: {
+    marginTop: 12,
+    backgroundColor: UI.card,
+    borderWidth: 1,
+    borderColor: UI.border,
+    borderRadius: 18,
+    padding: 13,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+
+  readyIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    backgroundColor: UI.primarySoft,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  readyTitle: {
+    color: UI.text,
+    fontSize: 13,
     fontWeight: "900",
-    fontSize: 14,
+  },
+
+  readyText: {
+    color: UI.muted,
+    fontSize: 10,
+    lineHeight: 15,
+    marginTop: 2,
+  },
+
+  readyButton: {
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#C7D6E8",
+    backgroundColor: UI.primarySoft,
+    paddingHorizontal: 9,
+    paddingVertical: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+  },
+
+  readyButtonText: {
+    color: UI.primary,
+    fontSize: 10,
+    fontWeight: "900",
   },
 
   navRow: {
     flexDirection: "row",
-    gap: 10,
-    marginTop: 16,
-    marginBottom: 4,
+    gap: 9,
+    marginTop: 14,
   },
 
-  navBtn: {
+  navButton: {
     flex: 1,
+    minHeight: 47,
+    borderRadius: 13,
+    borderWidth: 1,
+    borderColor: "#BFCFE1",
     backgroundColor: "#FFFFFF",
-    borderWidth: 1,
-    borderColor: UI.blue,
-    borderRadius: 16,
     alignItems: "center",
-    paddingVertical: 14,
+    justifyContent: "center",
+    flexDirection: "row",
+    gap: 5,
   },
 
-  navBtnPrimary: {
+  navButtonPrimary: {
     flex: 1,
-    backgroundColor: UI.blue,
-    borderWidth: 1,
-    borderColor: UI.blue,
-    borderRadius: 16,
+    minHeight: 47,
+    borderRadius: 13,
+    backgroundColor: UI.primary,
     alignItems: "center",
-    paddingVertical: 14,
+    justifyContent: "center",
+    flexDirection: "row",
+    gap: 5,
   },
 
-  navBtnDisabled: {
-    opacity: 0.45,
+  navButtonDisabled: {
+    opacity: 0.42,
   },
 
-  navBtnText: {
-    color: UI.blue,
-    fontSize: 14,
+  navButtonText: {
+    color: UI.primary,
+    fontSize: 13,
     fontWeight: "900",
   },
 
-  navBtnPrimaryText: {
+  navButtonTextDisabled: {
+    color: UI.muted2,
+  },
+
+  navButtonPrimaryText: {
     color: "#FFFFFF",
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: "900",
   },
 
-  navBtnTextDisabled: {
-    color: UI.muted,
+  navButtonPrimaryTextDisabled: {
+    color: UI.muted2,
   },
 
   bottomBar: {
@@ -1899,63 +1768,46 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
     flexDirection: "row",
-    gap: 8,
-    paddingHorizontal: 12,
-    paddingTop: 12,
-    paddingBottom: Platform.OS === "ios" ? 26 : 14,
-    backgroundColor: "rgba(238,243,248,0.97)",
+    gap: 9,
+    paddingHorizontal: 15,
+    paddingTop: 11,
+    paddingBottom: Platform.OS === "ios" ? 25 : 13,
+    backgroundColor: "rgba(244,246,248,0.98)",
     borderTopWidth: 1,
     borderTopColor: UI.border,
   },
 
-  draftBtn: {
-    flex: 0.9,
+  previewButton: {
+    flex: 1,
+    minHeight: 51,
     backgroundColor: "#FFFFFF",
     borderWidth: 1,
-    borderColor: UI.blue,
-    borderRadius: 17,
+    borderColor: "#B9CADE",
+    borderRadius: 14,
     alignItems: "center",
     justifyContent: "center",
-    minHeight: 52,
     flexDirection: "row",
     gap: 6,
   },
 
-  draftBtnText: {
-    color: UI.blue,
+  previewButtonText: {
+    color: UI.primary,
     fontSize: 13,
     fontWeight: "900",
   },
 
-  previewBtn: {
-    flex: 1.3,
-    backgroundColor: UI.blue,
-    borderRadius: 17,
+  shareButton: {
+    flex: 1,
+    minHeight: 51,
+    backgroundColor: UI.primary,
+    borderRadius: 14,
     alignItems: "center",
     justifyContent: "center",
-    minHeight: 52,
     flexDirection: "row",
     gap: 6,
   },
 
-  previewBtnText: {
-    color: "#FFFFFF",
-    fontSize: 13,
-    fontWeight: "900",
-  },
-
-  shareBtn: {
-    flex: 0.8,
-    backgroundColor: UI.text,
-    borderRadius: 17,
-    alignItems: "center",
-    justifyContent: "center",
-    minHeight: 52,
-    flexDirection: "row",
-    gap: 6,
-  },
-
-  shareBtnText: {
+  shareButtonText: {
     color: "#FFFFFF",
     fontSize: 13,
     fontWeight: "900",
@@ -1963,51 +1815,57 @@ const styles = StyleSheet.create({
 
   modalBackdrop: {
     flex: 1,
-    backgroundColor: "rgba(15,23,42,0.58)",
-    padding: 12,
+    backgroundColor: "rgba(17,24,39,0.58)",
+    padding: 11,
     justifyContent: "center",
   },
 
   modalCard: {
     flex: 1,
     backgroundColor: "#FFFFFF",
-    borderRadius: 24,
+    borderRadius: 20,
     overflow: "hidden",
   },
 
   modalHeader: {
-    backgroundColor: UI.blue,
-    padding: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: UI.border,
+    backgroundColor: "#FFFFFF",
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
+    gap: 10,
   },
 
   modalKicker: {
-    color: "#BFDBFE",
-    fontSize: 11,
-    fontWeight: "900",
+    color: UI.muted,
+    fontSize: 9,
+    fontWeight: "800",
     textTransform: "uppercase",
-    letterSpacing: 0.8,
+    letterSpacing: 0.6,
   },
 
   modalTitle: {
-    color: "#FFFFFF",
-    fontSize: 17,
+    color: UI.text,
+    fontSize: 16,
     fontWeight: "900",
-    marginTop: 1,
+    marginTop: 2,
   },
 
-  modalCloseBtn: {
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    borderRadius: 999,
-    backgroundColor: "rgba(255,255,255,0.25)",
+  modalClose: {
+    width: 36,
+    height: 36,
+    borderRadius: 11,
+    backgroundColor: UI.cardSoft,
+    alignItems: "center",
+    justifyContent: "center",
   },
 
   webWrap: {
     flex: 1,
-    padding: 10,
+    backgroundColor: "#F2F4F7",
+    padding: 8,
   },
 
   webview: {
@@ -2022,47 +1880,52 @@ const styles = StyleSheet.create({
   },
 
   loadingText: {
-    marginTop: 10,
     color: UI.muted,
+    fontSize: 12,
     fontWeight: "800",
+    marginTop: 9,
   },
 
   modalFooter: {
-    padding: 12,
+    padding: 11,
     borderTopWidth: 1,
     borderTopColor: UI.border,
+    backgroundColor: "#FFFFFF",
     flexDirection: "row",
-    justifyContent: "flex-end",
-    gap: 10,
+    gap: 8,
   },
 
-  footerLight: {
+  modalSecondary: {
     flex: 1,
-    backgroundColor: UI.cardSoft,
+    minHeight: 45,
+    borderRadius: 12,
     borderWidth: 1,
-    borderColor: UI.border,
-    paddingVertical: 13,
-    borderRadius: 15,
+    borderColor: UI.borderDark,
+    backgroundColor: UI.cardSoft,
     alignItems: "center",
+    justifyContent: "center",
   },
 
-  footerLightText: {
-    fontWeight: "900",
+  modalSecondaryText: {
     color: UI.text,
-    fontSize: 13,
-  },
-
-  footerPrimary: {
-    flex: 1,
-    backgroundColor: UI.blue,
-    paddingVertical: 13,
-    borderRadius: 15,
-    alignItems: "center",
-  },
-
-  footerPrimaryText: {
+    fontSize: 12,
     fontWeight: "900",
+  },
+
+  modalPrimary: {
+    flex: 1,
+    minHeight: 45,
+    borderRadius: 12,
+    backgroundColor: UI.primary,
+    alignItems: "center",
+    justifyContent: "center",
+    flexDirection: "row",
+    gap: 6,
+  },
+
+  modalPrimaryText: {
     color: "#FFFFFF",
-    fontSize: 13,
+    fontSize: 12,
+    fontWeight: "900",
   },
 });

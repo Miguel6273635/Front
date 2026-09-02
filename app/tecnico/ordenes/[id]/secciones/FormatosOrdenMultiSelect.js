@@ -61,6 +61,14 @@ const FORMATOS_ORDEN = [
     icon: "checkmark-done-outline",
   },
   {
+    id: "reporte-averia-mantenimiento",
+    nombre: "Avería en mantenimiento",
+    descripcion: "Reporte de avería en mantenimiento",
+    ruta: "/tecnico/ordenes/[orderid]/reporte-averia-mantenimiento",
+    grupo: "Reportes",
+    icon: "newspaper-outline",
+  },
+  {
     id: "autorizacion-gastos-error-humano",
     nombre: "Formato de autorización de gastos",
     descripcion:
@@ -76,6 +84,30 @@ const FORMATOS_ORDEN = [
     ruta: "/tecnico/ordenes/[orderid]/requisicion-materiales",
     grupo: "Administrativos",
     icon: "cube-outline",
+  },
+  {
+    id: "solicitud-prestamo-refacciones",
+    nombre: "Préstamo de refacciones",
+    descripcion: "Solicitud de préstamo de refacciones",
+    ruta: "/tecnico/ordenes/[orderid]/solicitud-prestamo-refacciones",
+    grupo: "Administrativos",
+    icon: "settings-outline",
+  },
+  {
+    id: "solicitud-cotizacion",
+    nombre: "Solicitud de cotización",
+    descripcion: "Solicitud de cotización",
+    ruta: "/tecnico/ordenes/[orderid]/solicitud-cotizacion",
+    grupo: "Administrativos",
+    icon: "receipt-outline",
+  },
+  {
+    id: "inspeccion-anual-mantenimiento",
+    nombre: "Inspección anual de mantenimiento",
+    descripcion: "Inspección anual",
+    ruta: "/tecnico/ordenes/[orderid]/inspeccion-anual-mantenimiento",
+    grupo: "Administrativos",
+    icon: "eye-outline",
   },
 ];
 

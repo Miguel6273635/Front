@@ -3658,7 +3658,7 @@ export default function DetalleOrden() {
           />
         }
       />
-
+{/*
       {!isOpsLocked && (
         <TouchableOpacity
           style={styles.fab}
@@ -3669,6 +3669,7 @@ export default function DetalleOrden() {
           <Text style={styles.fabLabel}>Avería</Text>
         </TouchableOpacity>
       )}
+*/}
 
       <ModalesDetalleOrden
         styles={styles}

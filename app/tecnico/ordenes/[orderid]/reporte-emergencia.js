@@ -1,6 +1,6 @@
 // app/tecnico/ordenes/[orderid]/reporte-emergencia.js
-// Reporte de emergencia — diseño moderno tipo wizard
-// Sin validaciones bloqueantes para poder visualizar PDF aunque falten datos.
+// Reporte de emergencia — diseño simple y técnico, consistente con los formularios de mantenimiento.
+// Mantiene borrador local, selectores de fecha/hora y vista previa del PDF sin validaciones bloqueantes.
 
 import React, {
   useEffect,
@@ -34,23 +34,24 @@ import { useAuth } from "../../../../src/context/AuthContext";
 import { buildReporteEmergenciaHtml } from "../../../../src/services/templates/reporte_emergencia/buildReporteEmergenciaHtml";
 
 const UI = {
-  bg: "#EEF3F8",
+  bg: "#F4F6F8",
   card: "#FFFFFF",
   cardSoft: "#F8FAFC",
-  border: "#DDE6F0",
-  borderDark: "#CBD5E1",
-  text: "#0F172A",
-  muted: "#64748B",
-  muted2: "#94A3B8",
-  blue: "#0B2E6D",
-  blue2: "#2563EB",
-  blueSoft: "#EAF1FF",
-  green: "#16A34A",
-  greenSoft: "#DCFCE7",
-  yellow: "#F59E0B",
-  yellowSoft: "#FEF3C7",
-  red: "#DC2626",
-  redSoft: "#FEE2E2",
+  border: "#E4E7EC",
+  borderDark: "#D0D5DD",
+  text: "#172033",
+  muted: "#667085",
+  muted2: "#98A2B3",
+  blue: "#123A72",
+  blue2: "#123A72",
+  blueSoft: "#EFF4FF",
+  green: "#15803D",
+  greenSoft: "#F0FDF4",
+  yellow: "#B45309",
+  yellowSoft: "#FFFBEB",
+  red: "#B42318",
+  redSoft: "#FEF3F2",
+  dark: "#172033",
 };
 
 const STEPS = [
@@ -215,18 +216,12 @@ function PickerButton({
   );
 }
 
-function SectionBox({ title, subtitle, icon, children }) {
+function SectionBox({ title, subtitle, children }) {
   return (
     <View style={styles.sectionBox}>
       <View style={styles.sectionTop}>
-        <View style={styles.sectionIcon}>
-          <Ionicons name={icon || "document-text-outline"} size={18} color={UI.blue} />
-        </View>
-
-        <View style={{ flex: 1 }}>
-          <Text style={styles.sectionTitle}>{title}</Text>
-          {!!subtitle && <Text style={styles.sectionSubtitle}>{subtitle}</Text>}
-        </View>
+        <Text style={styles.sectionTitle}>{title}</Text>
+        {!!subtitle && <Text style={styles.sectionSubtitle}>{subtitle}</Text>}
       </View>
 
       {children}
@@ -668,14 +663,36 @@ export default function ReporteEmergenciaForm() {
   const goNext = () => setActiveStep((s) => Math.min(s + 1, STEPS.length - 1));
   const goBack = () => setActiveStep((s) => Math.max(s - 1, 0));
 
-  const renderProgress = () => (
-    <View style={styles.progressCard}>
-      <Text style={styles.progressTitle}>Avance del reporte</Text>
+  const renderStepIndicator = () => (
+    <View style={styles.stepperCard}>
+      <View style={styles.stepperTopRow}>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.stepperEyebrow}>
+            Paso {activeStep + 1} de {STEPS.length}
+          </Text>
+          <Text style={styles.stepperCurrentTitle}>
+            {STEPS[activeStep].title}
+          </Text>
+        </View>
+
+        <Text style={styles.stepperPercent}>
+          {Math.round(((activeStep + 1) / STEPS.length) * 100)}%
+        </Text>
+      </View>
+
+      <View style={styles.progressTrack}>
+        <View
+          style={[
+            styles.progressFill,
+            { width: `${((activeStep + 1) / STEPS.length) * 100}%` },
+          ]}
+        />
+      </View>
 
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.stepsScroll}
+        contentContainerStyle={styles.stepLinks}
       >
         {STEPS.map((step, index) => {
           const active = index === activeStep;
@@ -684,43 +701,40 @@ export default function ReporteEmergenciaForm() {
           return (
             <TouchableOpacity
               key={step.key}
-              activeOpacity={0.86}
+              activeOpacity={0.82}
               onPress={() => setActiveStep(index)}
               style={[
-                styles.stepItem,
-                active && styles.stepItemActive,
-                done && styles.stepItemDone,
+                styles.stepLink,
+                active && styles.stepLinkActive,
+                done && styles.stepLinkDone,
               ]}
             >
               <View
                 style={[
-                  styles.stepNumber,
-                  active && styles.stepNumberActive,
-                  done && styles.stepNumberDone,
+                  styles.stepDot,
+                  active && styles.stepDotActive,
+                  done && styles.stepDotDone,
                 ]}
               >
                 <Text
                   style={[
-                    styles.stepNumberText,
-                    (active || done) && styles.stepNumberTextActive,
+                    styles.stepDotText,
+                    (active || done) && styles.stepDotTextActive,
                   ]}
                 >
                   {index + 1}
                 </Text>
               </View>
 
-              <View>
-                <Text
-                  style={[
-                    styles.stepName,
-                    active && styles.stepNameActive,
-                    done && styles.stepNameDone,
-                  ]}
-                >
-                  {step.title}
-                </Text>
-                <Text style={styles.stepShort}>{step.short}</Text>
-              </View>
+              <Text
+                style={[
+                  styles.stepLinkText,
+                  active && styles.stepLinkTextActive,
+                  done && styles.stepLinkTextDone,
+                ]}
+              >
+                {step.short}
+              </Text>
             </TouchableOpacity>
           );
         })}
@@ -904,7 +918,7 @@ export default function ReporteEmergenciaForm() {
         })}
 
         <TouchableOpacity style={styles.secondary} onPress={addMecanico}>
-          <Ionicons name="add-circle-outline" size={18} color="#fff" />
+          <Ionicons name="add-circle-outline" size={18} color={UI.blue} />
           <Text style={styles.secondaryText}>Agregar mecánico</Text>
         </TouchableOpacity>
       </SectionBox>
@@ -1066,7 +1080,7 @@ export default function ReporteEmergenciaForm() {
       ))}
 
       <TouchableOpacity style={styles.secondary} onPress={addRef}>
-        <Ionicons name="add-circle-outline" size={18} color="#fff" />
+        <Ionicons name="add-circle-outline" size={18} color={UI.blue} />
         <Text style={styles.secondaryText}>Agregar refacción</Text>
       </TouchableOpacity>
     </SectionBox>
@@ -1140,41 +1154,25 @@ export default function ReporteEmergenciaForm() {
         keyboardShouldPersistTaps="handled"
         contentContainerStyle={styles.content}
       >
-        <View style={styles.hero}>
-          <View style={styles.heroTop}>
-            <View style={styles.heroIcon}>
-              <Ionicons name="alert-circle-outline" size={25} color="#fff" />
-            </View>
-
-            <View style={{ flex: 1 }}>
-              <Text style={styles.heroKicker}>Formato técnico</Text>
-              <Text style={styles.heroTitle}>Reporte de emergencia</Text>
-              <Text style={styles.heroSub}>
-                Captura manual del servicio. Puedes visualizar el PDF aunque
-                todavía falten datos.
-              </Text>
-            </View>
-
-            <View style={styles.heroBadge}>
-              <Text style={styles.heroBadgeText}>PDF libre</Text>
-            </View>
+        <View style={styles.introCard}>
+          <View style={styles.introTextWrap}>
+            <Text style={styles.introTitle}>Reporte de emergencia</Text>
+            <Text style={styles.introText}>
+              Registra los datos del servicio, horarios, diagnóstico y refacciones. Puedes revisar el PDF en cualquier momento.
+            </Text>
           </View>
 
-          <View style={styles.statsRow}>
-            <StatBox label="Campos" value={filledCount} />
-            <StatBox label="Refacciones" value={refCount} tone="yellow" />
-            <StatBox label="Paso" value={`${activeStep + 1}/${STEPS.length}`} tone="green" />
-          </View>
+          <TouchableOpacity
+            style={styles.introPreviewButton}
+            onPress={generarPreviewPdf}
+            disabled={generatingPdf}
+            activeOpacity={0.82}
+          >
+            <Text style={styles.introPreviewButtonText}>Ver PDF</Text>
+          </TouchableOpacity>
         </View>
 
-        {renderProgress()}
-
-        <View style={styles.activeStepHeader}>
-          <Text style={styles.activeStepSmall}>
-            Paso {activeStep + 1} de {STEPS.length}
-          </Text>
-          <Text style={styles.activeStepTitle}>{STEPS[activeStep].title}</Text>
-        </View>
+        {renderStepIndicator()}
 
         {renderStepContent()}
 
@@ -1236,7 +1234,7 @@ export default function ReporteEmergenciaForm() {
             <ActivityIndicator color="#fff" />
           ) : (
             <>
-              <Ionicons name="eye-outline" size={18} color="#fff" />
+              <Ionicons name="eye-outline" size={18} color={UI.blue} />
               <Text style={styles.previewBtnText}>Vista previa</Text>
             </>
           )}
@@ -1272,7 +1270,7 @@ export default function ReporteEmergenciaForm() {
                 onPress={() => setShowPreview(false)}
                 style={styles.modalCloseBtn}
               >
-                <Ionicons name="close" size={20} color="#fff" />
+                <Ionicons name="close" size={20} color={UI.text} />
               </TouchableOpacity>
             </View>
 
@@ -1310,17 +1308,6 @@ export default function ReporteEmergenciaForm() {
   );
 }
 
-const elev = (multiplier = 1) =>
-  Platform.select({
-    ios: {
-      shadowColor: "#000",
-      shadowOpacity: 0.08 * multiplier,
-      shadowRadius: 8 * multiplier,
-      shadowOffset: { width: 0, height: 3 * multiplier },
-    },
-    android: { elevation: 2 * multiplier },
-    default: {},
-  });
 
 const styles = StyleSheet.create({
   container: {
@@ -1328,250 +1315,211 @@ const styles = StyleSheet.create({
     backgroundColor: UI.bg,
   },
 
+  loadingScreen: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: UI.bg,
+    padding: 24,
+  },
+
+  loadingBox: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  loadingText: {
+    marginTop: 10,
+    color: UI.muted,
+    fontSize: 13,
+    fontWeight: "600",
+  },
+
   content: {
-    padding: 16,
-    paddingBottom: 126,
+    padding: 14,
+    paddingBottom: 122,
   },
 
-  hero: {
-    backgroundColor: UI.blue,
-    borderRadius: 28,
-    padding: 18,
-    ...elev(0.9),
-  },
-
-  heroTop: {
+  introCard: {
+    backgroundColor: UI.card,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: UI.border,
+    padding: 15,
     flexDirection: "row",
-    alignItems: "flex-start",
+    alignItems: "center",
     gap: 12,
   },
 
-  heroIcon: {
-    width: 46,
-    height: 46,
-    borderRadius: 16,
-    backgroundColor: "rgba(255,255,255,0.16)",
+  introTextWrap: {
+    flex: 1,
+  },
+
+  introTitle: {
+    color: UI.text,
+    fontSize: 17,
+    fontWeight: "800",
+  },
+
+  introText: {
+    color: UI.muted,
+    fontSize: 12.5,
+    lineHeight: 18,
+    marginTop: 4,
+    fontWeight: "500",
+  },
+
+  introPreviewButton: {
+    backgroundColor: UI.blueSoft,
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    minHeight: 40,
     alignItems: "center",
     justifyContent: "center",
   },
 
-  heroKicker: {
-    color: "#BFDBFE",
-    fontSize: 11,
-    fontWeight: "900",
-    textTransform: "uppercase",
-    letterSpacing: 0.9,
-    marginBottom: 4,
+  introPreviewButtonText: {
+    color: UI.blue,
+    fontSize: 12,
+    fontWeight: "800",
   },
 
-  heroTitle: {
-    color: "#FFFFFF",
-    fontSize: 24,
-    fontWeight: "900",
-    lineHeight: 30,
-  },
-
-  heroSub: {
-    color: "#DBEAFE",
-    fontSize: 13,
-    fontWeight: "700",
-    lineHeight: 19,
-    marginTop: 7,
-  },
-
-  heroBadge: {
-    backgroundColor: "rgba(255,255,255,0.15)",
+  stepperCard: {
+    backgroundColor: UI.card,
+    borderRadius: 16,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.22)",
-    borderRadius: 999,
-    paddingHorizontal: 11,
-    paddingVertical: 8,
+    borderColor: UI.border,
+    padding: 15,
+    marginTop: 12,
   },
 
-  heroBadgeText: {
-    color: "#FFFFFF",
-    fontSize: 11,
-    fontWeight: "900",
-  },
-
-  statsRow: {
+  stepperTopRow: {
     flexDirection: "row",
-    flexWrap: "wrap",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
     gap: 10,
-    marginTop: 16,
   },
 
-  statBox: {
-    flexGrow: 1,
-    minWidth: 82,
-    borderRadius: 18,
-    paddingVertical: 11,
-    paddingHorizontal: 10,
-    alignItems: "center",
-  },
-
-  statBlue: {
-    backgroundColor: "rgba(255,255,255,0.13)",
-  },
-
-  statGreen: {
-    backgroundColor: "rgba(22,163,74,0.28)",
-  },
-
-  statYellow: {
-    backgroundColor: "rgba(245,158,11,0.28)",
-  },
-
-  statRed: {
-    backgroundColor: "rgba(220,38,38,0.26)",
-  },
-
-  statValue: {
-    color: "#FFFFFF",
-    fontSize: 19,
-    fontWeight: "900",
-  },
-
-  statLabel: {
-    color: "#DBEAFE",
+  stepperEyebrow: {
+    color: UI.muted,
     fontSize: 11,
+    fontWeight: "700",
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },
+
+  stepperCurrentTitle: {
+    color: UI.text,
+    fontSize: 18,
     fontWeight: "800",
     marginTop: 2,
   },
 
-  progressCard: {
-    backgroundColor: UI.card,
-    borderWidth: 1,
-    borderColor: UI.border,
-    borderRadius: 22,
-    padding: 14,
-    marginTop: 14,
+  stepperPercent: {
+    color: UI.blue,
+    fontSize: 13,
+    fontWeight: "800",
+    marginTop: 2,
   },
 
-  progressTitle: {
-    color: UI.text,
-    fontSize: 14,
-    fontWeight: "900",
-    marginBottom: 10,
+  progressTrack: {
+    height: 5,
+    backgroundColor: "#EAECF0",
+    borderRadius: 999,
+    overflow: "hidden",
+    marginTop: 13,
   },
 
-  stepsScroll: {
-    gap: 10,
-    paddingRight: 10,
+  progressFill: {
+    height: "100%",
+    backgroundColor: UI.blue,
+    borderRadius: 999,
   },
 
-  stepItem: {
+  stepLinks: {
+    gap: 8,
+    paddingTop: 14,
+    paddingRight: 8,
+  },
+
+  stepLink: {
+    minWidth: 84,
     flexDirection: "row",
     alignItems: "center",
-    gap: 9,
-    minWidth: 130,
+    gap: 7,
+    paddingHorizontal: 9,
+    paddingVertical: 7,
+    borderRadius: 10,
     backgroundColor: UI.cardSoft,
-    borderWidth: 1,
-    borderColor: UI.border,
-    borderRadius: 18,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
   },
 
-  stepItemActive: {
+  stepLinkActive: {
     backgroundColor: UI.blueSoft,
-    borderColor: "#93C5FD",
   },
 
-  stepItemDone: {
-    backgroundColor: UI.greenSoft,
-    borderColor: "#86EFAC",
+  stepLinkDone: {
+    backgroundColor: "#F6F8FA",
   },
 
-  stepNumber: {
-    width: 30,
-    height: 30,
-    borderRadius: 11,
-    backgroundColor: "#E2E8F0",
+  stepDot: {
+    width: 23,
+    height: 23,
+    borderRadius: 7,
+    backgroundColor: "#EAECF0",
     alignItems: "center",
     justifyContent: "center",
   },
 
-  stepNumberActive: {
+  stepDotActive: {
     backgroundColor: UI.blue,
   },
 
-  stepNumberDone: {
-    backgroundColor: UI.green,
+  stepDotDone: {
+    backgroundColor: "#667085",
   },
 
-  stepNumberText: {
-    color: UI.muted,
-    fontSize: 12,
-    fontWeight: "900",
-  },
-
-  stepNumberTextActive: {
-    color: "#FFFFFF",
-  },
-
-  stepName: {
-    color: UI.text,
-    fontSize: 12,
-    fontWeight: "900",
-  },
-
-  stepNameActive: {
-    color: UI.blue,
-  },
-
-  stepNameDone: {
-    color: UI.green,
-  },
-
-  stepShort: {
+  stepDotText: {
     color: UI.muted,
     fontSize: 10,
     fontWeight: "800",
-    marginTop: 1,
   },
 
-  activeStepHeader: {
-    marginTop: 16,
-    marginBottom: 8,
+  stepDotTextActive: {
+    color: "#FFFFFF",
   },
 
-  activeStepSmall: {
-    color: UI.blue2,
+  stepLinkText: {
+    color: UI.muted,
     fontSize: 11,
-    fontWeight: "900",
-    textTransform: "uppercase",
-    letterSpacing: 0.8,
+    fontWeight: "700",
   },
 
-  activeStepTitle: {
+  stepLinkTextActive: {
+    color: UI.blue,
+  },
+
+  stepLinkTextDone: {
     color: UI.text,
-    fontSize: 21,
-    fontWeight: "900",
-    marginTop: 2,
   },
 
   sectionBox: {
     backgroundColor: UI.card,
     borderWidth: 1,
     borderColor: UI.border,
-    borderRadius: 24,
+    borderRadius: 16,
     padding: 15,
-    marginTop: 10,
-    ...elev(0.35),
+    marginTop: 12,
   },
 
   sectionTop: {
-    flexDirection: "row",
-    gap: 10,
-    alignItems: "center",
     marginBottom: 14,
   },
 
   sectionIcon: {
-    width: 36,
-    height: 36,
-    borderRadius: 13,
+    width: 32,
+    height: 32,
+    borderRadius: 9,
     backgroundColor: UI.blueSoft,
     alignItems: "center",
     justifyContent: "center",
@@ -1579,14 +1527,14 @@ const styles = StyleSheet.create({
 
   sectionTitle: {
     color: UI.text,
-    fontSize: 17,
-    fontWeight: "900",
+    fontSize: 16,
+    fontWeight: "800",
   },
 
   sectionSubtitle: {
     color: UI.muted,
     fontSize: 12,
-    fontWeight: "700",
+    fontWeight: "500",
     lineHeight: 17,
     marginTop: 3,
   },
@@ -1594,33 +1542,37 @@ const styles = StyleSheet.create({
   infoGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
-    gap: 10,
+    borderWidth: 1,
+    borderColor: UI.border,
+    borderRadius: 12,
+    overflow: "hidden",
   },
 
   infoItem: {
     flexGrow: 1,
-    flexBasis: "46%",
-    minWidth: 150,
-    backgroundColor: UI.cardSoft,
-    borderRadius: 16,
-    padding: 12,
-    borderWidth: 1,
+    flexBasis: "48%",
+    minWidth: 145,
+    paddingVertical: 11,
+    paddingHorizontal: 12,
+    backgroundColor: "#FFFFFF",
+    borderBottomWidth: 1,
+    borderRightWidth: 1,
     borderColor: UI.border,
   },
 
   infoLabel: {
     color: UI.muted,
     fontSize: 10,
-    fontWeight: "900",
+    fontWeight: "700",
     textTransform: "uppercase",
-    letterSpacing: 0.5,
-    marginBottom: 5,
+    letterSpacing: 0.4,
+    marginBottom: 4,
   },
 
   infoValue: {
     color: UI.text,
-    fontSize: 14,
-    fontWeight: "900",
+    fontSize: 13.5,
+    fontWeight: "700",
     lineHeight: 18,
   },
 
@@ -1629,58 +1581,62 @@ const styles = StyleSheet.create({
   },
 
   label: {
-    color: UI.muted,
-    fontSize: 11,
-    fontWeight: "900",
-    textTransform: "uppercase",
-    letterSpacing: 0.4,
+    color: UI.text,
+    fontSize: 12,
+    fontWeight: "700",
     marginBottom: 6,
   },
 
   inputWrap: {
     borderWidth: 1,
     borderColor: UI.borderDark,
-    borderRadius: 15,
-    paddingHorizontal: 12,
+    borderRadius: 11,
+    paddingHorizontal: 11,
     backgroundColor: "#FFFFFF",
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
-    minHeight: 45,
+    minHeight: 44,
   },
 
   inputWrapMultiline: {
     alignItems: "flex-start",
   },
 
+  readonly: {
+    backgroundColor: UI.cardSoft,
+  },
+
+  readonlyWrap: {
+    backgroundColor: UI.cardSoft,
+  },
+
   input: {
     flex: 1,
-    paddingVertical: Platform.OS === "ios" ? 12 : 9,
+    paddingVertical: Platform.OS === "ios" ? 11 : 8,
     fontSize: 14,
-    fontWeight: "800",
+    fontWeight: "500",
     color: UI.text,
   },
 
   textArea: {
-    height: 112,
+    minHeight: 108,
+    height: 108,
+    paddingTop: 10,
     textAlignVertical: "top",
-  },
-
-  readonly: {
-    backgroundColor: "#EEF3F8",
   },
 
   pickerBox: {
     borderWidth: 1,
     borderColor: UI.borderDark,
-    borderRadius: 15,
-    paddingVertical: 13,
-    paddingHorizontal: 12,
+    borderRadius: 11,
+    paddingVertical: 12,
+    paddingHorizontal: 11,
     backgroundColor: "#FFFFFF",
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    minHeight: 45,
+    minHeight: 44,
   },
 
   pickerLeft: {
@@ -1691,81 +1647,107 @@ const styles = StyleSheet.create({
 
   pickerText: {
     fontSize: 14,
-    fontWeight: "900",
+    fontWeight: "600",
+    color: UI.text,
+  },
+
+  dateBtn: {
+    borderWidth: 1,
+    borderColor: UI.borderDark,
+    borderRadius: 11,
+    paddingVertical: 12,
+    paddingHorizontal: 11,
+    backgroundColor: "#FFFFFF",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    minHeight: 44,
+  },
+
+  dateLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+
+  dateBtnText: {
+    fontSize: 14,
+    fontWeight: "600",
     color: UI.text,
   },
 
   fieldRow: {
     flexDirection: "row",
     flexWrap: "wrap",
-    gap: 11,
+    gap: 10,
   },
 
   field: {
     flexGrow: 1,
     flexBasis: 0,
-    minWidth: 170,
+    minWidth: 165,
   },
 
   fieldSmall: {
-    minWidth: 110,
+    minWidth: 108,
   },
 
   fieldWide: {
-    minWidth: 230,
+    minWidth: 225,
   },
 
   chipsWrap: {
     flexDirection: "row",
     flexWrap: "wrap",
-    gap: 9,
+    gap: 8,
+    marginBottom: 4,
   },
 
   chip: {
     backgroundColor: "#FFFFFF",
     borderWidth: 1,
     borderColor: UI.borderDark,
-    borderRadius: 999,
-    paddingVertical: 9,
-    paddingHorizontal: 13,
+    borderRadius: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
   },
 
   chipBlue: {
-    backgroundColor: UI.blue,
-    borderColor: UI.blue,
+    backgroundColor: UI.blueSoft,
+    borderColor: "#B2C6E6",
   },
 
   chipGreen: {
-    backgroundColor: UI.green,
-    borderColor: UI.green,
+    backgroundColor: UI.greenSoft,
+    borderColor: "#ABEFC6",
   },
 
   chipYellow: {
-    backgroundColor: UI.yellow,
-    borderColor: UI.yellow,
+    backgroundColor: UI.yellowSoft,
+    borderColor: "#FEDF89",
   },
 
   chipRed: {
-    backgroundColor: UI.red,
-    borderColor: UI.red,
+    backgroundColor: UI.redSoft,
+    borderColor: "#FECDCA",
   },
 
   chipText: {
     color: UI.text,
     fontSize: 12,
-    fontWeight: "900",
+    fontWeight: "700",
   },
 
   chipTextActive: {
-    color: "#FFFFFF",
+    color: UI.text,
   },
 
   rowCard: {
     borderWidth: 1,
     borderColor: UI.border,
-    borderRadius: 20,
-    padding: 13,
-    marginBottom: 12,
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 10,
     backgroundColor: UI.cardSoft,
   },
 
@@ -1773,11 +1755,11 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    marginBottom: 8,
+    marginBottom: 10,
   },
 
   rowTitle: {
-    fontWeight: "900",
+    fontWeight: "800",
     color: UI.text,
     fontSize: 14,
   },
@@ -1785,20 +1767,22 @@ const styles = StyleSheet.create({
   rowSub: {
     marginTop: 2,
     color: UI.muted,
-    fontWeight: "800",
+    fontWeight: "500",
     fontSize: 11,
   },
 
   removeTxt: {
     color: UI.red,
-    fontWeight: "900",
+    fontWeight: "700",
     fontSize: 12,
   },
 
   secondary: {
-    backgroundColor: UI.text,
-    padding: 14,
-    borderRadius: 15,
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1,
+    borderColor: UI.borderDark,
+    padding: 12,
+    borderRadius: 11,
     alignItems: "center",
     justifyContent: "center",
     flexDirection: "row",
@@ -1806,15 +1790,15 @@ const styles = StyleSheet.create({
   },
 
   secondaryText: {
-    color: "#fff",
-    fontWeight: "900",
-    fontSize: 14,
+    color: UI.blue,
+    fontWeight: "800",
+    fontSize: 13,
   },
 
   primaryDark: {
-    backgroundColor: UI.text,
-    padding: 15,
-    borderRadius: 16,
+    backgroundColor: UI.blue,
+    padding: 13,
+    borderRadius: 11,
     alignItems: "center",
     justifyContent: "center",
     flexDirection: "row",
@@ -1823,14 +1807,14 @@ const styles = StyleSheet.create({
 
   primaryDarkText: {
     color: "#FFFFFF",
-    fontWeight: "900",
-    fontSize: 14,
+    fontWeight: "800",
+    fontSize: 13,
   },
 
   navRow: {
     flexDirection: "row",
     gap: 10,
-    marginTop: 16,
+    marginTop: 14,
     marginBottom: 4,
   },
 
@@ -1838,10 +1822,10 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: "#FFFFFF",
     borderWidth: 1,
-    borderColor: UI.blue,
-    borderRadius: 16,
+    borderColor: UI.borderDark,
+    borderRadius: 11,
     alignItems: "center",
-    paddingVertical: 14,
+    paddingVertical: 13,
   },
 
   navBtnPrimary: {
@@ -1849,25 +1833,25 @@ const styles = StyleSheet.create({
     backgroundColor: UI.blue,
     borderWidth: 1,
     borderColor: UI.blue,
-    borderRadius: 16,
+    borderRadius: 11,
     alignItems: "center",
-    paddingVertical: 14,
+    paddingVertical: 13,
   },
 
   navBtnDisabled: {
-    opacity: 0.45,
+    opacity: 0.42,
   },
 
   navBtnText: {
-    color: UI.blue,
-    fontSize: 14,
-    fontWeight: "900",
+    color: UI.text,
+    fontSize: 13,
+    fontWeight: "800",
   },
 
   navBtnPrimaryText: {
     color: "#FFFFFF",
-    fontSize: 14,
-    fontWeight: "900",
+    fontSize: 13,
+    fontWeight: "800",
   },
 
   navBtnTextDisabled: {
@@ -1881,10 +1865,10 @@ const styles = StyleSheet.create({
     bottom: 0,
     flexDirection: "row",
     gap: 8,
-    paddingHorizontal: 12,
-    paddingTop: 12,
-    paddingBottom: Platform.OS === "ios" ? 26 : 14,
-    backgroundColor: "rgba(238,243,248,0.97)",
+    paddingHorizontal: 14,
+    paddingTop: 10,
+    paddingBottom: Platform.OS === "ios" ? 24 : 12,
+    backgroundColor: "rgba(244,246,248,0.98)",
     borderTopWidth: 1,
     borderTopColor: UI.border,
   },
@@ -1893,58 +1877,60 @@ const styles = StyleSheet.create({
     flex: 0.9,
     backgroundColor: "#FFFFFF",
     borderWidth: 1,
-    borderColor: UI.blue,
-    borderRadius: 17,
+    borderColor: UI.borderDark,
+    borderRadius: 11,
     alignItems: "center",
     justifyContent: "center",
-    minHeight: 52,
+    minHeight: 48,
     flexDirection: "row",
     gap: 6,
   },
 
   draftBtnText: {
     color: UI.blue,
-    fontSize: 13,
-    fontWeight: "900",
+    fontSize: 12,
+    fontWeight: "800",
   },
 
   previewBtn: {
-    flex: 1.3,
-    backgroundColor: UI.blue,
-    borderRadius: 17,
+    flex: 1.25,
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1,
+    borderColor: UI.blue,
+    borderRadius: 11,
     alignItems: "center",
     justifyContent: "center",
-    minHeight: 52,
+    minHeight: 48,
     flexDirection: "row",
     gap: 6,
   },
 
   previewBtnText: {
-    color: "#FFFFFF",
-    fontSize: 13,
-    fontWeight: "900",
+    color: UI.blue,
+    fontSize: 12.5,
+    fontWeight: "800",
   },
 
   shareBtn: {
-    flex: 0.8,
-    backgroundColor: UI.text,
-    borderRadius: 17,
+    flex: 1,
+    backgroundColor: UI.blue,
+    borderRadius: 11,
     alignItems: "center",
     justifyContent: "center",
-    minHeight: 52,
+    minHeight: 48,
     flexDirection: "row",
     gap: 6,
   },
 
   shareBtnText: {
     color: "#FFFFFF",
-    fontSize: 13,
-    fontWeight: "900",
+    fontSize: 12.5,
+    fontWeight: "800",
   },
 
   modalBackdrop: {
     flex: 1,
-    backgroundColor: "rgba(15,23,42,0.58)",
+    backgroundColor: "rgba(23,32,51,0.56)",
     padding: 12,
     justifyContent: "center",
   },
@@ -1952,43 +1938,47 @@ const styles = StyleSheet.create({
   modalCard: {
     flex: 1,
     backgroundColor: "#FFFFFF",
-    borderRadius: 24,
+    borderRadius: 16,
     overflow: "hidden",
   },
 
   modalHeader: {
-    backgroundColor: UI.blue,
+    backgroundColor: "#FFFFFF",
     padding: 14,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
+    borderBottomWidth: 1,
+    borderBottomColor: UI.border,
   },
 
   modalKicker: {
-    color: "#BFDBFE",
-    fontSize: 11,
-    fontWeight: "900",
+    color: UI.muted,
+    fontSize: 10,
+    fontWeight: "700",
     textTransform: "uppercase",
-    letterSpacing: 0.8,
+    letterSpacing: 0.6,
   },
 
   modalTitle: {
-    color: "#FFFFFF",
+    color: UI.text,
     fontSize: 17,
-    fontWeight: "900",
+    fontWeight: "800",
     marginTop: 1,
   },
 
   modalCloseBtn: {
     paddingHorizontal: 10,
     paddingVertical: 8,
-    borderRadius: 999,
-    backgroundColor: "rgba(255,255,255,0.25)",
+    borderRadius: 9,
+    backgroundColor: UI.cardSoft,
+    borderWidth: 1,
+    borderColor: UI.border,
   },
 
   webWrap: {
     flex: 1,
-    padding: 10,
+    padding: 8,
   },
 
   webview: {
@@ -1996,39 +1986,26 @@ const styles = StyleSheet.create({
     backgroundColor: "#FFFFFF",
   },
 
-  loadingBox: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-
-  loadingText: {
-    marginTop: 10,
-    color: UI.muted,
-    fontWeight: "800",
-  },
-
   modalFooter: {
     padding: 12,
     borderTopWidth: 1,
     borderTopColor: UI.border,
     flexDirection: "row",
-    justifyContent: "flex-end",
     gap: 10,
   },
 
   footerLight: {
     flex: 1,
-    backgroundColor: UI.cardSoft,
+    backgroundColor: "#FFFFFF",
     borderWidth: 1,
-    borderColor: UI.border,
-    paddingVertical: 13,
-    borderRadius: 15,
+    borderColor: UI.borderDark,
+    paddingVertical: 12,
+    borderRadius: 10,
     alignItems: "center",
   },
 
   footerLightText: {
-    fontWeight: "900",
+    fontWeight: "800",
     color: UI.text,
     fontSize: 13,
   },
@@ -2036,14 +2013,50 @@ const styles = StyleSheet.create({
   footerPrimary: {
     flex: 1,
     backgroundColor: UI.blue,
-    paddingVertical: 13,
-    borderRadius: 15,
+    paddingVertical: 12,
+    borderRadius: 10,
     alignItems: "center",
   },
 
   footerPrimaryText: {
-    fontWeight: "900",
+    fontWeight: "800",
     color: "#FFFFFF",
     fontSize: 13,
   },
+
+  // Compatibilidad con componentes auxiliares que ya no se muestran en el encabezado.
+  hero: {},
+  heroTop: {},
+  heroIcon: {},
+  heroKicker: {},
+  heroTitle: {},
+  heroSub: {},
+  heroBadge: {},
+  heroBadgeText: {},
+  statsRow: {},
+  statBox: {},
+  statBlue: {},
+  statGreen: {},
+  statYellow: {},
+  statRed: {},
+  statValue: {},
+  statLabel: {},
+  progressCard: {},
+  progressTitle: {},
+  stepsScroll: {},
+  stepItem: {},
+  stepItemActive: {},
+  stepItemDone: {},
+  stepNumber: {},
+  stepNumberActive: {},
+  stepNumberDone: {},
+  stepNumberText: {},
+  stepNumberTextActive: {},
+  stepName: {},
+  stepNameActive: {},
+  stepNameDone: {},
+  stepShort: {},
+  activeStepHeader: {},
+  activeStepSmall: {},
+  activeStepTitle: {},
 });

@@ -1,8 +1,8 @@
 // app/tecnico/ordenes/[orderid]/mantto-cables.js
-// Formulario de mantenimiento de cables - diseño tipo wizard moderno
-// Sin validaciones bloqueantes para permitir vista previa PDF.
+// Formulario de mantenimiento de cables - diseño simple y técnico.
+// Mantiene la vista previa del PDF sin validaciones bloqueantes.
 
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import {
   View,
   Text,
@@ -28,30 +28,30 @@ import { useAuth } from "../../../../src/context/AuthContext";
 import { buildManttoCablesHtml } from "../../../../src/services/templates/mantto_cables/buildManttoCablesHtml";
 
 const THEME = {
-  bg: "#EEF3F8",
+  bg: "#F4F6F8",
   card: "#FFFFFF",
-  cardSoft: "#F8FAFC",
-  text: "#0F172A",
-  muted: "#64748B",
-  muted2: "#94A3B8",
-  border: "#DDE6F0",
-  blue: "#0B2E6D",
-  blue2: "#1D4ED8",
-  blueSoft: "#EAF1FF",
-  green: "#16A34A",
-  greenSoft: "#DCFCE7",
-  yellow: "#F59E0B",
-  yellowSoft: "#FEF3C7",
-  red: "#DC2626",
-  redSoft: "#FEE2E2",
+  soft: "#F8FAFC",
+  text: "#172033",
+  muted: "#667085",
+  muted2: "#98A2B3",
+  border: "#E4E7EC",
+  borderStrong: "#D0D5DD",
+  primary: "#123A72",
+  primarySoft: "#EFF4FF",
+  success: "#15803D",
+  successSoft: "#F0FDF4",
+  warning: "#B45309",
+  warningSoft: "#FFFBEB",
+  danger: "#B42318",
+  dangerSoft: "#FEF3F2",
 };
 
 const STEPS = [
-  { key: "general", title: "General", short: "Datos" },
-  { key: "diametros", title: "Diámetros", short: "Cables" },
-  { key: "rupturas", title: "Rupturas", short: "Alambres" },
-  { key: "hallazgos", title: "Hallazgos", short: "Revisión" },
-  { key: "resultado", title: "Resultado", short: "Final" },
+  { key: "general", title: "Datos generales", short: "General" },
+  { key: "diametros", title: "Diámetros", short: "Diámetros" },
+  { key: "rupturas", title: "Rupturas", short: "Rupturas" },
+  { key: "hallazgos", title: "Revisión", short: "Revisión" },
+  { key: "resultado", title: "Resultado", short: "Resultado" },
 ];
 
 function safeStr(v) {
@@ -175,71 +175,21 @@ const Toggle = ({ value, onValueChange }) => (
   <Switch
     value={!!value}
     onValueChange={onValueChange}
-    trackColor={{ false: "#CBD5E1", true: "#93C5FD" }}
-    thumbColor={value ? THEME.blue : "#FFFFFF"}
+    trackColor={{ false: "#D0D5DD", true: "#AFC7E8" }}
+    thumbColor={value ? THEME.primary : "#FFFFFF"}
   />
 );
-
-const Chip = ({ active, children, onPress, tone = "blue" }) => {
-  const activeStyle =
-    tone === "green"
-      ? styles.chipGreen
-      : tone === "yellow"
-      ? styles.chipYellow
-      : tone === "red"
-      ? styles.chipRed
-      : styles.chipBlue;
-
-  return (
-    <TouchableOpacity
-      activeOpacity={0.85}
-      onPress={onPress}
-      style={[styles.chip, active && activeStyle]}
-    >
-      <Text style={[styles.chipText, active && styles.chipTextActive]}>
-        {children}
-      </Text>
-    </TouchableOpacity>
-  );
-};
-
-const InfoItem = ({ label, value }) => (
-  <View style={styles.infoItem}>
-    <Text style={styles.infoLabel}>{label}</Text>
-    <Text style={styles.infoValue} numberOfLines={2}>
-      {String(value || "—")}
-    </Text>
-  </View>
-);
-
-const StatBox = ({ label, value, tone = "blue" }) => {
-  const boxStyle =
-    tone === "green"
-      ? styles.statGreen
-      : tone === "yellow"
-      ? styles.statYellow
-      : tone === "red"
-      ? styles.statRed
-      : styles.statBlue;
-
-  return (
-    <View style={[styles.statBox, boxStyle]}>
-      <Text style={styles.statValue}>{value}</Text>
-      <Text style={styles.statLabel}>{label}</Text>
-    </View>
-  );
-};
 
 function FieldRow({ children }) {
   return <View style={styles.fieldRow}>{children}</View>;
 }
 
-function Field({ children, small = false, wide = false }) {
+function Field({ children, compact = false, wide = false }) {
   return (
     <View
       style={[
         styles.field,
-        small && styles.fieldSmall,
+        compact && styles.fieldCompact,
         wide && styles.fieldWide,
       ]}
     >
@@ -248,19 +198,118 @@ function Field({ children, small = false, wide = false }) {
   );
 }
 
-function SectionBox({ title, subtitle, children }) {
+function Section({ title, description, children, style }) {
   return (
-    <View style={styles.sectionBox}>
-      <View style={styles.sectionTop}>
+    <View style={[styles.section, style]}>
+      <View style={styles.sectionHeader}>
         <Text style={styles.sectionTitle}>{title}</Text>
-        {!!subtitle && <Text style={styles.sectionSubtitle}>{subtitle}</Text>}
+        {!!description && (
+          <Text style={styles.sectionDescription}>{description}</Text>
+        )}
       </View>
       {children}
     </View>
   );
 }
 
-function CableCard({ row, onChange }) {
+function OrderData({ label, value, wide = false }) {
+  return (
+    <View style={[styles.orderData, wide && styles.orderDataWide]}>
+      <Text style={styles.orderDataLabel}>{label}</Text>
+      <Text style={styles.orderDataValue} numberOfLines={2}>
+        {safeStr(value) || "—"}
+      </Text>
+    </View>
+  );
+}
+
+function Choice({
+  active,
+  label,
+  onPress,
+  tone = "primary",
+  compact = false,
+}) {
+  const toneStyle =
+    tone === "success"
+      ? styles.choiceActiveSuccess
+      : tone === "warning"
+      ? styles.choiceActiveWarning
+      : tone === "danger"
+      ? styles.choiceActiveDanger
+      : styles.choiceActivePrimary;
+
+  const toneText =
+    tone === "success"
+      ? styles.choiceTextSuccess
+      : tone === "warning"
+      ? styles.choiceTextWarning
+      : tone === "danger"
+      ? styles.choiceTextDanger
+      : styles.choiceTextPrimary;
+
+  return (
+    <TouchableOpacity
+      onPress={onPress}
+      activeOpacity={0.8}
+      style={[
+        styles.choice,
+        compact && styles.choiceCompact,
+        active && toneStyle,
+      ]}
+    >
+      <View style={[styles.radioOuter, active && styles.radioOuterActive]}>
+        {active && <View style={styles.radioInner} />}
+      </View>
+      <Text style={[styles.choiceText, active && toneText]}>{label}</Text>
+    </TouchableOpacity>
+  );
+}
+
+function CheckChoice({ active, label, onPress, tone = "primary" }) {
+  const activeStyle =
+    tone === "success"
+      ? styles.checkChoiceActiveSuccess
+      : tone === "warning"
+      ? styles.checkChoiceActiveWarning
+      : tone === "danger"
+      ? styles.checkChoiceActiveDanger
+      : styles.checkChoiceActivePrimary;
+
+  return (
+    <TouchableOpacity
+      onPress={onPress}
+      activeOpacity={0.8}
+      style={[styles.checkChoice, active && activeStyle]}
+    >
+      <View style={[styles.checkChoiceBox, active && styles.checkChoiceBoxActive]}>
+        {active && <Text style={styles.checkChoiceMark}>✓</Text>}
+      </View>
+      <Text style={[styles.checkChoiceText, active && styles.checkChoiceTextActive]}>
+        {label}
+      </Text>
+    </TouchableOpacity>
+  );
+}
+
+function ToggleQuestion({ title, description, value, onValueChange }) {
+  return (
+    <View style={styles.toggleQuestion}>
+      <View style={styles.toggleQuestionText}>
+        <Text style={styles.toggleQuestionTitle}>{title}</Text>
+        {!!description && (
+          <Text style={styles.toggleQuestionDescription}>{description}</Text>
+        )}
+      </View>
+      <View style={styles.toggleQuestionControl}>
+        <Text style={styles.toggleStateText}>{value ? "Sí" : "No"}</Text>
+        <Toggle value={value} onValueChange={onValueChange} />
+      </View>
+    </View>
+  );
+}
+
+function CableMeasurementRow({ row, onChange }) {
   const updateLocal = (patch) => {
     const next = { ...(row || {}), ...patch };
 
@@ -277,27 +326,29 @@ function CableCard({ row, onChange }) {
   };
 
   return (
-    <View style={[styles.cableCard, row?.peor && styles.cableCardWorst]}>
-      <View style={styles.cableTop}>
-        <View style={styles.cableNumber}>
-          <Text style={styles.cableNumberText}>{row.cable_no}</Text>
+    <View style={[styles.cableRow, row?.peor && styles.cableRowMarked]}>
+      <View style={styles.cableRowHeader}>
+        <View style={styles.cableIdentity}>
+          <View style={styles.cableBadge}>
+            <Text style={styles.cableBadgeText}>{row.cable_no}</Text>
+          </View>
+          <View>
+            <Text style={styles.cableName}>Cable {row.cable_no}</Text>
+            <Text style={styles.cableSubtext}>Medición individual</Text>
+          </View>
         </View>
 
-        <View style={{ flex: 1 }}>
-          <Text style={styles.cableTitle}>Cable {row.cable_no}</Text>
-          <Text style={styles.cableHint}>Medición y desgaste</Text>
-        </View>
-
-        <View style={[styles.percentPill, row?.peor && styles.percentWorst]}>
-          <Text style={styles.percentText}>
+        <View style={styles.wearValueBox}>
+          <Text style={styles.wearValueLabel}>Desgaste</Text>
+          <Text style={styles.wearValue}>
             {row?.desgaste_pct != null ? `${row.desgaste_pct}%` : "—"}
           </Text>
         </View>
       </View>
 
       <FieldRow>
-        <Field small>
-          <Label>Ø medido</Label>
+        <Field compact>
+          <Label>Ø medido (mm)</Label>
           <Input
             keyboardType="numeric"
             value={String(row?.diametro_mm ?? "")}
@@ -308,8 +359,8 @@ function CableCard({ row, onChange }) {
           />
         </Field>
 
-        <Field small>
-          <Label>Desgaste</Label>
+        <Field compact>
+          <Label>Parte desgaste</Label>
           <Input
             keyboardType="numeric"
             value={String(row?.parte_desgaste_mm ?? "")}
@@ -320,8 +371,8 @@ function CableCard({ row, onChange }) {
           />
         </Field>
 
-        <Field small>
-          <Label>Intacta</Label>
+        <Field compact>
+          <Label>Parte intacta</Label>
           <Input
             keyboardType="numeric"
             value={String(row?.parte_intacta_mm ?? "")}
@@ -333,12 +384,13 @@ function CableCard({ row, onChange }) {
         </Field>
       </FieldRow>
 
-      <View style={styles.cardToggleRow}>
-        <View>
-          <Text style={styles.toggleTitle}>Peor cable</Text>
-          <Text style={styles.toggleHint}>Marcar para resaltarlo en el reporte.</Text>
+      <View style={styles.markWorstRow}>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.markWorstTitle}>Marcar como peor cable</Text>
+          <Text style={styles.markWorstDescription}>
+            Se resaltará como referencia en el reporte.
+          </Text>
         </View>
-
         <Toggle
           value={!!row?.peor}
           onValueChange={(v) => updateLocal({ peor: v })}
@@ -427,9 +479,7 @@ export default function ManttoCablesScreen() {
           `/api/odata/ZCS_GET_WORKORDER_SRV/WorkOrderHeaderSet('${oid}')/ToAddresses`
         );
 
-        const results =
-          resAddr?.data?.d?.results || resAddr?.data?.results || [];
-
+        const results = resAddr?.data?.d?.results || resAddr?.data?.results || [];
         clienteFromAddress = safeStr(results?.[0]?.Name1);
       } catch (addrError) {
         console.log(
@@ -488,23 +538,6 @@ export default function ManttoCablesScreen() {
   }, [cargarOrden]);
 
   const activeCableCount = Number(form.cantidad_cables || 8);
-
-  const stats = useMemo(() => {
-    const diametros = (form.seccion_diametros || []).slice(0, activeCableCount);
-    const rupturas = (form.seccion_rupturas || []).slice(0, activeCableCount);
-
-    const medidos = diametros.filter(
-      (x) =>
-        safeStr(x.diametro_mm) ||
-        safeStr(x.parte_desgaste_mm) ||
-        safeStr(x.parte_intacta_mm)
-    ).length;
-
-    const peor = diametros.filter((x) => x.peor).length;
-    const conRuptura = rupturas.filter((x) => x.hay).length;
-
-    return { medidos, peor, conRuptura };
-  }, [form, activeCableCount]);
 
   function buildHtmlActual() {
     return buildManttoCablesHtml({
@@ -636,59 +669,73 @@ export default function ManttoCablesScreen() {
     setActiveStep((s) => Math.max(s - 1, 0));
   };
 
-  const renderProgress = () => (
-    <View style={styles.progressCard}>
-      <Text style={styles.progressTitle}>Progreso del formulario</Text>
+  const renderStepIndicator = () => (
+    <View style={styles.stepperCard}>
+      <View style={styles.stepperTopRow}>
+        <View>
+          <Text style={styles.stepperEyebrow}>
+            Paso {activeStep + 1} de {STEPS.length}
+          </Text>
+          <Text style={styles.stepperCurrentTitle}>{STEPS[activeStep].title}</Text>
+        </View>
+        <Text style={styles.stepperPercent}>
+          {Math.round(((activeStep + 1) / STEPS.length) * 100)}%
+        </Text>
+      </View>
+
+      <View style={styles.progressTrack}>
+        <View
+          style={[
+            styles.progressFill,
+            { width: `${((activeStep + 1) / STEPS.length) * 100}%` },
+          ]}
+        />
+      </View>
 
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.stepsScroll}
+        contentContainerStyle={styles.stepLinks}
       >
         {STEPS.map((step, index) => {
           const active = index === activeStep;
           const done = index < activeStep;
-
           return (
             <TouchableOpacity
               key={step.key}
-              activeOpacity={0.85}
               onPress={() => setActiveStep(index)}
+              activeOpacity={0.8}
               style={[
-                styles.stepItem,
-                active && styles.stepItemActive,
-                done && styles.stepItemDone,
+                styles.stepLink,
+                active && styles.stepLinkActive,
+                done && styles.stepLinkDone,
               ]}
             >
               <View
                 style={[
-                  styles.stepNumber,
-                  active && styles.stepNumberActive,
-                  done && styles.stepNumberDone,
+                  styles.stepDot,
+                  active && styles.stepDotActive,
+                  done && styles.stepDotDone,
                 ]}
               >
                 <Text
                   style={[
-                    styles.stepNumberText,
-                    (active || done) && styles.stepNumberTextActive,
+                    styles.stepDotText,
+                    (active || done) && styles.stepDotTextActive,
                   ]}
                 >
                   {index + 1}
                 </Text>
               </View>
-
-              <View>
-                <Text
-                  style={[
-                    styles.stepName,
-                    active && styles.stepNameActive,
-                    done && styles.stepNameDone,
-                  ]}
-                >
-                  {step.title}
-                </Text>
-                <Text style={styles.stepShort}>{step.short}</Text>
-              </View>
+              <Text
+                style={[
+                  styles.stepLinkText,
+                  active && styles.stepLinkTextActive,
+                  done && styles.stepLinkTextDone,
+                ]}
+              >
+                {step.short}
+              </Text>
             </TouchableOpacity>
           );
         })}
@@ -698,41 +745,37 @@ export default function ManttoCablesScreen() {
 
   const renderGeneralStep = () => (
     <>
-      <SectionBox
-        title="Datos de la orden"
-        subtitle="Información automática que se usará en el PDF."
+      <Section
+        title="Información de la orden"
+        description="Estos datos se cargan automáticamente y se incluirán en el PDF."
       >
-        <View style={styles.infoGrid}>
-          <InfoItem label="Orden" value={auto?.orden || form?.orderid} />
-          <InfoItem label="Cliente" value={auto?.cliente} />
-          <InfoItem label="Equipo" value={auto?.equipo} />
-          <InfoItem label="Técnico" value={auto?.tecnico_nombre} />
-          <InfoItem label="Fecha orden" value={fmtSapDate(auto?.start_date)} />
+        <View style={styles.orderGrid}>
+          <OrderData label="Orden" value={auto?.orden || form?.orderid} />
+          <OrderData label="Equipo" value={auto?.equipo} />
+          <OrderData label="Cliente" value={auto?.cliente} wide />
+          <OrderData label="Técnico" value={auto?.tecnico_nombre} />
+          <OrderData label="Fecha de orden" value={fmtSapDate(auto?.start_date)} />
         </View>
-      </SectionBox>
+      </Section>
 
-      <SectionBox
-        title="Configuración del reporte"
-        subtitle="Datos generales del mantenimiento."
+      <Section
+        title="Datos del reporte"
+        description="Captura únicamente la información necesaria para identificar el mantenimiento."
       >
         <Label>Tipo de reporte</Label>
-
-        <View style={styles.chipsWrap}>
-          <Chip
+        <View style={styles.choiceStack}>
+          <Choice
             active={form.tipo_reporte === "overhaul"}
+            label="Overhaul"
             onPress={() => update({ tipo_reporte: "overhaul" })}
-          >
-            Overhaul
-          </Chip>
-
-          <Chip
+          />
+          <Choice
             active={form.tipo_reporte === "ajuste_reparacion_sustitucion"}
+            label="Ajuste / reparación / sustitución"
             onPress={() =>
               update({ tipo_reporte: "ajuste_reparacion_sustitucion" })
             }
-          >
-            Ajuste / reparación / sustitución
-          </Chip>
+          />
         </View>
 
         <FieldRow>
@@ -744,8 +787,7 @@ export default function ManttoCablesScreen() {
               placeholder="DD/MM/AAAA"
             />
           </Field>
-
-          <Field small>
+          <Field compact>
             <Label>Hora inicio</Label>
             <Input
               value={String(form.hora_inicio ?? "")}
@@ -753,8 +795,7 @@ export default function ManttoCablesScreen() {
               placeholder="08:00"
             />
           </Field>
-
-          <Field small>
+          <Field compact>
             <Label>Hora fin</Label>
             <Input
               value={String(form.hora_fin ?? "")}
@@ -764,9 +805,11 @@ export default function ManttoCablesScreen() {
           </Field>
         </FieldRow>
 
+        <View style={styles.divider} />
+
         <FieldRow>
-          <Field small>
-            <Label>Cantidad cables</Label>
+          <Field compact>
+            <Label>Cantidad de cables</Label>
             <Input
               keyboardType="numeric"
               value={String(form.cantidad_cables ?? 8)}
@@ -774,9 +817,8 @@ export default function ManttoCablesScreen() {
               placeholder="8"
             />
           </Field>
-
-          <Field small>
-            <Label>Ø estándar mm</Label>
+          <Field compact>
+            <Label>Ø estándar (mm)</Label>
             <Input
               keyboardType="numeric"
               value={String(form.diametro_estandar_mm ?? "")}
@@ -786,9 +828,8 @@ export default function ManttoCablesScreen() {
               placeholder="0.00"
             />
           </Field>
-
           <Field>
-            <Label>Tiempo de uso</Label>
+            <Label>Tiempo de uso de cables</Label>
             <Input
               value={String(form.tiempo_uso_cables ?? "")}
               onChangeText={(t) => update({ tiempo_uso_cables: t })}
@@ -796,20 +837,27 @@ export default function ManttoCablesScreen() {
             />
           </Field>
         </FieldRow>
-      </SectionBox>
+      </Section>
     </>
   );
 
   const renderDiametrosStep = () => (
-    <SectionBox
-      title="Diámetros y desgaste por cable"
-      subtitle="Captura las mediciones individuales. Puedes dejar campos vacíos y aun así ver el PDF."
+    <Section
+      title="Diámetros y desgaste"
+      description="Registra las mediciones por cable. El porcentaje de desgaste se calcula automáticamente."
     >
-      <View style={styles.cablesWrap}>
+      <View style={styles.helperBox}>
+        <Text style={styles.helperTitle}>Captura flexible</Text>
+        <Text style={styles.helperText}>
+          Puedes dejar campos vacíos y aun así abrir la vista previa del PDF.
+        </Text>
+      </View>
+
+      <View style={styles.listGap}>
         {(form.seccion_diametros || [])
           .slice(0, activeCableCount || 8)
           .map((row, idx) => (
-            <CableCard
+            <CableMeasurementRow
               key={`diametro-${row.cable_no}`}
               row={row}
               onChange={(patch) =>
@@ -818,218 +866,240 @@ export default function ManttoCablesScreen() {
             />
           ))}
       </View>
-    </SectionBox>
+    </Section>
   );
 
   const renderRupturasStep = () => (
-    <SectionBox
+    <Section
       title="Ruptura de alambres"
-      subtitle="Activa solamente los cables donde se encontró ruptura."
+      description="Marca únicamente los cables donde exista ruptura y captura el detalle cuando corresponda."
     >
-      {(form.seccion_rupturas || [])
-        .slice(0, activeCableCount || 8)
-        .map((r, idx) => (
-          <View key={`ruptura-${r.cable_no}`} style={styles.ruptureCard}>
-            <View style={styles.ruptureTop}>
-              <View style={styles.cableNumberSmall}>
-                <Text style={styles.cableNumberText}>{r.cable_no}</Text>
-              </View>
-
-              <View style={{ flex: 1 }}>
-                <Text style={styles.ruptureTitle}>Cable {r.cable_no}</Text>
-                <Text style={styles.ruptureHint}>Rupturas visibles por paso</Text>
-              </View>
-
-              <View style={styles.switchWrap}>
-                <Text style={styles.switchText}>{r.hay ? "Sí" : "No"}</Text>
-                <Toggle
-                  value={r.hay}
-                  onValueChange={(v) =>
-                    updateArrayItem("seccion_rupturas", idx, { hay: v })
-                  }
-                />
-              </View>
-            </View>
-
-            {r.hay && (
-              <FieldRow>
-                <Field small>
-                  <Label>Rupturas</Label>
-                  <Input
-                    keyboardType="numeric"
-                    value={String(r.rupturas_por_paso ?? "")}
-                    onChangeText={(t) =>
-                      updateArrayItem("seccion_rupturas", idx, {
-                        rupturas_por_paso: t,
-                      })
-                    }
-                    placeholder="0"
-                  />
-                </Field>
-
-                <Field>
-                  <Label>Posición en cabina</Label>
-                  <Input
-                    value={String(r.posicion_cabina ?? "")}
-                    onChangeText={(t) =>
-                      updateArrayItem("seccion_rupturas", idx, {
-                        posicion_cabina: t,
-                      })
-                    }
-                    placeholder="Ej. izquierda 2"
-                  />
-                </Field>
-
-                <Field small>
-                  <Label>Cambio</Label>
-                  <View style={styles.inlineToggleBox}>
-                    <Text style={styles.switchText}>{r.cambio ? "Sí" : "No"}</Text>
-                    <Toggle
-                      value={!!r.cambio}
-                      onValueChange={(v) =>
-                        updateArrayItem("seccion_rupturas", idx, {
-                          cambio: v,
-                        })
-                      }
-                    />
+      <View style={styles.listGap}>
+        {(form.seccion_rupturas || [])
+          .slice(0, activeCableCount || 8)
+          .map((r, idx) => (
+            <View
+              key={`ruptura-${r.cable_no}`}
+              style={[styles.ruptureRow, r.hay && styles.ruptureRowActive]}
+            >
+              <View style={styles.ruptureHeader}>
+                <View style={styles.cableIdentity}>
+                  <View style={styles.cableBadgeSoft}>
+                    <Text style={styles.cableBadgeSoftText}>{r.cable_no}</Text>
                   </View>
-                </Field>
-              </FieldRow>
-            )}
-          </View>
-        ))}
-    </SectionBox>
+                  <View>
+                    <Text style={styles.cableName}>Cable {r.cable_no}</Text>
+                    <Text style={styles.cableSubtext}>¿Presenta ruptura?</Text>
+                  </View>
+                </View>
+
+                <View style={styles.toggleQuestionControl}>
+                  <Text style={styles.toggleStateText}>{r.hay ? "Sí" : "No"}</Text>
+                  <Toggle
+                    value={r.hay}
+                    onValueChange={(v) =>
+                      updateArrayItem("seccion_rupturas", idx, { hay: v })
+                    }
+                  />
+                </View>
+              </View>
+
+              {r.hay && (
+                <View style={styles.ruptureDetails}>
+                  <FieldRow>
+                    <Field compact>
+                      <Label>Rupturas por paso</Label>
+                      <Input
+                        keyboardType="numeric"
+                        value={String(r.rupturas_por_paso ?? "")}
+                        onChangeText={(t) =>
+                          updateArrayItem("seccion_rupturas", idx, {
+                            rupturas_por_paso: t,
+                          })
+                        }
+                        placeholder="0"
+                      />
+                    </Field>
+
+                    <Field>
+                      <Label>Posición en cabina</Label>
+                      <Input
+                        value={String(r.posicion_cabina ?? "")}
+                        onChangeText={(t) =>
+                          updateArrayItem("seccion_rupturas", idx, {
+                            posicion_cabina: t,
+                          })
+                        }
+                        placeholder="Ej. izquierda 2"
+                      />
+                    </Field>
+                  </FieldRow>
+
+                  <View style={styles.changeRequiredRow}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.changeRequiredTitle}>
+                        ¿Requiere cambio?
+                      </Text>
+                      <Text style={styles.changeRequiredText}>
+                        Indica si la condición requiere sustitución del cable.
+                      </Text>
+                    </View>
+                    <View style={styles.toggleQuestionControl}>
+                      <Text style={styles.toggleStateText}>
+                        {r.cambio ? "Sí" : "No"}
+                      </Text>
+                      <Toggle
+                        value={!!r.cambio}
+                        onValueChange={(v) =>
+                          updateArrayItem("seccion_rupturas", idx, {
+                            cambio: v,
+                          })
+                        }
+                      />
+                    </View>
+                  </View>
+                </View>
+              )}
+            </View>
+          ))}
+      </View>
+    </Section>
   );
 
   const renderHallazgosStep = () => (
     <>
-      <SectionBox
-        title="Longitud de desgaste"
-        subtitle="Registra ubicación y longitud si aplica."
-      >
-        <View style={styles.questionCard}>
-          <View>
-            <Text style={styles.questionTitle}>¿Se detectó longitud de desgaste?</Text>
-            <Text style={styles.questionHint}>Activa para capturar detalles.</Text>
-          </View>
-
-          <Toggle
-            value={form.seccion_longitud?.encontrado}
-            onValueChange={(v) =>
-              update({
-                seccion_longitud: {
-                  ...(form.seccion_longitud || {}),
-                  encontrado: v,
-                },
-              })
-            }
-          />
-        </View>
+      <Section title="Longitud de desgaste">
+        <ToggleQuestion
+          title="¿Se detectó longitud de desgaste?"
+          description="Activa esta opción para registrar ubicación y longitud."
+          value={form.seccion_longitud?.encontrado}
+          onValueChange={(v) =>
+            update({
+              seccion_longitud: {
+                ...(form.seccion_longitud || {}),
+                encontrado: v,
+              },
+            })
+          }
+        />
 
         {form.seccion_longitud?.encontrado && (
-          <FieldRow>
-            <Field small>
-              <Label>Cable #</Label>
-              <Input
-                keyboardType="numeric"
-                value={String(form.seccion_longitud?.cable_no ?? "")}
-                onChangeText={(t) =>
-                  update({
-                    seccion_longitud: {
-                      ...(form.seccion_longitud || {}),
-                      cable_no: t,
-                    },
-                  })
-                }
-                placeholder="1"
-              />
-            </Field>
-
-            <Field>
-              <Label>Posición cabina</Label>
-              <Input
-                value={String(form.seccion_longitud?.posicion_cabina ?? "")}
-                onChangeText={(t) =>
-                  update({
-                    seccion_longitud: {
-                      ...(form.seccion_longitud || {}),
-                      posicion_cabina: t,
-                    },
-                  })
-                }
-                placeholder="Ej. derecha 1"
-              />
-            </Field>
-
-            <Field small>
-              <Label>Longitud mm</Label>
-              <Input
-                keyboardType="numeric"
-                value={String(form.seccion_longitud?.longitud_mm ?? "")}
-                onChangeText={(t) =>
-                  update({
-                    seccion_longitud: {
-                      ...(form.seccion_longitud || {}),
-                      longitud_mm: t.replace(",", "."),
-                    },
-                  })
-                }
-                placeholder="0"
-              />
-            </Field>
-          </FieldRow>
-        )}
-      </SectionBox>
-
-      <SectionBox title="Óxido" subtitle="Indica alcance y ubicación.">
-        <View style={styles.questionCard}>
-          <View>
-            <Text style={styles.questionTitle}>¿Se detectó óxido?</Text>
-            <Text style={styles.questionHint}>Activa si hay evidencia visual.</Text>
-          </View>
-
-          <Toggle
-            value={form.seccion_oxido?.encontrado}
-            onValueChange={(v) =>
-              update({
-                seccion_oxido: {
-                  ...(form.seccion_oxido || {}),
-                  encontrado: v,
-                },
-              })
-            }
-          />
-        </View>
-
-        {form.seccion_oxido?.encontrado && (
-          <>
-            <Label>Alcance</Label>
-
-            <View style={styles.chipsWrap}>
-              {[
-                ["completo", "Recorrido completo"],
-                ["parcial", "Parte del recorrido"],
-                ["no", "No se encontró"],
-              ].map(([value, label]) => (
-                <Chip
-                  key={value}
-                  active={form.seccion_oxido?.alcance === value}
-                  onPress={() =>
+          <View style={styles.conditionalFields}>
+            <FieldRow>
+              <Field compact>
+                <Label>Cable #</Label>
+                <Input
+                  keyboardType="numeric"
+                  value={String(form.seccion_longitud?.cable_no ?? "")}
+                  onChangeText={(t) =>
                     update({
-                      seccion_oxido: {
-                        ...(form.seccion_oxido || {}),
-                        alcance: value,
+                      seccion_longitud: {
+                        ...(form.seccion_longitud || {}),
+                        cable_no: t,
                       },
                     })
                   }
-                >
-                  {label}
-                </Chip>
-              ))}
+                  placeholder="1"
+                />
+              </Field>
+              <Field>
+                <Label>Posición en cabina</Label>
+                <Input
+                  value={String(form.seccion_longitud?.posicion_cabina ?? "")}
+                  onChangeText={(t) =>
+                    update({
+                      seccion_longitud: {
+                        ...(form.seccion_longitud || {}),
+                        posicion_cabina: t,
+                      },
+                    })
+                  }
+                  placeholder="Ej. derecha 1"
+                />
+              </Field>
+              <Field compact>
+                <Label>Longitud (mm)</Label>
+                <Input
+                  keyboardType="numeric"
+                  value={String(form.seccion_longitud?.longitud_mm ?? "")}
+                  onChangeText={(t) =>
+                    update({
+                      seccion_longitud: {
+                        ...(form.seccion_longitud || {}),
+                        longitud_mm: t.replace(",", "."),
+                      },
+                    })
+                  }
+                  placeholder="0"
+                />
+              </Field>
+            </FieldRow>
+          </View>
+        )}
+      </Section>
+
+      <Section title="Óxido">
+        <ToggleQuestion
+          title="¿Se detectó óxido?"
+          description="Activa esta opción si hay evidencia visual."
+          value={form.seccion_oxido?.encontrado}
+          onValueChange={(v) =>
+            update({
+              seccion_oxido: {
+                ...(form.seccion_oxido || {}),
+                encontrado: v,
+              },
+            })
+          }
+        />
+
+        {form.seccion_oxido?.encontrado && (
+          <View style={styles.conditionalFields}>
+            <Label>Alcance</Label>
+            <View style={styles.choiceStack}>
+              <Choice
+                compact
+                active={form.seccion_oxido?.alcance === "completo"}
+                label="Recorrido completo"
+                onPress={() =>
+                  update({
+                    seccion_oxido: {
+                      ...(form.seccion_oxido || {}),
+                      alcance: "completo",
+                    },
+                  })
+                }
+              />
+              <Choice
+                compact
+                active={form.seccion_oxido?.alcance === "parcial"}
+                label="Parte del recorrido"
+                onPress={() =>
+                  update({
+                    seccion_oxido: {
+                      ...(form.seccion_oxido || {}),
+                      alcance: "parcial",
+                    },
+                  })
+                }
+              />
+              <Choice
+                compact
+                active={form.seccion_oxido?.alcance === "no"}
+                label="No se encontró"
+                onPress={() =>
+                  update({
+                    seccion_oxido: {
+                      ...(form.seccion_oxido || {}),
+                      alcance: "no",
+                    },
+                  })
+                }
+              />
             </View>
 
             <FieldRow>
-              <Field small>
+              <Field compact>
                 <Label>Cable #</Label>
                 <Input
                   keyboardType="numeric"
@@ -1045,9 +1115,8 @@ export default function ManttoCablesScreen() {
                   placeholder="1"
                 />
               </Field>
-
               <Field>
-                <Label>Posición cabina</Label>
+                <Label>Posición en cabina</Label>
                 <Input
                   value={String(form.seccion_oxido?.posicion_cabina ?? "")}
                   onChangeText={(t) =>
@@ -1062,144 +1131,155 @@ export default function ManttoCablesScreen() {
                 />
               </Field>
             </FieldRow>
-          </>
-        )}
-      </SectionBox>
-
-      <SectionBox
-        title="Tensión de cables"
-        subtitle="Selecciona el estado observado."
-      >
-        <View style={styles.chipsWrap}>
-          {[
-            ["bien", "La tensión se encuentra bien", "green"],
-            ["pendiente_corregir", "Mal, pendiente de corregir", "red"],
-            ["corregido", "Mal, pero se corrige", "yellow"],
-          ].map(([value, label, tone]) => (
-            <Chip
-              key={value}
-              tone={tone}
-              active={form.seccion_tension?.estado === value}
-              onPress={() => update({ seccion_tension: { estado: value } })}
-            >
-              {label}
-            </Chip>
-          ))}
-        </View>
-      </SectionBox>
-
-      <SectionBox
-        title="Dobleces o deformaciones"
-        subtitle="Registra el problema si se detecta."
-      >
-        <View style={styles.questionCard}>
-          <View>
-            <Text style={styles.questionTitle}>¿Se detectó problema?</Text>
-            <Text style={styles.questionHint}>Activa para capturar detalle.</Text>
           </View>
+        )}
+      </Section>
 
-          <Toggle
-            value={form.seccion_deformaciones?.encontrado}
-            onValueChange={(v) =>
-              update({
-                seccion_deformaciones: {
-                  ...(form.seccion_deformaciones || {}),
-                  encontrado: v,
-                },
-              })
+      <Section
+        title="Tensión de cables"
+        description="Selecciona la condición observada durante la revisión."
+      >
+        <View style={styles.choiceStack}>
+          <Choice
+            tone="success"
+            active={form.seccion_tension?.estado === "bien"}
+            label="La tensión se encuentra bien"
+            onPress={() => update({ seccion_tension: { estado: "bien" } })}
+          />
+          <Choice
+            tone="danger"
+            active={form.seccion_tension?.estado === "pendiente_corregir"}
+            label="Mal, pendiente de corregir"
+            onPress={() =>
+              update({ seccion_tension: { estado: "pendiente_corregir" } })
+            }
+          />
+          <Choice
+            tone="warning"
+            active={form.seccion_tension?.estado === "corregido"}
+            label="Mal, pero se corrigió"
+            onPress={() => update({ seccion_tension: { estado: "corregido" } })}
+          />
+        </View>
+      </Section>
+
+      <Section title="Dobleces o deformaciones">
+        <ToggleQuestion
+          title="¿Se detectó algún problema?"
+          description="Activa para capturar ubicación y descripción."
+          value={form.seccion_deformaciones?.encontrado}
+          onValueChange={(v) =>
+            update({
+              seccion_deformaciones: {
+                ...(form.seccion_deformaciones || {}),
+                encontrado: v,
+              },
+            })
+          }
+        />
+
+        {form.seccion_deformaciones?.encontrado && (
+          <View style={styles.conditionalFields}>
+            <FieldRow>
+              <Field compact>
+                <Label>Cable #</Label>
+                <Input
+                  keyboardType="numeric"
+                  value={String(form.seccion_deformaciones?.cable_no ?? "")}
+                  onChangeText={(t) =>
+                    update({
+                      seccion_deformaciones: {
+                        ...(form.seccion_deformaciones || {}),
+                        cable_no: t,
+                      },
+                    })
+                  }
+                  placeholder="1"
+                />
+              </Field>
+              <Field>
+                <Label>Posición en cabina</Label>
+                <Input
+                  value={String(
+                    form.seccion_deformaciones?.posicion_cabina ?? ""
+                  )}
+                  onChangeText={(t) =>
+                    update({
+                      seccion_deformaciones: {
+                        ...(form.seccion_deformaciones || {}),
+                        posicion_cabina: t,
+                      },
+                    })
+                  }
+                  placeholder="Ej. atrás"
+                />
+              </Field>
+            </FieldRow>
+            <Label style={{ marginTop: 12 }}>Problema detectado</Label>
+            <Input
+              value={String(form.seccion_deformaciones?.problema ?? "")}
+              onChangeText={(t) =>
+                update({
+                  seccion_deformaciones: {
+                    ...(form.seccion_deformaciones || {}),
+                    problema: t,
+                  },
+                })
+              }
+              placeholder="Describe el problema"
+            />
+          </View>
+        )}
+      </Section>
+
+      <Section
+        title="Terminales de los cables"
+        description="Selecciona la condición general de los terminales."
+      >
+        <View style={styles.choiceStack}>
+          <Choice
+            tone="danger"
+            active={form.seccion_terminales?.estado === "grietas"}
+            label="Presenta grietas / daños"
+            onPress={() =>
+              update({ seccion_terminales: { estado: "grietas" } })
+            }
+          />
+          <Choice
+            tone="warning"
+            active={form.seccion_terminales?.estado === "grasa"}
+            label="Grasa negra en Metal Babbit"
+            onPress={() =>
+              update({ seccion_terminales: { estado: "grasa" } })
+            }
+          />
+          <Choice
+            tone="success"
+            active={form.seccion_terminales?.estado === "sin_anomalias"}
+            label="Sin anomalías"
+            onPress={() =>
+              update({ seccion_terminales: { estado: "sin_anomalias" } })
             }
           />
         </View>
-
-        {form.seccion_deformaciones?.encontrado && (
-          <FieldRow>
-            <Field small>
-              <Label>Cable #</Label>
-              <Input
-                keyboardType="numeric"
-                value={String(form.seccion_deformaciones?.cable_no ?? "")}
-                onChangeText={(t) =>
-                  update({
-                    seccion_deformaciones: {
-                      ...(form.seccion_deformaciones || {}),
-                      cable_no: t,
-                    },
-                  })
-                }
-                placeholder="1"
-              />
-            </Field>
-
-            <Field>
-              <Label>Posición cabina</Label>
-              <Input
-                value={String(form.seccion_deformaciones?.posicion_cabina ?? "")}
-                onChangeText={(t) =>
-                  update({
-                    seccion_deformaciones: {
-                      ...(form.seccion_deformaciones || {}),
-                      posicion_cabina: t,
-                    },
-                  })
-                }
-                placeholder="Ej. atrás"
-              />
-            </Field>
-
-            <Field wide>
-              <Label>Problema</Label>
-              <Input
-                value={String(form.seccion_deformaciones?.problema ?? "")}
-                onChangeText={(t) =>
-                  update({
-                    seccion_deformaciones: {
-                      ...(form.seccion_deformaciones || {}),
-                      problema: t,
-                    },
-                  })
-                }
-                placeholder="Describe el problema"
-              />
-            </Field>
-          </FieldRow>
-        )}
-      </SectionBox>
-
-      <SectionBox
-        title="Terminales de los cables"
-        subtitle="Selecciona la condición de terminales."
-      >
-        <View style={styles.chipsWrap}>
-          {[
-            ["grietas", "Presenta grietas / daños", "red"],
-            ["grasa", "Grasa negra en Metal Babbit", "yellow"],
-            ["sin_anomalias", "Sin anomalías", "green"],
-          ].map(([value, label, tone]) => (
-            <Chip
-              key={value}
-              tone={tone}
-              active={form.seccion_terminales?.estado === value}
-              onPress={() => update({ seccion_terminales: { estado: value } })}
-            >
-              {label}
-            </Chip>
-          ))}
-        </View>
-      </SectionBox>
+      </Section>
     </>
   );
 
   const renderResultadoStep = () => (
-    <SectionBox
-      title="Resultado total"
-      subtitle="Define el dictamen final y agrega observaciones."
+    <Section
+      title="Resultado del mantenimiento"
+      description="Selecciona el dictamen final, identifica los problemas y agrega observaciones."
     >
       <Label>Dictamen</Label>
-
-      <View style={styles.chipsWrap}>
-        <Chip
-          tone="green"
+      <Text style={styles.selectionHint}>
+        Puedes marcar más de una opción si el reporte lo requiere.
+      </Text>
+      <View style={styles.choiceStack}>
+        <CheckChoice
+          tone="success"
           active={!!form.resultado_total?.bien}
+          label="Bien"
           onPress={() =>
             update({
               resultado_total: {
@@ -1208,13 +1288,11 @@ export default function ManttoCablesScreen() {
               },
             })
           }
-        >
-          Bien
-        </Chip>
-
-        <Chip
-          tone="red"
+        />
+        <CheckChoice
+          tone="danger"
           active={!!form.resultado_total?.cambio_inmediato}
+          label="Cambio inmediato"
           onPress={() =>
             update({
               resultado_total: {
@@ -1223,13 +1301,11 @@ export default function ManttoCablesScreen() {
               },
             })
           }
-        >
-          Cambio inmediato
-        </Chip>
-
-        <Chip
-          tone="yellow"
+        />
+        <CheckChoice
+          tone="warning"
           active={!!form.resultado_total?.programar_cambio}
+          label="Programar cambio"
           onPress={() =>
             update({
               resultado_total: {
@@ -1238,34 +1314,36 @@ export default function ManttoCablesScreen() {
               },
             })
           }
-        >
-          Programar cambio
-        </Chip>
+        />
       </View>
 
-      <Label style={{ marginTop: 18 }}>Tipos de problema</Label>
+      <View style={styles.divider} />
 
-      <View style={styles.chipsWrap}>
+      <Label>Tipos de problema</Label>
+      <View style={styles.problemGrid}>
         {[
-          "diametro",
-          "tension",
-          "rupturas",
-          "dobleces",
-          "desgaste",
-          "terminales",
-          "oxido",
-          "otros",
-        ].map((opt) => {
-          const active = form.resultado_total?.tipos_problema?.includes(opt);
-
+          ["diametro", "Diámetro"],
+          ["tension", "Tensión"],
+          ["rupturas", "Rupturas"],
+          ["dobleces", "Dobleces"],
+          ["desgaste", "Desgaste"],
+          ["terminales", "Terminales"],
+          ["oxido", "Óxido"],
+          ["otros", "Otros"],
+        ].map(([value, label]) => {
+          const active = form.resultado_total?.tipos_problema?.includes(value);
           return (
-            <Chip
-              key={opt}
-              active={active}
+            <TouchableOpacity
+              key={value}
+              activeOpacity={0.8}
+              style={[
+                styles.problemOption,
+                active && styles.problemOptionActive,
+              ]}
               onPress={() => {
                 const cur = new Set(form.resultado_total?.tipos_problema || []);
-                if (active) cur.delete(opt);
-                else cur.add(opt);
+                if (active) cur.delete(value);
+                else cur.add(value);
 
                 update({
                   resultado_total: {
@@ -1275,14 +1353,28 @@ export default function ManttoCablesScreen() {
                 });
               }}
             >
-              {opt}
-            </Chip>
+              <View
+                style={[
+                  styles.checkbox,
+                  active && styles.checkboxActive,
+                ]}
+              >
+                {active && <Text style={styles.checkboxMark}>✓</Text>}
+              </View>
+              <Text
+                style={[
+                  styles.problemOptionText,
+                  active && styles.problemOptionTextActive,
+                ]}
+              >
+                {label}
+              </Text>
+            </TouchableOpacity>
           );
         })}
       </View>
 
       <Label style={{ marginTop: 18 }}>Detalle / observaciones</Label>
-
       <Input
         multiline
         style={styles.textArea}
@@ -1299,18 +1391,18 @@ export default function ManttoCablesScreen() {
       />
 
       <TouchableOpacity
-        style={styles.saveBtn}
+        style={styles.saveButton}
         onPress={save}
         disabled={saving || generatingPdf}
-        activeOpacity={0.9}
+        activeOpacity={0.85}
       >
         {saving ? (
           <ActivityIndicator color="#FFFFFF" />
         ) : (
-          <Text style={styles.saveBtnText}>Guardar formulario</Text>
+          <Text style={styles.saveButtonText}>Guardar formulario</Text>
         )}
       </TouchableOpacity>
-    </SectionBox>
+    </Section>
   );
 
   const renderStepContent = () => {
@@ -1324,7 +1416,7 @@ export default function ManttoCablesScreen() {
   if (loading) {
     return (
       <View style={styles.loadingScreen}>
-        <ActivityIndicator size="large" color={THEME.blue} />
+        <ActivityIndicator size="large" color={THEME.primary} />
         <Text style={styles.loadingTitle}>Cargando formulario</Text>
         <Text style={styles.loadingText}>Preparando datos de la orden…</Text>
       </View>
@@ -1340,52 +1432,41 @@ export default function ManttoCablesScreen() {
         keyboardShouldPersistTaps="handled"
         contentContainerStyle={styles.content}
       >
-        <View style={styles.hero}>
-          <View style={styles.heroTop}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.heroKicker}>Formato técnico</Text>
-              <Text style={styles.heroTitle}>Mantenimiento de cables</Text>
-              <Text style={styles.heroText}>
-                Llena el reporte por pasos. Puedes previsualizar el PDF aunque
-                falten campos.
-              </Text>
-            </View>
-
-            <View style={styles.pdfBadge}>
-              <Text style={styles.pdfBadgeText}>Sin validación</Text>
-            </View>
+        <View style={styles.introCard}>
+          <View style={styles.introTextWrap}>
+            <Text style={styles.introTitle}>Reporte de mantenimiento</Text>
+            <Text style={styles.introText}>
+              Completa el formulario por secciones. Puedes revisar el PDF en
+              cualquier momento aunque existan campos vacíos.
+            </Text>
           </View>
-
-          <View style={styles.statsRow}>
-            <StatBox label="Cables" value={activeCableCount || 8} />
-            <StatBox label="Medidos" value={stats.medidos} tone="green" />
-            <StatBox label="Rupturas" value={stats.conRuptura} tone="yellow" />
-            <StatBox label="Peor cable" value={stats.peor} tone="red" />
-          </View>
+          <TouchableOpacity
+            style={styles.introPreviewButton}
+            onPress={abrirPreviewPdf}
+            disabled={generatingPdf}
+            activeOpacity={0.8}
+          >
+            <Text style={styles.introPreviewButtonText}>Ver PDF</Text>
+          </TouchableOpacity>
         </View>
 
-        {renderProgress()}
-
-        <View style={styles.activeStepHeader}>
-          <Text style={styles.activeStepSmall}>
-            Paso {activeStep + 1} de {STEPS.length}
-          </Text>
-          <Text style={styles.activeStepTitle}>{STEPS[activeStep].title}</Text>
-        </View>
-
+        {renderStepIndicator()}
         {renderStepContent()}
 
-        <View style={styles.navRow}>
+        <View style={styles.navigationRow}>
           <TouchableOpacity
-            style={[styles.navBtn, activeStep === 0 && styles.navBtnDisabled]}
+            style={[
+              styles.secondaryNavButton,
+              activeStep === 0 && styles.navButtonDisabled,
+            ]}
             onPress={goBack}
             disabled={activeStep === 0}
             activeOpacity={0.85}
           >
             <Text
               style={[
-                styles.navBtnText,
-                activeStep === 0 && styles.navBtnTextDisabled,
+                styles.secondaryNavButtonText,
+                activeStep === 0 && styles.navButtonDisabledText,
               ]}
             >
               Anterior
@@ -1394,8 +1475,8 @@ export default function ManttoCablesScreen() {
 
           <TouchableOpacity
             style={[
-              styles.navBtnPrimary,
-              activeStep === STEPS.length - 1 && styles.navBtnDisabled,
+              styles.primaryNavButton,
+              activeStep === STEPS.length - 1 && styles.navButtonDisabled,
             ]}
             onPress={goNext}
             disabled={activeStep === STEPS.length - 1}
@@ -1403,8 +1484,9 @@ export default function ManttoCablesScreen() {
           >
             <Text
               style={[
-                styles.navBtnPrimaryText,
-                activeStep === STEPS.length - 1 && styles.navBtnTextDisabled,
+                styles.primaryNavButtonText,
+                activeStep === STEPS.length - 1 &&
+                  styles.navButtonDisabledText,
               ]}
             >
               Siguiente
@@ -1415,24 +1497,24 @@ export default function ManttoCablesScreen() {
 
       <View style={styles.bottomBar}>
         <TouchableOpacity
-          style={styles.previewBtn}
+          style={styles.previewButton}
           onPress={abrirPreviewPdf}
           disabled={generatingPdf}
-          activeOpacity={0.9}
+          activeOpacity={0.85}
         >
-          <Text style={styles.previewBtnText}>Vista previa</Text>
+          <Text style={styles.previewButtonText}>Vista previa</Text>
         </TouchableOpacity>
 
         <TouchableOpacity
-          style={styles.shareBtn}
+          style={styles.shareButton}
           onPress={compartirPdf}
           disabled={generatingPdf}
-          activeOpacity={0.9}
+          activeOpacity={0.85}
         >
           {generatingPdf ? (
             <ActivityIndicator color="#FFFFFF" />
           ) : (
-            <Text style={styles.shareBtnText}>Compartir PDF</Text>
+            <Text style={styles.shareButtonText}>Compartir PDF</Text>
           )}
         </TouchableOpacity>
       </View>
@@ -1446,16 +1528,16 @@ export default function ManttoCablesScreen() {
         <View style={styles.modalBackdrop}>
           <View style={styles.previewCard}>
             <View style={styles.previewHeader}>
-              <View>
-                <Text style={styles.previewKicker}>Documento</Text>
-                <Text style={styles.previewTitle}>Vista previa PDF</Text>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.previewEyebrow}>Documento</Text>
+                <Text style={styles.previewTitle}>Vista previa del PDF</Text>
               </View>
-
               <TouchableOpacity
-                style={styles.previewClose}
+                style={styles.closeButton}
                 onPress={() => setPreviewVisible(false)}
+                activeOpacity={0.8}
               >
-                <Text style={styles.previewCloseText}>Cerrar</Text>
+                <Text style={styles.closeButtonText}>Cerrar</Text>
               </TouchableOpacity>
             </View>
 
@@ -1467,15 +1549,15 @@ export default function ManttoCablesScreen() {
 
             <View style={styles.previewFooter}>
               <TouchableOpacity
-                style={styles.shareBtn}
+                style={styles.shareButton}
                 onPress={compartirPdf}
                 disabled={generatingPdf}
-                activeOpacity={0.9}
+                activeOpacity={0.85}
               >
                 {generatingPdf ? (
                   <ActivityIndicator color="#FFFFFF" />
                 ) : (
-                  <Text style={styles.shareBtnText}>Compartir PDF</Text>
+                  <Text style={styles.shareButtonText}>Compartir PDF</Text>
                 )}
               </TouchableOpacity>
             </View>
@@ -1504,631 +1586,818 @@ const styles = StyleSheet.create({
     marginTop: 14,
     fontSize: 18,
     color: THEME.text,
-    fontWeight: "900",
+    fontWeight: "800",
   },
 
   loadingText: {
     marginTop: 4,
     fontSize: 13,
     color: THEME.muted,
-    fontWeight: "700",
+    fontWeight: "500",
   },
 
   content: {
-    padding: 16,
-    paddingBottom: 120,
+    paddingHorizontal: 14,
+    paddingTop: 14,
+    paddingBottom: 118,
   },
 
-  hero: {
-    backgroundColor: THEME.blue,
-    borderRadius: 28,
-    padding: 18,
-    shadowColor: "#000",
-    shadowOpacity: 0.1,
-    shadowRadius: 12,
-    elevation: 3,
-  },
-
-  heroTop: {
+  introCard: {
+    backgroundColor: THEME.card,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: THEME.border,
+    padding: 15,
     flexDirection: "row",
-    alignItems: "flex-start",
+    alignItems: "center",
     gap: 12,
   },
 
-  heroKicker: {
-    color: "#BFDBFE",
-    fontSize: 11,
-    fontWeight: "900",
-    textTransform: "uppercase",
-    letterSpacing: 0.9,
-    marginBottom: 4,
+  introTextWrap: {
+    flex: 1,
   },
 
-  heroTitle: {
-    color: "#FFFFFF",
-    fontSize: 25,
-    fontWeight: "900",
-    lineHeight: 30,
-  },
-
-  heroText: {
-    color: "#DBEAFE",
-    fontSize: 13,
-    fontWeight: "700",
-    lineHeight: 19,
-    marginTop: 8,
-  },
-
-  pdfBadge: {
-    backgroundColor: "rgba(255,255,255,0.14)",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.2)",
-    borderRadius: 999,
-    paddingHorizontal: 11,
-    paddingVertical: 8,
-  },
-
-  pdfBadgeText: {
-    color: "#FFFFFF",
-    fontSize: 11,
-    fontWeight: "900",
-  },
-
-  statsRow: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 10,
-    marginTop: 16,
-  },
-
-  statBox: {
-    flexGrow: 1,
-    minWidth: 72,
-    borderRadius: 18,
-    paddingVertical: 11,
-    paddingHorizontal: 8,
-    alignItems: "center",
-  },
-
-  statBlue: {
-    backgroundColor: "rgba(255,255,255,0.13)",
-  },
-
-  statGreen: {
-    backgroundColor: "rgba(22,163,74,0.26)",
-  },
-
-  statYellow: {
-    backgroundColor: "rgba(245,158,11,0.26)",
-  },
-
-  statRed: {
-    backgroundColor: "rgba(220,38,38,0.26)",
-  },
-
-  statValue: {
-    color: "#FFFFFF",
-    fontSize: 19,
-    fontWeight: "900",
-  },
-
-  statLabel: {
-    color: "#DBEAFE",
-    fontSize: 11,
-    fontWeight: "800",
-    marginTop: 2,
-  },
-
-  progressCard: {
-    marginTop: 14,
-    backgroundColor: THEME.card,
-    borderRadius: 22,
-    padding: 14,
-    borderWidth: 1,
-    borderColor: THEME.border,
-  },
-
-  progressTitle: {
+  introTitle: {
     color: THEME.text,
-    fontSize: 14,
-    fontWeight: "900",
-    marginBottom: 10,
+    fontSize: 17,
+    fontWeight: "800",
   },
 
-  stepsScroll: {
-    gap: 10,
-    paddingRight: 10,
+  introText: {
+    color: THEME.muted,
+    fontSize: 12.5,
+    lineHeight: 18,
+    marginTop: 4,
+    fontWeight: "500",
   },
 
-  stepItem: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 9,
-    backgroundColor: THEME.cardSoft,
-    borderWidth: 1,
-    borderColor: THEME.border,
-    borderRadius: 18,
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    minWidth: 130,
-  },
-
-  stepItemActive: {
-    backgroundColor: THEME.blueSoft,
-    borderColor: "#93C5FD",
-  },
-
-  stepItemDone: {
-    backgroundColor: THEME.greenSoft,
-    borderColor: "#86EFAC",
-  },
-
-  stepNumber: {
-    width: 30,
-    height: 30,
-    borderRadius: 11,
-    backgroundColor: "#E2E8F0",
+  introPreviewButton: {
+    backgroundColor: THEME.primarySoft,
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    minHeight: 40,
     alignItems: "center",
     justifyContent: "center",
   },
 
-  stepNumberActive: {
-    backgroundColor: THEME.blue,
-  },
-
-  stepNumberDone: {
-    backgroundColor: THEME.green,
-  },
-
-  stepNumberText: {
-    color: THEME.muted,
+  introPreviewButtonText: {
+    color: THEME.primary,
     fontSize: 12,
-    fontWeight: "900",
-  },
-
-  stepNumberTextActive: {
-    color: "#FFFFFF",
-  },
-
-  stepName: {
-    color: THEME.text,
-    fontSize: 12,
-    fontWeight: "900",
-  },
-
-  stepNameActive: {
-    color: THEME.blue,
-  },
-
-  stepNameDone: {
-    color: THEME.green,
-  },
-
-  stepShort: {
-    color: THEME.muted,
-    fontSize: 10,
     fontWeight: "800",
-    marginTop: 1,
   },
 
-  activeStepHeader: {
-    marginTop: 16,
-    marginBottom: 8,
+  stepperCard: {
+    backgroundColor: THEME.card,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: THEME.border,
+    padding: 15,
+    marginTop: 12,
   },
 
-  activeStepSmall: {
-    color: THEME.blue2,
+  stepperTopRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    gap: 10,
+  },
+
+  stepperEyebrow: {
+    color: THEME.muted,
     fontSize: 11,
-    fontWeight: "900",
+    fontWeight: "700",
     textTransform: "uppercase",
-    letterSpacing: 0.8,
+    letterSpacing: 0.5,
   },
 
-  activeStepTitle: {
+  stepperCurrentTitle: {
     color: THEME.text,
-    fontSize: 21,
-    fontWeight: "900",
+    fontSize: 18,
+    fontWeight: "800",
     marginTop: 2,
   },
 
-  sectionBox: {
-    backgroundColor: THEME.card,
-    borderRadius: 24,
-    padding: 15,
-    marginTop: 10,
-    borderWidth: 1,
-    borderColor: THEME.border,
-    shadowColor: "#0F172A",
-    shadowOpacity: 0.04,
-    shadowRadius: 10,
-    elevation: 1,
+  stepperPercent: {
+    color: THEME.primary,
+    fontSize: 13,
+    fontWeight: "800",
+    marginTop: 2,
   },
 
-  sectionTop: {
+  progressTrack: {
+    height: 5,
+    backgroundColor: "#EAECF0",
+    borderRadius: 999,
+    overflow: "hidden",
+    marginTop: 13,
+  },
+
+  progressFill: {
+    height: "100%",
+    backgroundColor: THEME.primary,
+    borderRadius: 999,
+  },
+
+  stepLinks: {
+    gap: 8,
+    paddingTop: 14,
+    paddingRight: 8,
+  },
+
+  stepLink: {
+    minWidth: 88,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+    paddingVertical: 7,
+    paddingHorizontal: 8,
+    borderRadius: 9,
+  },
+
+  stepLinkActive: {
+    backgroundColor: THEME.primarySoft,
+  },
+
+  stepLinkDone: {
+    backgroundColor: "#F9FAFB",
+  },
+
+  stepDot: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: "#EAECF0",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  stepDotActive: {
+    backgroundColor: THEME.primary,
+  },
+
+  stepDotDone: {
+    backgroundColor: "#667085",
+  },
+
+  stepDotText: {
+    color: THEME.muted,
+    fontSize: 10,
+    fontWeight: "800",
+  },
+
+  stepDotTextActive: {
+    color: "#FFFFFF",
+  },
+
+  stepLinkText: {
+    color: THEME.muted,
+    fontSize: 11.5,
+    fontWeight: "700",
+  },
+
+  stepLinkTextActive: {
+    color: THEME.primary,
+  },
+
+  stepLinkTextDone: {
+    color: THEME.text,
+  },
+
+  section: {
+    backgroundColor: THEME.card,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: THEME.border,
+    padding: 15,
+    marginTop: 12,
+  },
+
+  sectionHeader: {
     marginBottom: 14,
   },
 
   sectionTitle: {
     color: THEME.text,
-    fontSize: 17,
-    fontWeight: "900",
+    fontSize: 16,
+    fontWeight: "800",
   },
 
-  sectionSubtitle: {
+  sectionDescription: {
     color: THEME.muted,
     fontSize: 12,
-    fontWeight: "700",
     lineHeight: 17,
-    marginTop: 3,
+    marginTop: 4,
+    fontWeight: "500",
   },
 
-  infoGrid: {
+  orderGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
-    gap: 10,
+    borderWidth: 1,
+    borderColor: THEME.border,
+    borderRadius: 12,
+    overflow: "hidden",
   },
 
-  infoItem: {
-    flexGrow: 1,
-    flexBasis: "46%",
-    minWidth: 150,
-    backgroundColor: THEME.cardSoft,
-    borderRadius: 16,
-    padding: 12,
-    borderWidth: 1,
+  orderData: {
+    width: "50%",
+    minHeight: 70,
+    paddingHorizontal: 12,
+    paddingVertical: 11,
+    backgroundColor: "#FFFFFF",
+    borderRightWidth: 1,
+    borderBottomWidth: 1,
     borderColor: THEME.border,
   },
 
-  infoLabel: {
-    color: THEME.muted,
-    fontSize: 10,
-    fontWeight: "900",
-    textTransform: "uppercase",
-    letterSpacing: 0.5,
-    marginBottom: 5,
+  orderDataWide: {
+    width: "100%",
   },
 
-  infoValue: {
+  orderDataLabel: {
+    color: THEME.muted,
+    fontSize: 10,
+    fontWeight: "700",
+    textTransform: "uppercase",
+    letterSpacing: 0.35,
+  },
+
+  orderDataValue: {
     color: THEME.text,
-    fontSize: 14,
-    fontWeight: "900",
+    fontSize: 13.5,
     lineHeight: 18,
+    fontWeight: "700",
+    marginTop: 5,
   },
 
   label: {
-    color: THEME.muted,
-    fontSize: 11,
-    fontWeight: "900",
-    textTransform: "uppercase",
-    letterSpacing: 0.4,
+    color: THEME.text,
+    fontSize: 11.5,
+    fontWeight: "700",
     marginBottom: 6,
   },
 
   input: {
+    minHeight: 44,
     backgroundColor: "#FFFFFF",
     borderWidth: 1,
-    borderColor: "#CBD5E1",
-    borderRadius: 15,
-    paddingHorizontal: 13,
-    paddingVertical: Platform.OS === "ios" ? 12 : 9,
-    minHeight: 45,
+    borderColor: THEME.borderStrong,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: Platform.OS === "ios" ? 11 : 8,
     color: THEME.text,
-    fontSize: 14,
-    fontWeight: "800",
+    fontSize: 13.5,
+    fontWeight: "500",
   },
 
   textArea: {
-    minHeight: 125,
-    paddingTop: 12,
+    minHeight: 118,
+    paddingTop: 11,
     textAlignVertical: "top",
   },
 
   fieldRow: {
     flexDirection: "row",
     flexWrap: "wrap",
-    gap: 11,
+    gap: 10,
     marginTop: 12,
   },
 
   field: {
     flexGrow: 1,
     flexBasis: 0,
-    minWidth: 170,
+    minWidth: 160,
   },
 
-  fieldSmall: {
+  fieldCompact: {
     minWidth: 110,
   },
 
   fieldWide: {
-    minWidth: 230,
+    minWidth: 220,
   },
 
-  chipsWrap: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 9,
+  divider: {
+    height: 1,
+    backgroundColor: THEME.border,
+    marginVertical: 16,
   },
 
-  chip: {
+  choiceStack: {
+    gap: 8,
+  },
+
+  choice: {
+    minHeight: 46,
+    borderWidth: 1,
+    borderColor: THEME.borderStrong,
+    borderRadius: 10,
     backgroundColor: "#FFFFFF",
-    borderWidth: 1,
-    borderColor: "#CBD5E1",
-    borderRadius: 999,
-    paddingVertical: 9,
-    paddingHorizontal: 13,
-  },
-
-  chipBlue: {
-    backgroundColor: THEME.blue,
-    borderColor: THEME.blue,
-  },
-
-  chipGreen: {
-    backgroundColor: THEME.green,
-    borderColor: THEME.green,
-  },
-
-  chipYellow: {
-    backgroundColor: THEME.yellow,
-    borderColor: THEME.yellow,
-  },
-
-  chipRed: {
-    backgroundColor: THEME.red,
-    borderColor: THEME.red,
-  },
-
-  chipText: {
-    color: THEME.text,
-    fontSize: 12,
-    fontWeight: "900",
-  },
-
-  chipTextActive: {
-    color: "#FFFFFF",
-  },
-
-  cablesWrap: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 12,
-  },
-
-  cableCard: {
-    flexGrow: 1,
-    flexBasis: "48%",
-    minWidth: 270,
-    backgroundColor: THEME.cardSoft,
-    borderWidth: 1,
-    borderColor: THEME.border,
-    borderRadius: 20,
-    padding: 13,
-  },
-
-  cableCardWorst: {
-    backgroundColor: "#FFFBEB",
-    borderColor: "#FBBF24",
-  },
-
-  cableTop: {
     flexDirection: "row",
     alignItems: "center",
+    paddingHorizontal: 12,
+    paddingVertical: 10,
     gap: 10,
   },
 
-  cableNumber: {
-    width: 38,
-    height: 38,
-    borderRadius: 14,
-    backgroundColor: THEME.blue,
+  choiceCompact: {
+    minHeight: 42,
+    paddingVertical: 8,
+  },
+
+  choiceActivePrimary: {
+    backgroundColor: THEME.primarySoft,
+    borderColor: "#9CB7DC",
+  },
+
+  choiceActiveSuccess: {
+    backgroundColor: THEME.successSoft,
+    borderColor: "#A6D9B5",
+  },
+
+  choiceActiveWarning: {
+    backgroundColor: THEME.warningSoft,
+    borderColor: "#E9C68C",
+  },
+
+  choiceActiveDanger: {
+    backgroundColor: THEME.dangerSoft,
+    borderColor: "#E7AAA5",
+  },
+
+  radioOuter: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    borderWidth: 1.5,
+    borderColor: THEME.muted2,
     alignItems: "center",
     justifyContent: "center",
   },
 
-  cableNumberSmall: {
-    width: 34,
-    height: 34,
-    borderRadius: 13,
-    backgroundColor: THEME.blue,
-    alignItems: "center",
-    justifyContent: "center",
+  radioOuterActive: {
+    borderColor: THEME.primary,
   },
 
-  cableNumberText: {
-    color: "#FFFFFF",
-    fontWeight: "900",
+  radioInner: {
+    width: 9,
+    height: 9,
+    borderRadius: 5,
+    backgroundColor: THEME.primary,
+  },
+
+  choiceText: {
+    flex: 1,
+    color: THEME.text,
     fontSize: 13,
+    fontWeight: "600",
   },
 
-  cableTitle: {
+  choiceTextPrimary: {
+    color: THEME.primary,
+  },
+
+  choiceTextSuccess: {
+    color: THEME.success,
+  },
+
+  choiceTextWarning: {
+    color: THEME.warning,
+  },
+
+  choiceTextDanger: {
+    color: THEME.danger,
+  },
+
+  checkChoice: {
+    minHeight: 46,
+    borderWidth: 1,
+    borderColor: THEME.borderStrong,
+    borderRadius: 10,
+    backgroundColor: "#FFFFFF",
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    gap: 10,
+  },
+
+  checkChoiceActivePrimary: {
+    backgroundColor: THEME.primarySoft,
+    borderColor: "#9CB7DC",
+  },
+
+  checkChoiceActiveSuccess: {
+    backgroundColor: THEME.successSoft,
+    borderColor: "#A6D9B5",
+  },
+
+  checkChoiceActiveWarning: {
+    backgroundColor: THEME.warningSoft,
+    borderColor: "#E9C68C",
+  },
+
+  checkChoiceActiveDanger: {
+    backgroundColor: THEME.dangerSoft,
+    borderColor: "#E7AAA5",
+  },
+
+  checkChoiceBox: {
+    width: 18,
+    height: 18,
+    borderRadius: 4,
+    borderWidth: 1.5,
+    borderColor: THEME.muted2,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  checkChoiceBoxActive: {
+    backgroundColor: THEME.primary,
+    borderColor: THEME.primary,
+  },
+
+  checkChoiceMark: {
+    color: "#FFFFFF",
+    fontSize: 11,
+    fontWeight: "900",
+    lineHeight: 13,
+  },
+
+  checkChoiceText: {
+    flex: 1,
+    color: THEME.text,
+    fontSize: 13,
+    fontWeight: "600",
+  },
+
+  checkChoiceTextActive: {
+    fontWeight: "700",
+  },
+
+  selectionHint: {
+    color: THEME.muted,
+    fontSize: 10.5,
+    lineHeight: 15,
+    marginTop: -2,
+    marginBottom: 8,
+  },
+
+  helperBox: {
+    backgroundColor: THEME.soft,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: THEME.border,
+    padding: 11,
+    marginBottom: 12,
+  },
+
+  helperTitle: {
+    color: THEME.text,
+    fontSize: 12,
+    fontWeight: "700",
+  },
+
+  helperText: {
+    color: THEME.muted,
+    fontSize: 11.5,
+    lineHeight: 16,
+    marginTop: 2,
+    fontWeight: "500",
+  },
+
+  listGap: {
+    gap: 10,
+  },
+
+  cableRow: {
+    backgroundColor: THEME.soft,
+    borderWidth: 1,
+    borderColor: THEME.border,
+    borderRadius: 12,
+    padding: 12,
+  },
+
+  cableRowMarked: {
+    backgroundColor: THEME.warningSoft,
+    borderColor: "#E5C07B",
+  },
+
+  cableRowHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+  },
+
+  cableIdentity: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
+    flex: 1,
+  },
+
+  cableBadge: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    backgroundColor: THEME.primary,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  cableBadgeText: {
+    color: "#FFFFFF",
+    fontSize: 12,
+    fontWeight: "800",
+  },
+
+  cableBadgeSoft: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    backgroundColor: THEME.primarySoft,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  cableBadgeSoftText: {
+    color: THEME.primary,
+    fontSize: 12,
+    fontWeight: "800",
+  },
+
+  cableName: {
+    color: THEME.text,
+    fontSize: 13.5,
+    fontWeight: "800",
+  },
+
+  cableSubtext: {
+    color: THEME.muted,
+    fontSize: 10.5,
+    fontWeight: "500",
+    marginTop: 1,
+  },
+
+  wearValueBox: {
+    alignItems: "flex-end",
+  },
+
+  wearValueLabel: {
+    color: THEME.muted,
+    fontSize: 9.5,
+    fontWeight: "600",
+    textTransform: "uppercase",
+  },
+
+  wearValue: {
     color: THEME.text,
     fontSize: 15,
-    fontWeight: "900",
-  },
-
-  cableHint: {
-    color: THEME.muted,
-    fontSize: 11,
-    fontWeight: "700",
+    fontWeight: "800",
     marginTop: 1,
   },
 
-  percentPill: {
-    minWidth: 58,
+  markWorstRow: {
+    flexDirection: "row",
     alignItems: "center",
-    backgroundColor: THEME.blueSoft,
-    borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 7,
-  },
-
-  percentWorst: {
-    backgroundColor: THEME.yellowSoft,
-  },
-
-  percentText: {
-    color: THEME.text,
-    fontSize: 12,
-    fontWeight: "900",
-  },
-
-  cardToggleRow: {
-    marginTop: 12,
-    paddingTop: 11,
+    gap: 10,
     borderTopWidth: 1,
     borderTopColor: THEME.border,
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    gap: 10,
+    marginTop: 12,
+    paddingTop: 10,
   },
 
-  toggleTitle: {
+  markWorstTitle: {
     color: THEME.text,
-    fontSize: 12,
-    fontWeight: "900",
-  },
-
-  toggleHint: {
-    color: THEME.muted,
-    fontSize: 11,
+    fontSize: 11.5,
     fontWeight: "700",
-    marginTop: 1,
   },
 
-  ruptureCard: {
-    backgroundColor: THEME.cardSoft,
+  markWorstDescription: {
+    color: THEME.muted,
+    fontSize: 10.5,
+    lineHeight: 15,
+    marginTop: 2,
+  },
+
+  ruptureRow: {
     borderWidth: 1,
     borderColor: THEME.border,
-    borderRadius: 20,
-    padding: 13,
-    marginBottom: 10,
+    borderRadius: 12,
+    backgroundColor: "#FFFFFF",
+    overflow: "hidden",
   },
 
-  ruptureTop: {
+  ruptureRowActive: {
+    borderColor: "#B7C9E3",
+  },
+
+  ruptureHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+    padding: 12,
+  },
+
+  ruptureDetails: {
+    backgroundColor: THEME.soft,
+    borderTopWidth: 1,
+    borderTopColor: THEME.border,
+    padding: 12,
+  },
+
+  changeRequiredRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    marginTop: 12,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: THEME.border,
+  },
+
+  changeRequiredTitle: {
+    color: THEME.text,
+    fontSize: 11.5,
+    fontWeight: "700",
+  },
+
+  changeRequiredText: {
+    color: THEME.muted,
+    fontSize: 10.5,
+    lineHeight: 15,
+    marginTop: 2,
+  },
+
+  toggleQuestion: {
+    minHeight: 58,
+    borderWidth: 1,
+    borderColor: THEME.border,
+    borderRadius: 11,
+    backgroundColor: THEME.soft,
+    padding: 11,
     flexDirection: "row",
     alignItems: "center",
     gap: 10,
   },
 
-  ruptureTitle: {
+  toggleQuestionText: {
+    flex: 1,
+  },
+
+  toggleQuestionTitle: {
     color: THEME.text,
-    fontSize: 14,
-    fontWeight: "900",
-  },
-
-  ruptureHint: {
-    color: THEME.muted,
-    fontSize: 11,
+    fontSize: 12.5,
     fontWeight: "700",
-    marginTop: 1,
   },
 
-  switchWrap: {
+  toggleQuestionDescription: {
+    color: THEME.muted,
+    fontSize: 10.5,
+    lineHeight: 15,
+    marginTop: 2,
+  },
+
+  toggleQuestionControl: {
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
   },
 
-  switchText: {
-    color: THEME.text,
-    fontSize: 12,
-    fontWeight: "900",
+  toggleStateText: {
+    color: THEME.muted,
+    fontSize: 11,
+    fontWeight: "700",
+    minWidth: 16,
   },
 
-  inlineToggleBox: {
+  conditionalFields: {
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: THEME.border,
+  },
+
+  problemGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+
+  problemOption: {
+    minWidth: "47%",
+    flexGrow: 1,
+    minHeight: 42,
+    borderRadius: 9,
+    borderWidth: 1,
+    borderColor: THEME.borderStrong,
+    backgroundColor: "#FFFFFF",
+    paddingHorizontal: 10,
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
-    minHeight: 45,
   },
 
-  questionCard: {
-    backgroundColor: THEME.cardSoft,
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: THEME.border,
-    padding: 13,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: 12,
-    marginBottom: 12,
+  problemOptionActive: {
+    backgroundColor: THEME.primarySoft,
+    borderColor: "#A4BAD8",
   },
 
-  questionTitle: {
-    color: THEME.text,
-    fontSize: 14,
-    fontWeight: "900",
-  },
-
-  questionHint: {
-    color: THEME.muted,
-    fontSize: 12,
-    fontWeight: "700",
-    marginTop: 2,
-  },
-
-  saveBtn: {
-    backgroundColor: THEME.text,
-    borderRadius: 16,
+  checkbox: {
+    width: 17,
+    height: 17,
+    borderRadius: 4,
+    borderWidth: 1.5,
+    borderColor: THEME.muted2,
     alignItems: "center",
     justifyContent: "center",
-    paddingVertical: 15,
+  },
+
+  checkboxActive: {
+    backgroundColor: THEME.primary,
+    borderColor: THEME.primary,
+  },
+
+  checkboxMark: {
+    color: "#FFFFFF",
+    fontSize: 11,
+    fontWeight: "900",
+    lineHeight: 13,
+  },
+
+  problemOptionText: {
+    color: THEME.text,
+    fontSize: 11.5,
+    fontWeight: "600",
+  },
+
+  problemOptionTextActive: {
+    color: THEME.primary,
+    fontWeight: "700",
+  },
+
+  saveButton: {
+    minHeight: 48,
+    backgroundColor: THEME.text,
+    borderRadius: 11,
+    alignItems: "center",
+    justifyContent: "center",
     marginTop: 18,
   },
 
-  saveBtnText: {
+  saveButtonText: {
     color: "#FFFFFF",
-    fontSize: 14,
-    fontWeight: "900",
+    fontSize: 13,
+    fontWeight: "800",
   },
 
-  navRow: {
+  navigationRow: {
     flexDirection: "row",
     gap: 10,
-    marginTop: 16,
-    marginBottom: 4,
+    marginTop: 14,
   },
 
-  navBtn: {
+  secondaryNavButton: {
     flex: 1,
+    minHeight: 46,
     backgroundColor: "#FFFFFF",
     borderWidth: 1,
-    borderColor: THEME.blue,
-    borderRadius: 16,
+    borderColor: THEME.borderStrong,
+    borderRadius: 11,
     alignItems: "center",
-    paddingVertical: 14,
+    justifyContent: "center",
   },
 
-  navBtnPrimary: {
+  primaryNavButton: {
     flex: 1,
-    backgroundColor: THEME.blue,
+    minHeight: 46,
+    backgroundColor: THEME.primary,
     borderWidth: 1,
-    borderColor: THEME.blue,
-    borderRadius: 16,
+    borderColor: THEME.primary,
+    borderRadius: 11,
     alignItems: "center",
-    paddingVertical: 14,
+    justifyContent: "center",
   },
 
-  navBtnDisabled: {
-    opacity: 0.45,
+  secondaryNavButtonText: {
+    color: THEME.text,
+    fontSize: 13,
+    fontWeight: "700",
   },
 
-  navBtnText: {
-    color: THEME.blue,
-    fontSize: 14,
-    fontWeight: "900",
-  },
-
-  navBtnPrimaryText: {
+  primaryNavButtonText: {
     color: "#FFFFFF",
-    fontSize: 14,
-    fontWeight: "900",
+    fontSize: 13,
+    fontWeight: "800",
   },
 
-  navBtnTextDisabled: {
+  navButtonDisabled: {
+    opacity: 0.38,
+  },
+
+  navButtonDisabledText: {
     color: THEME.muted,
   },
 
@@ -2139,94 +2408,102 @@ const styles = StyleSheet.create({
     bottom: 0,
     flexDirection: "row",
     gap: 10,
-    paddingHorizontal: 16,
-    paddingTop: 12,
-    paddingBottom: Platform.OS === "ios" ? 26 : 14,
-    backgroundColor: "rgba(238,243,248,0.97)",
+    paddingHorizontal: 14,
+    paddingTop: 10,
+    paddingBottom: Platform.OS === "ios" ? 24 : 12,
+    backgroundColor: "rgba(244,246,248,0.98)",
     borderTopWidth: 1,
     borderTopColor: THEME.border,
   },
 
-  previewBtn: {
+  previewButton: {
     flex: 1,
+    minHeight: 50,
     backgroundColor: "#FFFFFF",
     borderWidth: 1,
-    borderColor: THEME.blue,
-    borderRadius: 17,
+    borderColor: THEME.primary,
+    borderRadius: 11,
     alignItems: "center",
     justifyContent: "center",
-    minHeight: 52,
   },
 
-  previewBtnText: {
-    color: THEME.blue,
-    fontSize: 14,
-    fontWeight: "900",
+  previewButtonText: {
+    color: THEME.primary,
+    fontSize: 13,
+    fontWeight: "800",
   },
 
-  shareBtn: {
+  shareButton: {
     flex: 1,
-    backgroundColor: THEME.blue,
-    borderRadius: 17,
+    minHeight: 50,
+    backgroundColor: THEME.primary,
+    borderRadius: 11,
     alignItems: "center",
     justifyContent: "center",
-    minHeight: 52,
   },
 
-  shareBtnText: {
+  shareButtonText: {
     color: "#FFFFFF",
-    fontSize: 14,
-    fontWeight: "900",
+    fontSize: 13,
+    fontWeight: "800",
   },
 
   modalBackdrop: {
     flex: 1,
-    backgroundColor: "rgba(15,23,42,0.58)",
-    padding: 12,
+    backgroundColor: "rgba(16,24,40,0.60)",
+    padding: 10,
     justifyContent: "center",
   },
 
   previewCard: {
     flex: 1,
     backgroundColor: "#FFFFFF",
-    borderRadius: 24,
+    borderRadius: 16,
     overflow: "hidden",
   },
 
   previewHeader: {
-    backgroundColor: THEME.blue,
-    padding: 14,
+    minHeight: 62,
+    backgroundColor: "#FFFFFF",
+    borderBottomWidth: 1,
+    borderBottomColor: THEME.border,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
     flexDirection: "row",
-    justifyContent: "space-between",
     alignItems: "center",
+    gap: 10,
   },
 
-  previewKicker: {
-    color: "#BFDBFE",
-    fontSize: 11,
-    fontWeight: "900",
+  previewEyebrow: {
+    color: THEME.muted,
+    fontSize: 10,
+    fontWeight: "700",
     textTransform: "uppercase",
-    letterSpacing: 0.8,
+    letterSpacing: 0.45,
   },
 
   previewTitle: {
-    color: "#FFFFFF",
-    fontSize: 17,
-    fontWeight: "900",
+    color: THEME.text,
+    fontSize: 16,
+    fontWeight: "800",
     marginTop: 1,
   },
 
-  previewClose: {
-    backgroundColor: "rgba(255,255,255,0.15)",
-    paddingVertical: 9,
+  closeButton: {
+    minHeight: 38,
     paddingHorizontal: 13,
-    borderRadius: 999,
+    borderRadius: 9,
+    backgroundColor: THEME.soft,
+    borderWidth: 1,
+    borderColor: THEME.border,
+    alignItems: "center",
+    justifyContent: "center",
   },
 
-  previewCloseText: {
-    color: "#FFFFFF",
-    fontSize: 12,
-    fontWeight: "900",
+  closeButtonText: {
+    color: THEME.text,
+    fontSize: 11.5,
+    fontWeight: "700",
   },
 
   webview: {
@@ -2235,8 +2512,9 @@ const styles = StyleSheet.create({
   },
 
   previewFooter: {
-    padding: 12,
+    padding: 10,
     borderTopWidth: 1,
     borderTopColor: THEME.border,
+    backgroundColor: "#FFFFFF",
   },
 });
