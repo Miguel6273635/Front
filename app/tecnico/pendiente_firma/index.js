@@ -1830,15 +1830,38 @@ export default function PendienteFirmaIndex() {
             </TouchableOpacity>
         </View>
 
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filtersScroll}>
+        <View style={styles.filterModeRow}>
           {[["all", "Todas"], ["day", "Día"], ["weekRange", "Semana"], ["month", "Mes"], ["year", "Año"]].map(([mode, label]) => (
-            <TouchableOpacity key={mode} style={[styles.chip, dateMode === mode && styles.chipActive]} onPress={() => { setDateMode(mode); if (mode === "day") setShowDayPicker(true); if (mode === "weekRange") setShowWeekStartPicker(true); if (mode === "month") setShowMonthModal(true); if (mode === "year") setShowYearModal(true); }}>
-              <Text style={[styles.chipText, dateMode === mode && styles.chipTextActive]}>{label}</Text>
+            <TouchableOpacity
+              key={mode}
+              style={[styles.filterModeButton, dateMode === mode && styles.filterModeButtonActive]}
+              onPress={() => {
+                setDateMode(mode);
+                if (mode === "day") setShowDayPicker(true);
+                if (mode === "weekRange") setShowWeekStartPicker(true);
+                if (mode === "month") setShowMonthModal(true);
+                if (mode === "year") setShowYearModal(true);
+              }}
+              activeOpacity={0.85}
+            >
+              <Text style={[styles.filterModeText, dateMode === mode && styles.filterModeTextActive]}>
+                {label}
+              </Text>
             </TouchableOpacity>
           ))}
-          <TouchableOpacity style={styles.clearChip} onPress={clearFilters}><Text style={styles.clearChipText}>Limpiar</Text></TouchableOpacity>
-          <TouchableOpacity style={styles.reloadChip} onPress={refreshOrdenes0400}><Ionicons name="refresh-outline" size={15} color="#fff" /><Text style={styles.reloadChipText}>Recargar</Text></TouchableOpacity>
-        </ScrollView>
+        </View>
+
+        <View style={styles.filterActionsRow}>
+          <TouchableOpacity style={styles.clearFilterButton} onPress={clearFilters} activeOpacity={0.85}>
+            <Ionicons name="close-circle-outline" size={16} color={FIORI.ink} />
+            <Text style={styles.clearFilterButtonText}>Limpiar</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.reloadFilterButton} onPress={refreshOrdenes0400} activeOpacity={0.85}>
+            <Ionicons name="refresh-outline" size={16} color="#fff" />
+            <Text style={styles.reloadFilterButtonText}>Recargar</Text>
+          </TouchableOpacity>
+        </View>
         {showDayPicker && <DateTimePicker value={dayRef ?? new Date()} mode="date" display={Platform.OS === "ios" ? "inline" : "default"} onChange={(e, date) => { if (Platform.OS === "android") { setShowDayPicker(false); if (e.type !== "set") return; } if (date) setDayRef(date); if (Platform.OS === "ios") setShowDayPicker(true); }} />}
         {showWeekStartPicker && <DateTimePicker value={weekStart ?? new Date()} mode="date" display={Platform.OS === "ios" ? "inline" : "default"} onChange={(e, date) => { if (Platform.OS === "android") { setShowWeekStartPicker(false); if (e.type !== "set") return; } if (date) { setWeekStart(date); if (Platform.OS !== "ios") setShowWeekEndPicker(true); } if (Platform.OS === "ios") setShowWeekStartPicker(true); }} />}
         {showWeekEndPicker && <DateTimePicker value={weekEnd ?? weekStart ?? new Date()} mode="date" minimumDate={weekStart ?? undefined} display={Platform.OS === "ios" ? "inline" : "default"} onChange={(e, date) => { if (Platform.OS === "android") { setShowWeekEndPicker(false); if (e.type !== "set") return; } if (date) setWeekEnd(date); if (Platform.OS === "ios") setShowWeekEndPicker(true); }} />}
@@ -2152,15 +2175,52 @@ const styles = StyleSheet.create({
   historyRow: { flexDirection: 'row', gap: 10, marginTop: 12, paddingBottom: 4 },
   historyBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: FIORI.cardSubtle, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10, borderWidth: 1, borderColor: FIORI.border },
   historyBtnText: { fontSize: 12, fontWeight: '800', color: FIORI.ink },
-  filtersScroll: { gap: 8, paddingTop: 10, paddingRight: 12 },
-  chip: { borderWidth: 1, borderColor: FIORI.border, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 7, backgroundColor: FIORI.cardBg },
-  chipActive: { backgroundColor: FIORI.accent, borderColor: FIORI.accent },
-  chipText: { color: FIORI.ink, fontWeight: "700", fontSize: 12 },
-  chipTextActive: { color: "#fff" },
-  clearChip: { borderWidth: 1, borderColor: FIORI.border, backgroundColor: FIORI.neutralBtn, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 7 },
-  clearChipText: { color: FIORI.ink, fontWeight: "700", fontSize: 12 },
-  reloadChip: { flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: FIORI.accent, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 7 },
-  reloadChipText: { color: "#fff", fontWeight: "800", fontSize: 12 },
+  filterModeRow: {
+    flexDirection: "row",
+    gap: 6,
+    marginTop: 10,
+    padding: 4,
+    borderRadius: 14,
+    backgroundColor: FIORI.cardSubtle,
+    borderWidth: 1,
+    borderColor: FIORI.border,
+  },
+  filterModeButton: {
+    flex: 1,
+    minHeight: 38,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 4,
+  },
+  filterModeButtonActive: { backgroundColor: FIORI.accent },
+  filterModeText: { color: FIORI.textMuted, fontWeight: "800", fontSize: 11 },
+  filterModeTextActive: { color: "#FFFFFF" },
+  filterActionsRow: { flexDirection: "row", gap: 8, marginTop: 8 },
+  clearFilterButton: {
+    flex: 1,
+    minHeight: 38,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: FIORI.border,
+    backgroundColor: FIORI.neutralBtn,
+  },
+  clearFilterButtonText: { color: FIORI.ink, fontWeight: "800", fontSize: 12 },
+  reloadFilterButton: {
+    flex: 1,
+    minHeight: 38,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    borderRadius: 10,
+    backgroundColor: FIORI.accent,
+  },
+  reloadFilterButtonText: { color: "#fff", fontWeight: "800", fontSize: 12 },
   loadingWrap: { paddingTop: 28, alignItems: "center" },
   loadingText: { marginTop: 10, color: FIORI.textMuted, fontWeight: "700" },
   emptyBox: { marginTop: 28, alignItems: "center", padding: 20 },
