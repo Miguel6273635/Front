@@ -215,23 +215,28 @@ function buildStatusByOrderId(orders = []) {
 }
 
 /**
- * La lista completa se conserva. Solamente se seleccionan los
- * candidatos cuyos detalles pesados se intentarán precargar.
+ * Solamente se seleccionan los candidatos cuyos detalles pesados se intentarán precargar.
  *
- * Primero van los estados de trabajo activo y después las fechas más
- * cercanas al día actual. El orden final es estable por OrderId.
+ * Primero van las ordenes del díay después las fechas más
+ * cercanas al día actual priorizando las pendientes de firma
  */
 function getDetailPrefetchOrderIds(orders = []) {
-  const priorityByStatus = {
-    "0200": 0,
-    "0400": 1,
-    "0600": 2,
-    "0100": 3,
-  };
-
-  const now = Date.now();
   const uniqueOrders = new Map();
 
+  /*
+   * Normalizamos HOY a las 00:00.
+   *
+   * Esto permite comparar solamente el día de la orden
+   * y no la hora exacta.
+   */
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const todayMs = today.getTime();
+
+  /*
+   * Evitamos órdenes duplicadas.
+   */
   (Array.isArray(orders) ? orders : []).forEach((order) => {
     const orderId = String(
       order?.Orderid ||
@@ -245,13 +250,67 @@ function getDetailPrefetchOrderIds(orders = []) {
     }
   });
 
+  /*
+   * Determina el grupo de prioridad.
+   *
+   * 0 = órdenes de HOY
+   * 1 = órdenes anteriores PENDIENTES DE FIRMA (0400)
+   * 2 = demás órdenes anteriores
+   * 3 = órdenes posteriores a HOY
+   * 4 = órdenes sin fecha válida
+   */
+  const getPriorityGroup = (order) => {
+    const dateMs = parseOrderDateMs(order);
+
+    if (!Number.isFinite(dateMs)) {
+      return 4;
+    }
+
+    const orderDate = new Date(dateMs);
+    orderDate.setHours(0, 0, 0, 0);
+
+    const orderDayMs = orderDate.getTime();
+    const statusCode = getOrderStatusCode(order);
+
+    // PRIORIDAD PRINCIPAL:
+    // cualquier orden correspondiente al día actual.
+    if (orderDayMs === todayMs) {
+      return 0;
+    }
+
+    // Después de las de hoy:
+    // órdenes anteriores pendientes de firma.
+    if (
+      orderDayMs < todayMs &&
+      statusCode === "0400"
+    ) {
+      return 1;
+    }
+
+    // Después:
+    // cualquier otra orden anterior.
+    if (orderDayMs < todayMs) {
+      return 2;
+    }
+
+    // Finalmente:
+    // órdenes posteriores, que con nuestra ventana
+    // serán básicamente las de mañana.
+    if (orderDayMs > todayMs) {
+      return 3;
+    }
+
+    return 4;
+  };
+
   return Array.from(uniqueOrders.entries())
     .sort(([orderIdA, orderA], [orderIdB, orderB]) => {
-      const priorityA =
-        priorityByStatus[getOrderStatusCode(orderA)] ?? 10;
-      const priorityB =
-        priorityByStatus[getOrderStatusCode(orderB)] ?? 10;
+      const priorityA = getPriorityGroup(orderA);
+      const priorityB = getPriorityGroup(orderB);
 
+      /*
+       * Primero manda el grupo de prioridad.
+       */
       if (priorityA !== priorityB) {
         return priorityA - priorityB;
       }
@@ -259,17 +318,38 @@ function getDetailPrefetchOrderIds(orders = []) {
       const dateA = parseOrderDateMs(orderA);
       const dateB = parseOrderDateMs(orderB);
 
-      const distanceA = Number.isFinite(dateA)
-        ? Math.abs(dateA - now)
-        : Number.POSITIVE_INFINITY;
-      const distanceB = Number.isFinite(dateB)
-        ? Math.abs(dateB - now)
-        : Number.POSITIVE_INFINITY;
-
-      if (distanceA !== distanceB) {
-        return distanceA - distanceB;
+      /*
+       * Dentro de las órdenes anteriores queremos
+       * primero las más recientes:
+       *
+       * ayer
+       * hace 2 días
+       * hace 3 días
+       * ...
+       */
+      if (
+        priorityA === 1 ||
+        priorityA === 2
+      ) {
+        if (dateA !== dateB) {
+          return dateB - dateA;
+        }
       }
 
+      /*
+       * Para las órdenes futuras:
+       * primero la fecha más cercana.
+       */
+      if (priorityA === 3) {
+        if (dateA !== dateB) {
+          return dateA - dateB;
+        }
+      }
+
+      /*
+       * Si tienen exactamente la misma prioridad
+       * y fecha, mantenemos un orden estable.
+       */
       return orderIdA.localeCompare(orderIdB);
     })
     .slice(0, MAX_DETAIL_CACHE_ITEMS)

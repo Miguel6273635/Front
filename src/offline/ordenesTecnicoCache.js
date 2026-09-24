@@ -1,8 +1,8 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as FileSystem from "expo-file-system/legacy";
-// Ventana requerida: 30 días antes y 8 días después
-export const OFFLINE_DAYS_BEFORE = 30;
-export const OFFLINE_DAYS_AFTER = 8;
+// Ventana requerida: 15 días antes y 1 días después
+export const OFFLINE_DAYS_BEFORE = 15;
+export const OFFLINE_DAYS_AFTER = 1;
 // Tiempo durante el cual la información se considera actualizada.
 // 60 minutos × 60 segundos × 1000 milisegundos = 1 hora.
 export const ORDENES_CACHE_TTL_MS = 60 * 60 * 1000;
@@ -725,7 +725,7 @@ function sanitizeDetailForCache(detail) {
 
 /**
  * Decide si conviene guardar el detalle en offline:
- * solo si la orden está dentro de los 30 días anteriores
+ * solo si la orden está dentro de los 15 días anteriores
  * o los 8 días posteriores a la fecha actual.
  */
 export function shouldCacheDetailByOrder(orderLike, baseDate = new Date()) {
