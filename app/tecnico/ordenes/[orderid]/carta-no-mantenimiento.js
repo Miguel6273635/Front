@@ -13,6 +13,7 @@ import {
 import Header from "../../../../src/components/Header";
 import { useLocalSearchParams, router } from "expo-router";
 import { useAuth } from "../../../../src/context/AuthContext";
+import { useOrdenesTecnico } from "../../../../src/context/OrdenesTecnicoContext";
 
 import {
   fetchDatosNoMantenimiento,
@@ -41,6 +42,7 @@ const STATUS_CARTA_NO_MANTTO = "0600";
 export default function CartaNoMantenimientoForm() {
   const { orderid } = useLocalSearchParams();
   const { user, ensureValidToken } = useAuth();
+  const { reloadLocalStatus } = useOrdenesTecnico();
 
   const [loading, setLoading] = useState(true);
   const [datos, setDatos] = useState(null);
@@ -57,6 +59,26 @@ export default function CartaNoMantenimientoForm() {
       user?.preferred_username ||
       "unknown",
   ).trim();
+
+  const volverAlDetalleOrden = async (orderIdValue = null) => {
+    const id = String(orderIdValue || orderid || "").trim();
+
+    if (!id) {
+      router.replace("/tecnico/ordenes");
+      return;
+    }
+
+    try {
+      await reloadLocalStatus();
+    } catch (error) {
+      console.log(
+        "[CARTA NO MANTTO] No se pudo actualizar el contexto antes de volver al detalle:",
+        error?.message || error,
+      );
+    }
+
+    router.replace(`/tecnico/ordenes/${id}`);
+  };
 
   const fechaProgramadaDDMMYYYY = useMemo(() => {
     if (!datos?.StartDate) return "";
@@ -217,8 +239,8 @@ export default function CartaNoMantenimientoForm() {
           `La orden #${orderId} fue marcada como NO MANTENIMIENTO`,
           [
             {
-              text: "OK",
-              onPress: () => router.replace("/tecnico/ordenes"),
+              text: "Volver al detalle",
+              onPress: () => volverAlDetalleOrden(orderId),
             },
           ],
         );
@@ -230,8 +252,8 @@ export default function CartaNoMantenimientoForm() {
           `La carta se guardó, pero SAP no confirmó el cambio a 0600 para la orden #${orderId}. Revisa logs o intenta más tarde.`,
           [
             {
-              text: "OK",
-              onPress: () => router.replace("/tecnico/ordenes"),
+              text: "Volver al detalle",
+              onPress: () => volverAlDetalleOrden(orderId),
             },
           ],
         );

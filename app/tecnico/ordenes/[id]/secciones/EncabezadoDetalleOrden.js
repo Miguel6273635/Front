@@ -82,6 +82,8 @@ export default function EncabezadoDetalleOrden({
   msToHMS,
   statusCode: statusCodeProp,
   statusLabel: statusLabelProp,
+  onOpenTbmky,
+  onOpenNoMantto,
 }) {
   const statusCode = normalizeCode(
     statusCodeProp || orden?.estatus_code || orden?.userstatus || "",
@@ -95,6 +97,13 @@ export default function EncabezadoDetalleOrden({
   const isCartaNoMantto = statusCode === "0600" || !!isNoMant;
   const isPendingFirma0400 = statusCode === "0400";
   const isFinished0300 = statusCode === "0300" || !!isOrderFinished;
+
+  // Acciones disponibles según el flujo actual de la orden.
+  // 0100: ya hizo check-in y puede continuar con TBM/KY o Carta No Mantto.
+  // 0200: el TBM/KY ya fue realizado, pero se mantiene acceso al formulario.
+  const canOpenTbmky = statusCode === "0100" || statusCode === "0200";
+  const canOpenNoMantto = statusCode === "0100";
+  const showServiceActions = canOpenTbmky || canOpenNoMantto;
 
   const correoCliente =
     String(
@@ -147,8 +156,7 @@ export default function EncabezadoDetalleOrden({
           title='Orden marcada como "Carta No Mantto"'
           text="Las operaciones se muestran solo como referencia y no se pueden iniciar."
           FIORI={FIORI}
-        >
-        </Banner>
+        />
       )}
 
       {!isCartaNoMantto && isPendingFirma0400 && (
@@ -161,14 +169,112 @@ export default function EncabezadoDetalleOrden({
       )}
 
       {!isCartaNoMantto &&
-        statusCode !== "0200" &&
-        statusCode !== "0400" &&
+        statusCode === "0100" &&
+        !isFinished0300 && (
+          <View style={local.nextStepPanel}>
+            <View style={local.nextStepBadge}>
+              <Ionicons
+                name="arrow-forward-circle-outline"
+                size={16}
+                color={FIORI.brand}
+              />
+              <Text style={[local.nextStepBadgeText, { color: FIORI.brand }]}>
+                SIGUIENTE PASO
+              </Text>
+            </View>
+
+            <View style={local.nextStepHeader}>
+              <View
+                style={[
+                  local.nextStepIcon,
+                  { backgroundColor: FIORI.brandSoft },
+                ]}
+              >
+                <Ionicons
+                  name="checkmark-circle-outline"
+                  size={22}
+                  color={FIORI.brand}
+                />
+              </View>
+
+              <View style={{ flex: 1 }}>
+                <Text style={local.nextStepTitle}>
+                  Check-in completado
+                </Text>
+              </View>
+            </View>
+
+            <View style={local.nextStepActions}>
+              <TouchableOpacity
+                style={[
+                  local.nextStepPrimaryButton,
+                  { backgroundColor: FIORI.brand },
+                ]}
+                onPress={onOpenTbmky}
+                activeOpacity={0.88}
+              >
+                <Ionicons
+                  name="shield-checkmark-outline"
+                  size={19}
+                  color="#FFFFFF"
+                />
+
+                <View style={{ flex: 1 }}>
+                  <Text style={local.nextStepPrimaryTitle}>
+                    Realizar TBM/KY
+                  </Text>
+
+                  <Text style={local.nextStepPrimarySubtitle}>
+                    Continuar con el mantenimiento
+                  </Text>
+                </View>
+
+                <Ionicons
+                  name="chevron-forward"
+                  size={18}
+                  color="#FFFFFF"
+                />
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={local.nextStepSecondaryButton}
+                onPress={onOpenNoMantto}
+                activeOpacity={0.88}
+              >
+                <Ionicons
+                  name="document-text-outline"
+                  size={19}
+                  color="#B42318"
+                />
+
+                <View style={{ flex: 1 }}>
+                  <Text style={local.nextStepSecondaryTitle}>
+                    Carta No Mantto
+                  </Text>
+
+                  <Text style={local.nextStepSecondarySubtitle}>
+                    Registrar que el servicio no puede realizarse
+                  </Text>
+                </View>
+
+                <Ionicons
+                  name="chevron-forward"
+                  size={18}
+                  color="#B42318"
+                />
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
+
+      {!isCartaNoMantto &&
+        !statusCode &&
         !checkinDone &&
         !isFinished0300 && (
           <Banner
             icon="lock-closed-outline"
             title="Operaciones bloqueadas"
-            text="Primero debes hacer Check-in y el formulario TBMK/Y."
+            text="Primero debes realizar el Check-in."
             FIORI={FIORI}
           />
         )}
@@ -183,17 +289,15 @@ export default function EncabezadoDetalleOrden({
       )}
 
       <View style={local.panel}>
-       
-
         <View style={local.cleanCard}>
           <MiniInfo
             icon="business-outline"
             label="Equipo"
             value={
-                orden?.equipment ||
-                orden?.Equipment ||
-                orden?.EQUIPMENT
-              }
+              orden?.equipment ||
+              orden?.Equipment ||
+              orden?.EQUIPMENT
+            }
             FIORI={FIORI}
             formatValueForRow={formatValueForRow}
           />
@@ -296,14 +400,83 @@ export default function EncabezadoDetalleOrden({
         )}
       </View>
 
-      
-      
+      {showServiceActions && statusCode !== "0100" && (
+        <View style={local.serviceActionsPanel}>
+          <View style={local.serviceActionsHeader}>
+            <View
+              style={[
+                local.serviceActionsIcon,
+                { backgroundColor: FIORI.brandSoft },
+              ]}
+            >
+              <Ionicons
+                name="options-outline"
+                size={20}
+                color={FIORI.brand}
+              />
+            </View>
+
+            <View style={{ flex: 1 }}>
+              <Text style={local.serviceActionsTitle}>
+                Acciones de servicio
+              </Text>
+
+              <Text style={local.serviceActionsSubtitle}>
+                Selecciona el proceso que necesitas realizar para esta orden.
+              </Text>
+            </View>
+          </View>
+
+          <View style={local.serviceActionsRow}>
+            {canOpenTbmky && (
+              <TouchableOpacity
+                style={[
+                  local.serviceActionButton,
+                  { backgroundColor: FIORI.brand },
+                ]}
+                onPress={onOpenTbmky}
+                activeOpacity={0.88}
+              >
+                <Ionicons
+                  name="shield-checkmark-outline"
+                  size={18}
+                  color="#FFFFFF"
+                />
+
+                <Text style={local.serviceActionPrimaryText}>
+                  {statusCode === "0200" ? "Ver TBM/KY" : "Realizar TBM/KY"}
+                </Text>
+              </TouchableOpacity>
+            )}
+
+            {canOpenNoMantto && (
+              <TouchableOpacity
+                style={[
+                  local.serviceActionButton,
+                  local.serviceActionSecondary,
+                ]}
+                onPress={onOpenNoMantto}
+                activeOpacity={0.88}
+              >
+                <Ionicons
+                  name="document-text-outline"
+                  size={18}
+                  color="#B42318"
+                />
+
+                <Text style={local.serviceActionSecondaryText}>
+                  Carta No Mantto
+                </Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        </View>
+      )}
+
       <FormatosOrdenMultiSelect
         FIORI={FIORI}
         orderid={orden?.Orderid || id}
       />
-      
-      
 
       <Text style={styles?.sectionKicker || local.sectionKicker}>
         Operaciones asignadas
@@ -562,6 +735,185 @@ const local = StyleSheet.create({
     color: "#FFFFFF",
     fontWeight: "900",
     fontSize: 12,
+  },
+
+  serviceActionsPanel: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: "#DDE6F2",
+    padding: 14,
+    marginBottom: 12,
+  },
+
+  serviceActionsHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    marginBottom: 12,
+  },
+
+  serviceActionsIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 14,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  serviceActionsTitle: {
+    fontSize: 14,
+    fontWeight: "900",
+    color: "#0B1F3B",
+  },
+
+  serviceActionsSubtitle: {
+    marginTop: 3,
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: "700",
+    color: "#63718B",
+  },
+
+  serviceActionsRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 10,
+  },
+
+  serviceActionButton: {
+    flexGrow: 1,
+    flexBasis: 150,
+    minHeight: 46,
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 11,
+    flexDirection: "row",
+    justifyContent: "center",
+    alignItems: "center",
+    gap: 7,
+  },
+
+  serviceActionSecondary: {
+    backgroundColor: "#FFF6F5",
+    borderWidth: 1,
+    borderColor: "#F3C7C2",
+  },
+
+  serviceActionPrimaryText: {
+    color: "#FFFFFF",
+    fontWeight: "900",
+    fontSize: 12,
+  },
+
+  serviceActionSecondaryText: {
+    color: "#B42318",
+    fontWeight: "900",
+    fontSize: 12,
+  },
+
+  nextStepPanel: {
+    backgroundColor: "#EEF6FF",
+    borderRadius: 20,
+    borderWidth: 2,
+    borderColor: "#0A6ED1",
+    padding: 15,
+    marginBottom: 14,
+  },
+
+  nextStepBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginBottom: 10,
+  },
+
+  nextStepBadgeText: {
+    fontSize: 11,
+    fontWeight: "900",
+    letterSpacing: 0.7,
+  },
+
+  nextStepHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    marginBottom: 14,
+  },
+
+  nextStepIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 15,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  nextStepTitle: {
+    fontSize: 16,
+    fontWeight: "900",
+    color: "#0B1F3B",
+  },
+
+  nextStepText: {
+    marginTop: 3,
+    fontSize: 12.5,
+    lineHeight: 18,
+    fontWeight: "700",
+    color: "#63718B",
+  },
+
+  nextStepActions: {
+    gap: 10,
+  },
+
+  nextStepPrimaryButton: {
+    minHeight: 58,
+    borderRadius: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+
+  nextStepPrimaryTitle: {
+    color: "#FFFFFF",
+    fontSize: 13,
+    fontWeight: "900",
+  },
+
+  nextStepPrimarySubtitle: {
+    marginTop: 2,
+    color: "rgba(255,255,255,0.82)",
+    fontSize: 11,
+    fontWeight: "700",
+  },
+
+  nextStepSecondaryButton: {
+    minHeight: 58,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#F3C7C2",
+    backgroundColor: "#FFF6F5",
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+
+  nextStepSecondaryTitle: {
+    color: "#B42318",
+    fontSize: 13,
+    fontWeight: "900",
+  },
+
+  nextStepSecondarySubtitle: {
+    marginTop: 2,
+    color: "#8A4B45",
+    fontSize: 11,
+    fontWeight: "700",
   },
 
   sectionKicker: {

@@ -2104,6 +2104,31 @@ export default function DetalleOrden() {
     });
   };
 
+  const irATbmkyDesdeDetalle = () => {
+    const orderId = String(orden?.Orderid || id || "").trim();
+
+    if (!orderId) {
+      Alert.alert("Error", "No se encontró el número de orden.");
+      return;
+    }
+
+    router.push(`/tecnico/ordenes/${orderId}/formulario-riesgos`);
+  };
+
+  const irACartaNoMantenimientoDesdeDetalle = () => {
+    const orderId = String(orden?.Orderid || id || "").trim();
+
+    if (!orderId) {
+      Alert.alert("Error", "No se encontró el número de orden.");
+      return;
+    }
+
+    router.push({
+      pathname: "/tecnico/ordenes/[orderid]/carta-no-mantenimiento",
+      params: { orderid: orderId },
+    });
+  };
+
   const iniciarOrden = async () => {
     if (!orden?.Orderid) return;
 
@@ -3572,6 +3597,8 @@ export default function DetalleOrden() {
             msToHMS={msToHMS}
             statusCode={statusCode}
             statusLabel={statusLabel}
+            onOpenTbmky={irATbmkyDesdeDetalle}
+            onOpenNoMantto={irACartaNoMantenimientoDesdeDetalle}
           />
         }
         renderItem={() => {

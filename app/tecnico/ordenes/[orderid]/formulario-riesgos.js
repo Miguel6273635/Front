@@ -30,6 +30,7 @@ import {
   normalizeEquipmentType,
 } from "../../../../src/services/equipmentType";
 import { useAuth } from "../../../../src/context/AuthContext";
+import { useOrdenesTecnico } from "../../../../src/context/OrdenesTecnicoContext";
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
@@ -277,10 +278,31 @@ export default function FormularioRiesgosScreen() {
   const orderid = String(params.orderid ?? params.id ?? "");
 
   const { user, ensureValidToken } = useAuth();
+  const { reloadLocalStatus } = useOrdenesTecnico();
 
   const userEmail = useMemo(() => {
     return user?.correo || user?.email || user?.username || null;
   }, [user]);
+
+  const volverAlDetalleOrden = async () => {
+    const id = String(orderid || "").trim();
+
+    if (!id) {
+      router.replace("/tecnico/ordenes");
+      return;
+    }
+
+    try {
+      await reloadLocalStatus();
+    } catch (error) {
+      console.log(
+        "[TBMKY] No se pudo actualizar el contexto antes de volver al detalle:",
+        error?.message || error,
+      );
+    }
+
+    router.replace(`/tecnico/ordenes/${id}`);
+  };
 
   const scrollRef = useRef(null);
   const signatureRef = useRef(null);
@@ -1560,10 +1582,11 @@ export default function FormularioRiesgosScreen() {
 
   const openPdfModal = () => setShowPdfModal(true);
 
-  const closePdfModal = () => {
+  const closePdfModal = async () => {
     setShowPdfModal(false);
     setLockedAfterPdf(true);
-    router.replace("/tecnico/ordenes");
+
+    await volverAlDetalleOrden();
   };
 
   const abrirPdfEnVisor = async () => {
@@ -1902,8 +1925,8 @@ export default function FormularioRiesgosScreen() {
               onPress: openPdfModal,
             },
             {
-              text: "Ir a órdenes",
-              onPress: () => router.replace("/tecnico/ordenes"),
+              text: "Volver al detalle",
+              onPress: volverAlDetalleOrden,
             },
           ],
         );
@@ -1997,8 +2020,8 @@ export default function FormularioRiesgosScreen() {
             onPress: openPdfModal,
           },
           {
-            text: "Ir a órdenes",
-            onPress: () => router.replace("/tecnico/ordenes"),
+            text: "Volver al detalle",
+            onPress: volverAlDetalleOrden,
           },
         ],
       );
