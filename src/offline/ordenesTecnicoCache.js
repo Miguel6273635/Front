@@ -1,6 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as FileSystem from "expo-file-system/legacy";
-// Ventana requerida: 15 días antes y 1 días después
+// Ventana requerida: 15 días antes y 1 día después
 export const OFFLINE_DAYS_BEFORE = 15;
 export const OFFLINE_DAYS_AFTER = 1;
 // Tiempo durante el cual la información se considera actualizada.

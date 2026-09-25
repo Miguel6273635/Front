@@ -18,6 +18,7 @@ import {
   Pressable,
   TextInput,
   ScrollView,
+  Alert,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import Header from "../../../src/components/Header";
@@ -53,6 +54,21 @@ const endOfMonth = (d) =>
 
 const startOfYear = (y) => new Date(y, 0, 1, 0, 0, 0, 0);
 const endOfYear = (y) => new Date(y, 11, 31, 23, 59, 59, 999);
+
+const addDays = (date, days) => {
+  const d = new Date(date);
+  d.setDate(d.getDate() + days);
+  return d;
+};
+
+const buildSupervisorWindow = (baseDate = new Date()) => {
+  const today = atStartOfDay(baseDate);
+
+  return {
+    start: atStartOfDay(addDays(today, -15)),
+    end: atEndOfDay(addDays(today, 15)),
+  };
+};
 
 const ymd = (d) => {
   const y = d.getFullYear();
@@ -421,7 +437,7 @@ export default function ListaOrdenesSupervisor() {
   const [ordenes, setOrdenes] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  const [dateMode, setDateMode] = useState("all");
+  const [dateMode, setDateMode] = useState("day");
 
   const [dayRef, setDayRef] = useState(new Date());
   const [showDayPicker, setShowDayPicker] = useState(false);
@@ -452,6 +468,11 @@ export default function ListaOrdenesSupervisor() {
 
   const requestIdRef = useRef(0);
   const lastPrefetchKeyRef = useRef("");
+  const initialWindowRef = useRef(buildSupervisorWindow());
+  const [loadedRange, setLoadedRange] = useState(() => ({
+    start: initialWindowRef.current.start,
+    end: initialWindowRef.current.end,
+  }));
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedQuery(query.trim()), 180);
@@ -459,16 +480,14 @@ export default function ListaOrdenesSupervisor() {
   }, [query]);
 
   /* =========================================================
-     RANGO SOLO PARA CARGAR DESDE API
-     - Cargamos siempre el año completo seleccionado
-     - Después filtramos en frontend por startdate
+     RANGO INICIAL DEL SUPERVISOR
+     - 15 días antes de hoy
+     - 15 días después de hoy
+
+     Los periodos fuera de esta ventana se consultan bajo demanda
+     cuando el usuario elige Día / Semana / Mes / Año.
      ========================================================= */
-  const { loadStart, loadEnd } = useMemo(() => {
-    return {
-      loadStart: startOfYear(yearOnly),
-      loadEnd: endOfYear(yearOnly),
-    };
-  }, [yearOnly]);
+  const initialWindow = initialWindowRef.current;
 
   /* =========================================================
      RANGO DE FILTRO FRONTEND USANDO FECHA DE INICIO
@@ -515,8 +534,6 @@ export default function ListaOrdenesSupervisor() {
   const canLoadCurrentRange = useMemo(() => true, []);
 
   const activeRangeText = useMemo(() => {
-    if (dateMode === "all") return `Todas del año ${yearOnly}`;
-
     if (dateMode === "day") {
       return `Día: ${atStartOfDay(dayRef).toLocaleDateString()}`;
     }
@@ -560,87 +577,129 @@ export default function ListaOrdenesSupervisor() {
     };
   }, []);
 
-  const didPrefetchRef = useRef(false);
+  const isRangeCovered = useCallback(
+    (start, end) => {
+      if (!(start instanceof Date) || !(end instanceof Date)) return false;
+      if (!(loadedRange?.start instanceof Date) || !(loadedRange?.end instanceof Date)) {
+        return false;
+      }
 
-  useEffect(() => {
-    if (didPrefetchRef.current) return;
-    didPrefetchRef.current = true;
+      return (
+        atStartOfDay(start) >= atStartOfDay(loadedRange.start) &&
+        atEndOfDay(end) <= atEndOfDay(loadedRange.end)
+      );
+    },
+    [loadedRange],
+  );
 
-    (async () => {
+  const cargarRango = useCallback(
+    async (start, end, { force = false } = {}) => {
+      if (!(start instanceof Date) || !(end instanceof Date)) return;
+
+      const currentRequestId = ++requestIdRef.current;
+
       try {
-        const t = new Date();
-        const currentYearNow = t.getFullYear();
+        setLoading(true);
 
-        await fetchOrdenesSupervisor(
-          ymd(startOfYear(currentYearNow)),
-          ymd(endOfYear(currentYearNow)),
-          "range",
+        const sStr = ymd(start);
+        const eStr = ymd(end);
+
+        const online = await isOnline();
+
+        /*
+         * Si no hay conexión, fetchOrdenesSupervisor intentará usar
+         * la caché exacta de ese rango. Si nunca se consultó antes,
+         * simplemente regresará un arreglo vacío.
+         */
+        const data = await fetchOrdenesSupervisor(sStr, eStr, "range");
+
+        if (currentRequestId !== requestIdRef.current) return;
+
+        let arr = [];
+        if (Array.isArray(data)) arr = data;
+        else if (Array.isArray(data?.d?.results)) arr = data.d.results;
+        else if (Array.isArray(data?.results)) arr = data.results;
+
+        const normalized = arr.map(normalizeOrdenItem).filter(Boolean);
+
+        if (!online && normalized.length === 0 && !force) {
+          Alert.alert(
+            "Sin conexión",
+            "Este periodo no está disponible en la caché. Conéctate a internet para consultarlo.",
+          );
+          return;
+        }
+
+        setOrdenes(normalized);
+        setLoadedRange({
+          start: atStartOfDay(start),
+          end: atEndOfDay(end),
+        });
+
+        if (online && normalized.length) {
+          const prefetchKey = `${sStr}|${eStr}|${normalized.length}`;
+
+          if (lastPrefetchKeyRef.current !== prefetchKey) {
+            lastPrefetchKeyRef.current = prefetchKey;
+
+            const ids = normalized.map((x) => x?.orderid).filter(Boolean);
+
+            /*
+             * Se mantiene el límite actual de 25 detalles.
+             * La lista puede contener más órdenes, pero sólo estas
+             * primeras candidatas intentan precargar detalle + operaciones.
+             */
+            prefetchDetallesDeOrdenes(ids);
+          }
+        }
+      } catch (error) {
+        if (currentRequestId !== requestIdRef.current) return;
+
+        console.error(
+          "Error al cargar órdenes supervisor:",
+          error?.message || error,
         );
-      } catch {}
-    })();
-  }, []);
 
-  const cargar = useCallback(async () => {
-    if (!canLoadCurrentRange) {
-      setOrdenes([]);
-      setLoading(false);
-      return;
-    }
-
-    const currentRequestId = ++requestIdRef.current;
-
-    try {
-      setLoading(true);
-
-      const sStr = ymd(loadStart);
-      const eStr = ymd(loadEnd);
-
-      const data = await fetchOrdenesSupervisor(sStr, eStr, "range");
-
-      if (currentRequestId !== requestIdRef.current) return;
-
-      let arr = [];
-      if (Array.isArray(data)) arr = data;
-      else if (Array.isArray(data?.d?.results)) arr = data.d.results;
-      else if (Array.isArray(data?.results)) arr = data.results;
-
-      const normalized = arr.map(normalizeOrdenItem).filter(Boolean);
-      setOrdenes(normalized);
-
-      const online = await isOnline();
-
-      if (online && normalized.length) {
-        const prefetchKey = `${sStr}|${eStr}|yearload|${normalized.length}`;
-
-        if (lastPrefetchKeyRef.current !== prefetchKey) {
-          lastPrefetchKeyRef.current = prefetchKey;
-
-          const ids = normalized.map((x) => x?.orderid).filter(Boolean);
-          prefetchDetallesDeOrdenes(ids);
+        setOrdenes([]);
+      } finally {
+        if (currentRequestId === requestIdRef.current) {
+          setLoading(false);
         }
       }
-    } catch (error) {
-      if (currentRequestId !== requestIdRef.current) return;
+    },
+    [],
+  );
 
-      console.error(
-        "Error al cargar órdenes supervisor:",
-        error?.message || error,
-      );
+  const ensureRangeLoaded = useCallback(
+    async (start, end) => {
+      if (!(start instanceof Date) || !(end instanceof Date)) return;
 
-      setOrdenes([]);
-    } finally {
-      if (currentRequestId === requestIdRef.current) {
-        setLoading(false);
+      if (isRangeCovered(start, end)) {
+        return;
       }
-    }
-  }, [loadStart, loadEnd, canLoadCurrentRange]);
 
+      await cargarRango(start, end);
+    },
+    [cargarRango, isRangeCovered],
+  );
+
+  /*
+   * Carga inicial única:
+   * solamente 15 días antes y 15 días después de la fecha actual.
+   */
   useEffect(() => {
-    if (!canLoadCurrentRange) return;
-    cargar();
-  }, [cargar, canLoadCurrentRange]);
+    cargarRango(initialWindow.start, initialWindow.end);
+    // La ventana inicial queda fijada al montar la pantalla.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  const onRefresh = () => cargar();
+  const onRefresh = () => {
+    /*
+     * Recarga exactamente el periodo que ya está cargado.
+     * Así no vuelve a pedir automáticamente todo el año.
+     */
+    cargarRango(loadedRange.start, loadedRange.end, { force: true });
+  };
 
   const filteredOrdenes = useMemo(() => {
     const q = debouncedQuery.toLowerCase();
@@ -683,21 +742,19 @@ export default function ListaOrdenesSupervisor() {
           ? o.startdate
           : sapDateToMs(o?.StartDate ?? o?.startdate);
 
-      if (dateMode !== "all") {
-        if (startMs === null || startMs === undefined) {
-          matchesDate = false;
-        } else {
-          const orderStart = new Date(startMs);
-          const orderStartDay = atStartOfDay(orderStart);
+      if (startMs === null || startMs === undefined) {
+        matchesDate = false;
+      } else {
+        const orderStart = new Date(startMs);
+        const orderStartDay = atStartOfDay(orderStart);
 
-          if (
-            frontendDateFilter.start instanceof Date &&
-            frontendDateFilter.end instanceof Date
-          ) {
-            matchesDate =
-              orderStartDay >= atStartOfDay(frontendDateFilter.start) &&
-              orderStartDay <= atEndOfDay(frontendDateFilter.end);
-          }
+        if (
+          frontendDateFilter.start instanceof Date &&
+          frontendDateFilter.end instanceof Date
+        ) {
+          matchesDate =
+            orderStartDay >= atStartOfDay(frontendDateFilter.start) &&
+            orderStartDay <= atEndOfDay(frontendDateFilter.end);
         }
       }
 
@@ -744,74 +801,72 @@ export default function ListaOrdenesSupervisor() {
           {
             backgroundColor: tone.bg,
             borderColor: tone.border,
+            borderLeftColor: st.color,
           },
         ]}
         onPress={() => router.push(`/supervisor/ordenes/${item.orderid}`)}
-        activeOpacity={0.92}
+        activeOpacity={0.9}
       >
-        <View style={[styles.cardModernBar, { backgroundColor: st.color }]} />
-
-        <View style={styles.cardModernContent}>
+        <View style={styles.cardTopRow}>
           <Text
             style={styles.cardModernTitle}
             numberOfLines={1}
             ellipsizeMode="tail"
           >
-            #{item.orderid} - {item.nombre_orden || "SM01"}
+            #{item.orderid}{" "}
+            <Text style={styles.cardModernSubtitle}>
+              • {item.nombre_orden || "SM01"}
+            </Text>
           </Text>
 
-          <Text style={styles.cardModernText} numberOfLines={1}>
-            Equipo: {item.equipment || "—"}
-          </Text>
-
-          {!!item.nombre_mecanico && item.nombre_mecanico !== "—" ? (
-            <Text style={styles.cardModernText} numberOfLines={1}>
-              Técnico: {item.nombre_mecanico}
-            </Text>
-          ) : null}
-
-          {!!item.id_mecanico && item.id_mecanico !== "—" ? (
-            <Text style={styles.cardModernText} numberOfLines={1}>
-              Nómina: {item.id_mecanico}
-            </Text>
-          ) : null}
-
-          {!!item.nombre_cliente && item.nombre_cliente !== "—" ? (
-            <Text
-              style={styles.cardModernText}
-              numberOfLines={1}
-              ellipsizeMode="tail"
-            >
-              Cliente: {item.nombre_cliente}
-            </Text>
-          ) : null}
-
-          <View style={styles.statusInfoRow}>
+          <View style={[styles.statusBadge, { backgroundColor: `${st.color}1A` }]}>
             <View style={[styles.statusDot, { backgroundColor: st.color }]} />
-
-            <View style={styles.statusInfoTexts}>
-              <View style={styles.dateRow}>
-                <Text style={styles.cardModernText}>
-                  Inicio: {formatSapMsAsDMY(startMs)}
-                </Text>
-
-                <Text style={styles.cardModernText}>
-                  Fin: {formatSapMsAsDMY(finishMs)}
-                </Text>
-              </View>
-
-              <Text style={styles.cardModernText}>Estatus: {st.label}</Text>
-            </View>
-          </View>
-
-          <View style={styles.bottomActionRow}>
-            {showBlockedMessage ? (
-              <Text style={styles.blockedText}>
-                Orden bloqueada por estatus.
-              </Text>
-            ) : null}
+            <Text
+              style={[styles.statusBadgeText, { color: st.color }]}
+              numberOfLines={1}
+            >
+              {st.label}
+            </Text>
           </View>
         </View>
+
+        <View style={styles.cardMiddleRow}>
+          <Text style={styles.compactInfoText} numberOfLines={1}>
+            <Text style={styles.compactInfoStrong}>Equipo: </Text>
+            {item.equipment || "—"}
+          </Text>
+
+          <Text style={styles.compactDateText} numberOfLines={1}>
+            {formatSapMsAsDMY(startMs)} - {formatSapMsAsDMY(finishMs)}
+          </Text>
+        </View>
+
+        <View style={styles.cardMiddleRow}>
+          <Text style={styles.compactInfoText} numberOfLines={1}>
+            <Text style={styles.compactInfoStrong}>Técnico: </Text>
+            {item.nombre_mecanico || "—"}
+          </Text>
+
+          <Text style={styles.compactNominaText} numberOfLines={1}>
+            <Text style={styles.compactInfoStrong}>Nómina: </Text>
+            {item.id_mecanico || "—"}
+          </Text>
+        </View>
+
+        <Text
+          style={styles.clientText}
+          numberOfLines={1}
+          ellipsizeMode="tail"
+        >
+          <Text style={styles.compactInfoStrong}>Cliente: </Text>
+          {item.nombre_cliente || "—"}
+        </Text>
+
+        {showBlockedMessage ? (
+          <Text style={styles.blockedText} numberOfLines={1}>
+            Orden bloqueada por estatus.
+          </Text>
+        ) : null}
       </TouchableOpacity>
     );
   };
@@ -852,26 +907,6 @@ export default function ListaOrdenesSupervisor() {
         </View>
 
         <View style={styles.chipsRow}>
-          <TouchableOpacity
-            style={[styles.chip, dateMode === "all" && styles.chipActive]}
-            onPress={() => {
-              setDateMode("all");
-              setShowMonthPicker(false);
-              setShowYearPicker(false);
-              setShowDayPicker(false);
-              setShowWeekStartPicker(false);
-              setShowWeekEndPicker(false);
-            }}
-          >
-            <Text
-              style={[
-                styles.chipText,
-                dateMode === "all" && styles.chipTextActive,
-              ]}
-            >
-              Todas
-            </Text>
-          </TouchableOpacity>
 
           <TouchableOpacity
             style={[styles.chip, dateMode === "day" && styles.chipActive]}
@@ -994,7 +1029,10 @@ export default function ListaOrdenesSupervisor() {
                 return;
               }
 
-              if (date) setDayRef(date);
+              if (date) {
+                setDayRef(date);
+                ensureRangeLoaded(atStartOfDay(date), atEndOfDay(date));
+              }
               setShowDayPicker(Platform.OS === "ios");
             }}
           />
@@ -1033,7 +1071,15 @@ export default function ListaOrdenesSupervisor() {
                 return;
               }
 
-              if (date) setWeekEnd(date);
+              if (date) {
+                setWeekEnd(date);
+
+                const start = weekStart ?? date;
+                ensureRangeLoaded(
+                  atStartOfDay(start),
+                  atEndOfDay(date),
+                );
+              }
               setShowWeekEndPicker(Platform.OS === "ios");
             }}
           />
@@ -1168,9 +1214,16 @@ export default function ListaOrdenesSupervisor() {
                     key={m}
                     style={[styles.monthCell, active && styles.monthCellActive]}
                     onPress={() => {
+                      const selectedMonth = new Date(monthYear.year, idx, 1);
+
                       setMonthYear({ month: idx, year: monthYear.year });
                       setYearOnly(monthYear.year);
                       setShowMonthPicker(false);
+
+                      ensureRangeLoaded(
+                        startOfMonth(selectedMonth),
+                        endOfMonth(selectedMonth),
+                      );
                     }}
                   >
                     <Text
@@ -1220,6 +1273,11 @@ export default function ListaOrdenesSupervisor() {
                     onPress={() => {
                       setYearOnly(year);
                       setShowYearPicker(false);
+
+                      ensureRangeLoaded(
+                        startOfYear(year),
+                        endOfYear(year),
+                      );
                     }}
                   >
                     <Text
@@ -1323,51 +1381,65 @@ const styles = StyleSheet.create({
 
   clearBtn: { marginLeft: 8 },
 
+  /*
+   * Filtros de fecha estilo segmentado, igual que en técnico.
+   * Los 4 botones ocupan todo el ancho disponible de la pantalla.
+   */
   chipsRow: {
     flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 8,
     alignItems: "center",
+    gap: 6,
+    padding: 4,
+    borderRadius: 14,
+    backgroundColor: "#F5F7FA",
+    borderWidth: 1,
+    borderColor: COLORS.border,
   },
 
   chip: {
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    backgroundColor: COLORS.cardBg,
+    flex: 1,
+    minHeight: 38,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 4,
+    paddingVertical: 0,
+    backgroundColor: "transparent",
+    borderWidth: 0,
   },
 
   chipActive: {
     backgroundColor: COLORS.accent,
-    borderColor: COLORS.accent,
   },
 
   chipText: {
-    color: COLORS.title,
-    fontWeight: "600",
+    color: COLORS.muted,
+    fontWeight: "800",
+    fontSize: 12,
+    textAlign: "center",
   },
 
   chipTextActive: {
-    color: "#fff",
+    color: "#FFFFFF",
   },
 
   actionsRow: {
     flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-    marginTop: 10,
+    alignItems: "stretch",
+    gap: 8,
+    marginTop: 8,
     marginBottom: 4,
+    width: "100%",
   },
 
   refreshBtn: {
     flexDirection: "row",
     alignItems: "center",
+    justifyContent: "center",
     gap: 6,
     backgroundColor: COLORS.accent,
+    minHeight: 40,
     paddingHorizontal: 12,
-    paddingVertical: 8,
     borderRadius: 10,
   },
 
@@ -1378,15 +1450,16 @@ const styles = StyleSheet.create({
 
   statusFilterInlineBtn: {
     flex: 1,
+    minHeight: 40,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
     backgroundColor: "#F5F7FA",
     borderWidth: 1,
     borderColor: COLORS.border,
-    borderRadius: 12,
+    borderRadius: 10,
     paddingHorizontal: 12,
-    paddingVertical: 10,
+    paddingVertical: 8,
   },
 
   statusFilterBtnLeft: {
@@ -1444,85 +1517,118 @@ const styles = StyleSheet.create({
   },
 
   listContent: {
-    paddingHorizontal: 14,
+    paddingHorizontal: 12,
     paddingBottom: 90,
   },
 
   cardModern: {
-    flexDirection: "row",
-    borderRadius: 18,
-    borderWidth: 1.2,
-    marginBottom: 14,
-    overflow: "hidden",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderLeftWidth: 5,
+    marginBottom: 9,
+    paddingHorizontal: 11,
+    paddingVertical: 9,
     ...Platform.select({
       ios: {
         shadowColor: COLORS.shadow,
-        shadowOpacity: 0.08,
-        shadowRadius: 6,
-        shadowOffset: { width: 0, height: 3 },
+        shadowOpacity: 0.05,
+        shadowRadius: 4,
+        shadowOffset: { width: 0, height: 2 },
       },
       android: {
-        elevation: 3,
+        elevation: 1,
       },
     }),
   },
 
-  cardModernBar: {
-    width: 7,
-    borderTopLeftRadius: 18,
-    borderBottomLeftRadius: 18,
-  },
-
-  cardModernContent: {
-    flex: 1,
-    paddingHorizontal: 14,
-    paddingVertical: 14,
-  },
-
-  cardModernTitle: {
-    fontSize: 15,
-    fontWeight: "900",
-    color: COLORS.title,
-    marginBottom: 10,
-  },
-
-  cardModernText: {
-    fontSize: 12,
-    color: "#6E7890",
-    marginBottom: 4,
-  },
-
-  statusInfoRow: {
+  cardTopRow: {
     flexDirection: "row",
-    alignItems: "flex-start",
-    marginTop: 4,
+    alignItems: "center",
+    gap: 8,
     marginBottom: 6,
   },
 
-  statusDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 999,
-    marginRight: 10,
-    marginTop: 5,
-  },
-
-  statusInfoTexts: {
+  cardModernTitle: {
     flex: 1,
+    fontSize: 14,
+    fontWeight: "900",
+    color: COLORS.title,
   },
 
-  bottomActionRow: {
+  cardModernSubtitle: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: COLORS.text,
+  },
+
+  statusBadge: {
+    maxWidth: "44%",
+    flexDirection: "row",
+    alignItems: "center",
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+
+  statusDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 999,
+    marginRight: 5,
+  },
+
+  statusBadgeText: {
+    flexShrink: 1,
+    fontSize: 10,
+    fontWeight: "800",
+  },
+
+  cardMiddleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+    marginTop: 2,
+  },
+
+  compactInfoText: {
+    flex: 1,
+    fontSize: 11.5,
+    color: "#68758A",
+  },
+
+  compactDateText: {
+    flexShrink: 0,
+    fontSize: 11,
+    color: "#68758A",
+    textAlign: "right",
+  },
+
+  compactNominaText: {
+    flexShrink: 0,
+    maxWidth: "42%",
+    fontSize: 11.5,
+    color: "#68758A",
+    textAlign: "right",
+  },
+
+  compactInfoStrong: {
+    color: COLORS.title,
+    fontWeight: "800",
+  },
+
+  clientText: {
     marginTop: 4,
-    alignItems: "flex-end",
+    fontSize: 11.5,
+    color: "#68758A",
   },
 
   blockedText: {
-    flex: 1,
-    textAlign: "right",
-    fontSize: 12,
+    marginTop: 5,
+    fontSize: 10.5,
     fontStyle: "italic",
     color: "#667085",
-    paddingRight: 4,
+    textAlign: "right",
   },
 
   emptyText: {

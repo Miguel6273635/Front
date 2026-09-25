@@ -257,11 +257,58 @@ function normalizeDetalle(det) {
   };
 }
 
+/* ======================
+   Helpers operaciones por área
+   ====================== */
+function safeStr(value) {
+  return String(value ?? "").trim();
+}
+
+function normalizeAreaOperacion(op) {
+  const area = safeStr(op?.Usr02 ?? op?.usr02);
+  return area || "SIN UBICACIÓN";
+}
+
+function normalizeActivityOperacion(op) {
+  return safeStr(op?.Activity ?? op?.activity);
+}
+
+function normalizeDescriptionOperacion(op) {
+  return safeStr(op?.Description ?? op?.description);
+}
+
+function agruparOperacionesPorArea(ops = []) {
+  const porArea = {};
+
+  for (const op of Array.isArray(ops) ? ops : []) {
+    const area = normalizeAreaOperacion(op);
+
+    if (!porArea[area]) {
+      porArea[area] = [];
+    }
+
+    porArea[area].push(op);
+  }
+
+  const areas = Object.keys(porArea).sort((a, b) => a.localeCompare(b));
+
+  for (const area of areas) {
+    porArea[area].sort((a, b) =>
+      normalizeActivityOperacion(a).localeCompare(
+        normalizeActivityOperacion(b),
+      ),
+    );
+  }
+
+  return { areas, porArea };
+}
+
 export default function DetalleOrdenSupervisor() {
   const { orderid } = useLocalSearchParams();
 
   const [data, setData] = useState(null);
   const [operaciones, setOperaciones] = useState([]);
+  const [areasAbiertas, setAreasAbiertas] = useState({});
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState(null);
 
@@ -310,6 +357,18 @@ export default function DetalleOrdenSupervisor() {
 
     return true;
   }, [headerStatus]);
+
+  const operacionesAgrupadas = useMemo(
+    () => agruparOperacionesPorArea(operaciones),
+    [operaciones],
+  );
+
+  const toggleArea = (area) => {
+    setAreasAbiertas((prev) => ({
+      ...(prev || {}),
+      [area]: !prev?.[area],
+    }));
+  };
 
   if (loading) {
     return (
@@ -440,78 +499,196 @@ export default function DetalleOrdenSupervisor() {
         </View>
 
         <View style={styles.card}>
-          <Text style={styles.sectionTitle}>Operaciones</Text>
+          <View style={styles.sectionHeaderRow}>
+            <View>
+              <Text style={styles.sectionTitle}>Operaciones asignadas</Text>
+              <Text style={styles.sectionSubtitle}>
+                {operaciones.length} operación{operaciones.length === 1 ? "" : "es"} ·{" "}
+                {operacionesAgrupadas.areas.length} área
+                {operacionesAgrupadas.areas.length === 1 ? "" : "s"}
+              </Text>
+            </View>
+          </View>
 
-          {operaciones.length === 0 ? (
+          {operacionesAgrupadas.areas.length === 0 ? (
             <Text style={styles.emptyText}>
               No hay operaciones registradas.
             </Text>
           ) : (
-            operaciones.map((op, idx) => {
-              const activity = String(op?.Activity || "").padStart(4, "0");
-              //comentado por Miguel 03/06/2026 para quitar SubActivity
-              //const sub = String(op?.SubActivity || "");
-              const opId = `${activity}-${idx}`;
+            <View style={styles.areasList}>
+              {operacionesAgrupadas.areas.map((area) => {
+                const isOpen = !!areasAbiertas?.[area];
+                const opsArea = operacionesAgrupadas.porArea?.[area] || [];
 
-              const opRawStatus =
-                op?.userstatus ??
-                op?.Userstatus ??
-                op?.estatus_code ??
-                op?.estatus ??
-                data?.estatus_code ??
-                data?.userstatus ??
-                "";
-
-              const opStatus = resolveUserstatus(opRawStatus, {}, op);
-
-              return (
-                <View
-                  key={opId}
-                  style={[
-                    styles.operationCard,
-                    {
-                      backgroundColor: opStatus.bgColor,
-                      borderColor: opStatus.borderColor,
-                    },
-                  ]}
-                >
-                  <View style={styles.operationHeaderStatic}>
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.operationTitle}>
-                        {activity} — {op?.Description || "Sin descripción"}
-                      </Text>
-
-                      <View style={styles.opBadgeRow}>
+                return (
+                  <View
+                    key={area}
+                    style={[
+                      styles.areaCard,
+                      isOpen && styles.areaCardOpen,
+                    ]}
+                  >
+                    <TouchableOpacity
+                      style={styles.areaHeader}
+                      activeOpacity={0.88}
+                      onPress={() => toggleArea(area)}
+                    >
+                      <View style={styles.areaHeaderLeft}>
                         <View
                           style={[
-                            styles.opBadge,
-                            {
-                              borderColor: opStatus.color,
-                              backgroundColor: "#FFFFFFAA",
-                            },
+                            styles.areaIconWrap,
+                            isOpen && styles.areaIconWrapOpen,
                           ]}
                         >
-                          <Text
-                            style={[
-                              styles.opBadgeText,
-                              { color: opStatus.color },
-                            ]}
-                          >
-                            {opStatus.label}
+                          <Ionicons
+                            name="layers-outline"
+                            size={18}
+                            color={isOpen ? COLORS.accent : COLORS.muted}
+                          />
+                        </View>
+
+                        <View style={styles.areaTextWrap}>
+                          <View style={styles.areaTitleRow}>
+                            <Text
+                              style={[
+                                styles.areaTitle,
+                                isOpen && styles.areaTitleOpen,
+                              ]}
+                              numberOfLines={1}
+                            >
+                              {area}
+                            </Text>
+
+                            <View
+                              style={[
+                                styles.areaCountBadge,
+                                isOpen && styles.areaCountBadgeOpen,
+                              ]}
+                            >
+                              <Text
+                                style={[
+                                  styles.areaCountText,
+                                  isOpen && styles.areaCountTextOpen,
+                                ]}
+                              >
+                                {opsArea.length}
+                              </Text>
+                            </View>
+                          </View>
+
+                          <Text style={styles.areaSubtitle}>
+                            {isOpen
+                              ? "Ocultar operaciones"
+                              : "Ver operaciones"}
                           </Text>
                         </View>
                       </View>
-                    </View>
 
-                    <Ionicons
-                      name="construct-outline"
-                      size={20}
-                      color={opStatus.color}
-                    />
+                      <View
+                        style={[
+                          styles.chevronBox,
+                          isOpen && styles.chevronBoxOpen,
+                        ]}
+                      >
+                        <Ionicons
+                          name={
+                            isOpen
+                              ? "chevron-up-outline"
+                              : "chevron-down-outline"
+                          }
+                          size={16}
+                          color={isOpen ? COLORS.accent : COLORS.muted}
+                        />
+                      </View>
+                    </TouchableOpacity>
+
+                    {isOpen ? (
+                      <View style={styles.areaBody}>
+                        {opsArea.map((op, idx) => {
+                          const activity =
+                            normalizeActivityOperacion(op) || "—";
+
+                          const description =
+                            normalizeDescriptionOperacion(op) ||
+                            "Sin descripción";
+
+                          const opRawStatus =
+                            op?.userstatus ??
+                            op?.Userstatus ??
+                            op?.estatus_code ??
+                            op?.estatus ??
+                            data?.estatus_code ??
+                            data?.userstatus ??
+                            "";
+
+                          const opStatus = resolveUserstatus(
+                            opRawStatus,
+                            {},
+                            op,
+                          );
+
+                          const opId = `${area}-${activity}-${idx}`;
+
+                          return (
+                            <View
+                              key={opId}
+                              style={[
+                                styles.operationCompactCard,
+                                {
+                                  backgroundColor: opStatus.bgColor,
+                                  borderColor: opStatus.borderColor,
+                                },
+                              ]}
+                            >
+                              <View style={styles.operationCompactTop}>
+                                <View style={styles.operationNumberBadge}>
+                                  <Text style={styles.operationNumberText}>
+                                    {activity}
+                                  </Text>
+                                </View>
+
+                                <View
+                                  style={[
+                                    styles.operationStatusBadge,
+                                    {
+                                      borderColor: opStatus.color,
+                                      backgroundColor: "#FFFFFFB8",
+                                    },
+                                  ]}
+                                >
+                                  <View
+                                    style={[
+                                      styles.operationStatusDot,
+                                      { backgroundColor: opStatus.color },
+                                    ]}
+                                  />
+
+                                  <Text
+                                    style={[
+                                      styles.operationStatusText,
+                                      { color: opStatus.color },
+                                    ]}
+                                    numberOfLines={1}
+                                  >
+                                    {opStatus.label}
+                                  </Text>
+                                </View>
+                              </View>
+
+                              <Text
+                                style={styles.operationCompactDescription}
+                              >
+                                {description}
+                              </Text>
+                            </View>
+                          );
+                        })}
+                      </View>
+                    ) : null}
                   </View>
-                </View>
-              );
-            })
+                );
+              })}
+            </View>
           )}
         </View>
       </ScrollView>
@@ -671,51 +848,206 @@ const styles = StyleSheet.create({
     flexShrink: 1,
   },
 
-  sectionTitle: {
-    fontSize: 15,
-    fontWeight: "700",
-    color: COLORS.title,
-    marginBottom: 6,
+  sectionHeaderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 10,
   },
 
-  operationCard: {
+  sectionTitle: {
+    fontSize: 15,
+    fontWeight: "800",
+    color: COLORS.title,
+  },
+
+  sectionSubtitle: {
+    marginTop: 2,
+    fontSize: 11.5,
+    color: COLORS.muted,
+  },
+
+  areasList: {
+    gap: 8,
+  },
+
+  areaCard: {
     borderWidth: 1,
+    borderColor: COLORS.border,
     borderRadius: 12,
-    marginTop: 10,
+    backgroundColor: "#FFFFFF",
     overflow: "hidden",
   },
 
-  operationHeaderStatic: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 12,
-    paddingVertical: 12,
-    gap: 10,
+  areaCardOpen: {
+    borderColor: "#A8CFF4",
+    backgroundColor: "#F9FCFF",
   },
 
-  operationTitle: {
-    fontSize: 14,
-    fontWeight: "700",
+  areaHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 11,
+    paddingVertical: 10,
+  },
+
+  areaHeaderLeft: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
+  },
+
+  areaIconWrap: {
+    width: 34,
+    height: 34,
+    borderRadius: 9,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#F4F7FB",
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+
+  areaIconWrapOpen: {
+    backgroundColor: "#EAF4FF",
+    borderColor: "#B8DDF8",
+  },
+
+  areaTextWrap: {
+    flex: 1,
+  },
+
+  areaTitleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+  },
+
+  areaTitle: {
+    flexShrink: 1,
+    fontSize: 13,
+    fontWeight: "800",
     color: COLORS.title,
   },
 
-  opBadgeRow: {
-    marginTop: 6,
+  areaTitleOpen: {
+    color: COLORS.accent,
+  },
+
+  areaCountBadge: {
+    minWidth: 24,
+    height: 22,
+    borderRadius: 11,
+    paddingHorizontal: 7,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#E8F4FF",
+  },
+
+  areaCountBadgeOpen: {
+    backgroundColor: COLORS.accent,
+  },
+
+  areaCountText: {
+    fontSize: 10,
+    fontWeight: "900",
+    color: COLORS.accent,
+  },
+
+  areaCountTextOpen: {
+    color: "#FFFFFF",
+  },
+
+  areaSubtitle: {
+    marginTop: 2,
+    fontSize: 10.5,
+    color: COLORS.muted,
+  },
+
+  chevronBox: {
+    width: 30,
+    height: 30,
+    borderRadius: 8,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#F4F7FB",
+  },
+
+  chevronBoxOpen: {
+    backgroundColor: "#EAF4FF",
+  },
+
+  areaBody: {
+    borderTopWidth: 1,
+    borderTopColor: COLORS.border,
+    paddingHorizontal: 9,
+    paddingTop: 8,
+    paddingBottom: 9,
+    gap: 7,
+  },
+
+  operationCompactCard: {
+    borderWidth: 1,
+    borderRadius: 9,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+  },
+
+  operationCompactTop: {
     flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
+    marginBottom: 5,
+  },
+
+  operationNumberBadge: {
+    minWidth: 50,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 7,
+    backgroundColor: "#FFFFFFB8",
+    borderWidth: 1,
+    borderColor: COLORS.border,
     alignItems: "center",
   },
 
-  opBadge: {
-    alignSelf: "flex-start",
+  operationNumberText: {
+    fontSize: 11,
+    fontWeight: "900",
+    color: COLORS.title,
+  },
+
+  operationStatusBadge: {
+    maxWidth: "60%",
+    flexDirection: "row",
+    alignItems: "center",
     borderWidth: 1,
     borderRadius: 999,
     paddingHorizontal: 8,
     paddingVertical: 3,
   },
 
-  opBadgeText: {
-    fontSize: 11,
-    fontWeight: "800",
+  operationStatusDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    marginRight: 5,
+  },
+
+  operationStatusText: {
+    flexShrink: 1,
+    fontSize: 9.5,
+    fontWeight: "900",
+  },
+
+  operationCompactDescription: {
+    fontSize: 12,
+    lineHeight: 17,
+    color: COLORS.text,
+    fontWeight: "600",
   },
 
   emptyText: {
@@ -779,6 +1111,7 @@ const styles = StyleSheet.create({
 
     elevation: 6,
   },
+
   fabContainer: {
     position: "absolute",
     bottom: 20,
