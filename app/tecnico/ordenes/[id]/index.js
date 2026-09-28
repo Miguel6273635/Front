@@ -40,7 +40,6 @@ import {
   patchCacheOrdenTecnicoDetail,
 } from "../../../../src/offline/ordenesTecnicoLocalPatch";
 
-import { Audio } from "expo-av";
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
@@ -193,7 +192,16 @@ async function savePendingSign(orderId, payload) {
       PENDING_SIGN_KEY(orderId),
       JSON.stringify(payload),
     );
-  } catch {}
+    return true;
+  } catch (error) {
+    // El respaldo local ayuda a reconstruir la firma/PDF, pero nunca debe
+    // detener el trabajo del técnico.
+    console.warn(
+      "[PENDING SIGN] No se pudo guardar respaldo local:",
+      error?.message || error,
+    );
+    return false;
+  }
 }
 async function clearPendingSign(orderId) {
   try {
@@ -243,8 +251,228 @@ function fmtDMY(val) {
   return `${dd}/${mm}/${yyyy}`;
 }
 
+function normalizeOperationActivity(valueOrOp) {
+  const raw =
+    valueOrOp && typeof valueOrOp === "object"
+      ? valueOrOp?.activity ??
+        valueOrOp?.Activity ??
+        valueOrOp?.Vornr ??
+        ""
+      : valueOrOp;
+
+  const value = String(raw ?? "").trim();
+  if (!value) return "";
+
+  // SAP puede devolver 10, 010 o 0010. Usamos 4 posiciones
+  // para mantener una referencia estable.
+  return /^\d+$/.test(value) ? value.padStart(4, "0") : value;
+}
+
+function getOperationStatus(op) {
+  return String(
+    op?.estatus ??
+      op?.Estatus ??
+      op?.Status ??
+      op?.status ??
+      op?.SystemStatus ??
+      op?.systemStatus ??
+      "",
+  )
+    .trim()
+    .toUpperCase();
+}
+
+function isOperationFinished(op) {
+  const status = getOperationStatus(op);
+
+  // SAP devuelve FINA para una operación finalizada.
+  // Se mantienen variantes locales por compatibilidad con caché anterior.
+  return ["FINA", "FIN", "FINALIZADA", "FINALIZADO"].includes(status);
+}
+
 const opKey = (orderId, op) =>
-  `${orderId}-${op.activity || op.Activity || ""}`;
+  `${String(orderId || "").trim()}-${normalizeOperationActivity(op)}`;
+
+function getOperationMatchKeys(orderId, op) {
+  const oid = String(orderId || "").trim();
+  const id = String(op?.id || "").trim();
+  const activityRaw = String(
+    op?.activity ?? op?.Activity ?? op?.Vornr ?? "",
+  ).trim();
+  const activity = normalizeOperationActivity(op);
+
+  return Array.from(
+    new Set(
+      [
+        id,
+        activityRaw,
+        activity,
+        oid && activityRaw ? `${oid}-${activityRaw}` : "",
+        oid && activity ? `${oid}-${activity}` : "",
+      ].filter(Boolean),
+    ),
+  );
+}
+
+function operationMatchesCheckedMap(orderId, op, map = {}) {
+  return getOperationMatchKeys(orderId, op).some((key) => !!map?.[key]);
+}
+
+function uniqueOperationsByActivity(ops = []) {
+  const byActivity = new Map();
+
+  for (const op of Array.isArray(ops) ? ops : []) {
+    const activity = normalizeOperationActivity(op);
+    if (!activity) continue;
+    if (!byActivity.has(activity)) byActivity.set(activity, op);
+  }
+
+  return Array.from(byActivity.values());
+}
+
+function buildSelectedOperationsSnapshot(ops = []) {
+  return uniqueOperationsByActivity(ops).map((op) => {
+    const activity = normalizeOperationActivity(op);
+    const subactivity = String(
+      op?.subactivity ?? op?.SubActivity ?? "",
+    ).trim();
+    const description = String(
+      op?.description ?? op?.Description ?? op?.Ltxa1 ?? "",
+    ).trim();
+    const usr02 = String(op?.Usr02 ?? op?.usr02 ?? "").trim();
+    const standardTextKey = String(
+      op?.StandardTextKey ?? op?.standardTextKey ?? "",
+    ).trim();
+
+    // Respaldo pequeño: únicamente lo necesario para reconstruir el PDF.
+    return {
+      activity,
+      Activity: activity,
+      subactivity,
+      SubActivity: subactivity,
+      description,
+      Description: description,
+      Usr02: usr02,
+      usr02,
+      StandardTextKey: standardTextKey,
+      standardTextKey,
+      estatus: isOperationFinished(op) ? "FINA" : String(op?.estatus || ""),
+    };
+  });
+}
+
+function buildCheckedMapForOperations(orderId, ops = []) {
+  const next = {};
+
+  for (const op of uniqueOperationsByActivity(ops)) {
+    const id = String(op?.id || "").trim() || opKey(orderId, op);
+    if (id) next[id] = true;
+  }
+
+  return next;
+}
+
+function mergeCurrentOpsWithSnapshot(orderId, currentOps = [], snapshot = []) {
+  const current = Array.isArray(currentOps) ? currentOps : [];
+  const backup = Array.isArray(snapshot) ? snapshot : [];
+
+  if (!backup.length) return current;
+
+  const knownActivities = new Set(
+    current.map((op) => normalizeOperationActivity(op)).filter(Boolean),
+  );
+
+  const missing = backup
+    .filter((op) => {
+      const activity = normalizeOperationActivity(op);
+      return activity && !knownActivities.has(activity);
+    })
+    .map((op) => ({
+      ...op,
+      id: String(op?.id || "").trim() || opKey(orderId, op),
+    }));
+
+  return [...current, ...missing];
+}
+
+function resolveOperationSelection({
+  orderId,
+  opsAll = [],
+  checkedMap = {},
+  pending = null,
+  allowFinishedFallback = false,
+}) {
+  const currentOps = Array.isArray(opsAll) ? opsAll : [];
+
+  const pendingActivities = new Set(
+    (Array.isArray(pending?.selectedActivities)
+      ? pending.selectedActivities
+      : []
+    )
+      .map((value) => normalizeOperationActivity(value))
+      .filter(Boolean),
+  );
+
+  const pendingCheckedMap =
+    pending?.checkedMap && typeof pending.checkedMap === "object"
+      ? pending.checkedMap
+      : {};
+
+  // 1) Selección actualmente visible.
+  let selectedOps = currentOps.filter((op) =>
+    operationMatchesCheckedMap(orderId, op, checkedMap),
+  );
+
+  // 2) Activities guardadas al crear 0400.
+  if (!selectedOps.length && pendingActivities.size) {
+    selectedOps = currentOps.filter((op) =>
+      pendingActivities.has(normalizeOperationActivity(op)),
+    );
+  }
+
+  // 3) checkedMap anterior reconciliado contra los IDs actuales.
+  if (!selectedOps.length && Object.keys(pendingCheckedMap).length) {
+    selectedOps = currentOps.filter((op) =>
+      operationMatchesCheckedMap(orderId, op, pendingCheckedMap),
+    );
+  }
+
+  // 4) En 0400 SAP puede devolverlas directamente como FINA.
+  if (!selectedOps.length && allowFinishedFallback) {
+    selectedOps = currentOps.filter(isOperationFinished);
+  }
+
+  // 5) Último respaldo: snapshot mínimo.
+  const snapshot = Array.isArray(pending?.selectedOperationsSnapshot)
+    ? pending.selectedOperationsSnapshot
+    : [];
+
+  if (!selectedOps.length && snapshot.length) {
+    selectedOps = snapshot.map((op) => ({
+      ...op,
+      id: String(op?.id || "").trim() || opKey(orderId, op),
+    }));
+  }
+
+  selectedOps = uniqueOperationsByActivity(selectedOps);
+
+  const opsForPdf = mergeCurrentOpsWithSnapshot(
+    orderId,
+    currentOps,
+    snapshot,
+  );
+
+  const resolvedCheckedMap = selectedOps.length
+    ? buildCheckedMapForOperations(orderId, selectedOps)
+    : {};
+
+  return {
+    selectedOps,
+    selectedIds: Object.keys(resolvedCheckedMap),
+    checkedMap: resolvedCheckedMap,
+    opsForPdf,
+  };
+}
 
 /* ====== SAP helpers para fechas/horas y prorrateo ====== */
 function msToMinutesRounded(ms) {
@@ -460,11 +688,10 @@ function mergeOpsWithLocalState(orderId, ops, state) {
     const id = o.id || opKey(orderId, o);
     const st = state?.[id] || {};
 
-    const sapEstatus = (o.estatus || "pendiente").toLowerCase();
-    const estatusFinal =
-      sapEstatus === "finalizada"
-        ? "finalizada"
-        : st.estatus || sapEstatus || "pendiente";
+    const sapEstatus = String(o?.estatus || "pendiente").toLowerCase();
+    const estatusFinal = isOperationFinished(o)
+      ? "finalizada"
+      : st.estatus || sapEstatus || "pendiente";
 
     return {
       ...o,
@@ -1027,7 +1254,6 @@ function mergeStatusFromSharedOrder(detail, sharedOrder) {
   };
 }
 
-// CAMBIOS agregasdos por miguel
 /* ====================== Componente ====================== */
 export default function DetalleOrden() {
   const { id } = useLocalSearchParams();
@@ -1045,8 +1271,6 @@ export default function DetalleOrden() {
 
   const [orden, setOrden] = useState(null);
   const [loading, setLoading] = useState(true);
-
-  const [soundObj, setSoundObj] = useState(null);
 
   const signatureRef = useRef(null);
   const wasOnlineRef = useRef(false);
@@ -1150,13 +1374,6 @@ export default function DetalleOrden() {
     statusCode === "0200" ||
     (!hasPendingOfflineCheckin &&
       (!!orden?.checkin_done || !!orden?.checkin || !!orden?.checked_in));
-
-  const isOpsLocked =
-    isNoMant ||
-    isOrderSinEmpezar ||
-    isOrderPendiente0100 ||
-    isOrderFinishedReal ||
-    (!checkinDone && statusCode !== "0200");
 
   const canStartTimer =
     isOrderEnProceso && !isNoMant && !isOrderFinishedReal && !!checkinDone;
@@ -1423,7 +1640,6 @@ export default function DetalleOrden() {
     return () => sub.remove();
   }, []);
 
-  //CAMBIOS agregados por miguel
 
   useEffect(() => {
     const sub = AppState.addEventListener("change", async (state) => {
@@ -1452,7 +1668,6 @@ export default function DetalleOrden() {
     return () => sub.remove();
   }, [ensureValidToken]);
 
-  // CAMBIOS agregados por miguel
 
   useEffect(() => {
     const unsub = NetInfo.addEventListener(async (state) => {
@@ -1562,8 +1777,28 @@ export default function DetalleOrden() {
         if (savedElapsedCached != null) setOrderElapsedMs(savedElapsedCached);
 
         const pendingCached = await loadPendingSign(cachedOrderId);
-        if (pendingCached?.checkedMap)
-          setCheckedMap(pendingCached.checkedMap || {});
+        if (pendingCached) {
+          const restoredSelection = resolveOperationSelection({
+            orderId: cachedOrderId,
+            opsAll: Array.isArray(cachedDataReconciled?.operaciones)
+              ? cachedDataReconciled.operaciones
+              : [],
+            checkedMap: pendingCached?.checkedMap || {},
+            pending: pendingCached,
+            allowFinishedFallback:
+              normalizeCode(
+                cachedDataReconciled?.estatus_code ??
+                  cachedDataReconciled?.userstatus ??
+                  "",
+              ) === "0400",
+          });
+
+          if (restoredSelection.selectedOps.length) {
+            setCheckedMap(restoredSelection.checkedMap);
+          } else if (pendingCached?.checkedMap) {
+            setCheckedMap(pendingCached.checkedMap || {});
+          }
+        }
         if (Array.isArray(pendingCached?.consumibles))
           setConsumibles(pendingCached.consumibles);
         if (typeof pendingCached?.notaTecnico === "string")
@@ -1841,7 +2076,20 @@ export default function DetalleOrden() {
         const pending = await loadPendingSign(orderIdReal);
 
         if (pending) {
-          if (pending?.checkedMap) setCheckedMap(pending.checkedMap || {});
+          const restoredSelection = resolveOperationSelection({
+            orderId: orderIdReal,
+            opsAll: Array.isArray(data?.operaciones) ? data.operaciones : [],
+            checkedMap: pending?.checkedMap || {},
+            pending,
+            allowFinishedFallback: isPending0400Local2,
+          });
+
+          if (restoredSelection.selectedOps.length) {
+            setCheckedMap(restoredSelection.checkedMap);
+          } else if (pending?.checkedMap) {
+            setCheckedMap(pending.checkedMap || {});
+          }
+
           if (Array.isArray(pending?.consumibles))
             setConsumibles(pending.consumibles);
           if (typeof pending?.notaTecnico === "string")
@@ -1938,7 +2186,28 @@ export default function DetalleOrden() {
         if (savedElapsed != null) setOrderElapsedMs(savedElapsed);
 
         const pending = await loadPendingSign(cachedOrderId);
-        if (pending?.checkedMap) setCheckedMap(pending.checkedMap || {});
+        if (pending) {
+          const restoredSelection = resolveOperationSelection({
+            orderId: cachedOrderId,
+            opsAll: Array.isArray(cached2?.data?.operaciones)
+              ? cached2.data.operaciones
+              : [],
+            checkedMap: pending?.checkedMap || {},
+            pending,
+            allowFinishedFallback:
+              normalizeCode(
+                cached2?.data?.estatus_code ??
+                  cached2?.data?.userstatus ??
+                  "",
+              ) === "0400",
+          });
+
+          if (restoredSelection.selectedOps.length) {
+            setCheckedMap(restoredSelection.checkedMap);
+          } else if (pending?.checkedMap) {
+            setCheckedMap(pending.checkedMap || {});
+          }
+        }
         if (Array.isArray(pending?.consumibles))
           setConsumibles(pending.consumibles);
         if (typeof pending?.notaTecnico === "string")
@@ -2067,42 +2336,6 @@ export default function DetalleOrden() {
     setCompList([]);
   };
 
-  useEffect(() => {
-    let mounted = true;
-    let localSound = null;
-
-    (async () => {
-      try {
-        const { sound } = await Audio.Sound.createAsync(
-          require("../../../../assets/alert.mp3"),
-        );
-        localSound = sound;
-        if (mounted) setSoundObj(sound);
-      } catch (e) {
-        console.warn("No se pudo cargar el sonido de alerta:", e);
-      }
-    })();
-
-    return () => {
-      mounted = false;
-      try {
-        localSound?.unloadAsync?.();
-      } catch {}
-    };
-  }, []);
-
-  const irAAvisoAveria = (e) => {
-    e?.stopPropagation?.();
-    if (!orden?.Orderid) {
-      Alert.alert("Error", "No se encontró el número de orden.");
-      return;
-    }
-    const orderid = String(orden.Orderid).trim();
-    router.push({
-      pathname: "/tecnico/ordenes/[id]/aviso-averia",
-      params: { id: orderid },
-    });
-  };
 
   const irATbmkyDesdeDetalle = () => {
     const orderId = String(orden?.Orderid || id || "").trim();
@@ -2218,8 +2451,19 @@ export default function DetalleOrden() {
     const orderId = String(orden?.Orderid || id || "").trim();
     if (!orderId) return;
 
-    const selectedIds = Object.keys(checkedMap || {});
-    if (!selectedIds.length) {
+    const opsAll = Array.isArray(orden?.operaciones) ? orden.operaciones : [];
+    const selection = resolveOperationSelection({
+      orderId,
+      opsAll,
+      checkedMap,
+      allowFinishedFallback: false,
+    });
+
+    const selectedIds = selection.selectedIds;
+    const selectedOps = selection.selectedOps;
+    const checkedMapToSave = selection.checkedMap;
+
+    if (!selectedOps.length) {
       Alert.alert(
         "Sin selección",
         "Marca al menos una operación realizada antes de guardar.",
@@ -2284,7 +2528,6 @@ export default function DetalleOrden() {
         workOrderPayload: payload0400,
       });
 
-      const opsAll = Array.isArray(orden?.operaciones) ? orden.operaciones : [];
       const plantFallback = String(
         orden?.Plant || orden?.plant || orden?.centro || "",
       ).trim();
@@ -2308,8 +2551,14 @@ export default function DetalleOrden() {
         return;
       }
 
+      const selectedActivities = selectedOps
+        .map((op) => normalizeOperationActivity(op))
+        .filter(Boolean);
+
       const pendingPayload = {
-        checkedMap,
+        checkedMap: checkedMapToSave,
+        selectedActivities,
+        selectedOperationsSnapshot: buildSelectedOperationsSnapshot(selectedOps),
         savedAt: Date.now(),
         confirmationsSent: false,
         confirmationsFinishMs: finishMs,
@@ -2363,9 +2612,6 @@ export default function DetalleOrden() {
 
         await applyLocalOrderStatus(orderId, "0400");
 
-        setFinalizeMode(false);
-        router.replace("/tecnico/ordenes");
-
         Alert.alert(
           "Guardado offline",
           "La orden quedó en pendiente de firma. Las operaciones/consumibles y el estatus 0400 se enviarán cuando vuelva el internet.",
@@ -2377,116 +2623,6 @@ export default function DetalleOrden() {
       }
       //////////////////////////////////////
 
-      ////////////////////////////////////////
-      /*
-      let confirmationsOk = false;
-      let statusOk = false;
-
-      try {
-        await api.post(
-          "/api/odata/ZCS_CREATE_CONFIRMATION_SRV/ConfirmationHeaderSet",
-          confirmationPayload0400,
-          { timeout: 120000  }
-        );
-        confirmationsOk = true;
-      } catch (err) {
-        console.warn("[0400][CONFIRMATIONS ERROR]", err?.response?.data || err);
-
-        const networkLike = isNetworkLikeError(err);
-
-        if (networkLike) {
-          await enqueueSap({
-            type: "CONFIRMATIONS",
-            orderId,
-            endpoint: "/api/odata/ZCS_CREATE_CONFIRMATION_SRV/ConfirmationHeaderSet",
-            payload: confirmationPayload0400,
-            dedupeKey: `CONFIRMATIONS:${orderId}:0400`,
-          });
-
-          await enqueueSap({
-            type: "STATUS",
-            orderId,
-            endpoint: workOrderBulkEndpoint0400,
-            payload: payload0400Bulk,
-            dedupeKey: `STATUS:${orderId}:0400`,
-          });
-
-          await savePendingSign(orderId, {
-            ...pendingPayload,
-            confirmationsSent: true,
-          });
-
-          await applyLocalOrderStatus(orderId, "0400");
-
-          Alert.alert(
-            "Red inestable",
-            "La señal no fue suficiente. La orden quedó en pendiente de firma y se sincronizará cuando haya mejor conexión."
-          );
-
-          setFinalizeMode(false);
-          router.replace("/tecnico/ordenes");
-          return;
-        }
-
-        Alert.alert(
-          "Error SAP",
-          getSapErrorMessage(err, "SAP rechazó el envío de confirmaciones.")
-        );
-        return;
-      }
-
-      try {
-        await api.post(
-          workOrderBulkEndpoint0400,
-          payload0400Bulk,
-          { timeout: 300000 }
-        );
-        statusOk = true;
-      } catch (err) {
-        console.warn("[0400][STATUS ERROR]", err?.response?.data || err);
-
-        const networkLike = isNetworkLikeError(err);
-
-        if (networkLike) {
-          await enqueueSap({
-            type: "STATUS",
-            orderId,
-            endpoint: workOrderBulkEndpoint0400,
-            payload: payload0400Bulk,
-            dedupeKey: `STATUS:${orderId}:0400`,
-          });
-
-          await savePendingSign(orderId, {
-            ...pendingPayload,
-            confirmationsSent: true,
-          });
-
-          await applyLocalOrderStatus(orderId, "0400");
-
-          Alert.alert(
-            "Red inestable",
-            "La señal no fue suficiente. La orden quedó en pendiente de firma y se sincronizará cuando haya mejor conexión."
-          );
-
-          setFinalizeMode(false);
-          router.replace("/tecnico/ordenes");
-          return;
-        }
-
-        await savePendingSign(orderId, {
-          ...pendingPayload,
-          confirmationsSent: true,
-        });
-
-        Alert.alert(
-          "Error SAP",
-          getSapErrorMessage(
-            err,
-            "Las operaciones sí se enviaron, pero SAP rechazó el cambio a estatus 0400."
-          )
-        );
-        return;
-      }*/
       ///////////////////////////////////////////////////////////////
 
       let confirmationsOk = false;
@@ -2560,27 +2696,6 @@ export default function DetalleOrden() {
 
       /////////////////////////////////////////////////////////////////////////
 
-      /*
-
-
-      if (confirmationsOk && statusOk) {
-        await savePendingSign(orderId, {
-          ...pendingPayload,
-          confirmationsSent: true,
-        });
-
-        await applyLocalOrderStatus(orderId, "0400");
-
-        Alert.alert(
-          "Listo",
-          "Se guardó pendiente de firma y se enviaron operaciones, consumibles y estatus."
-        );
-
-        setFinalizeMode(false);
-        router.replace("/tecnico/ordenes");
-      }
-
-*/
 
       if (confirmationsOk && statusOk) {
         await savePendingSign(orderId, {
@@ -2672,14 +2787,32 @@ export default function DetalleOrden() {
         return;
       }
 
-      const selectedIds = Object.keys(checkedMap || {});
+      const pendingDraft = await loadPendingSign(orderId);
+      const opsCurrent = Array.isArray(orden?.operaciones)
+        ? orden.operaciones
+        : [];
 
-      if (!selectedIds.length) {
+      const selection = resolveOperationSelection({
+        orderId,
+        opsAll: opsCurrent,
+        checkedMap,
+        pending: pendingDraft,
+        allowFinishedFallback: isPending0400,
+      });
+
+      if (!selection.selectedOps.length && !isPending0400) {
         Alert.alert(
           "Sin selección",
           "Marca al menos una operación realizada antes de visualizar el PDF.",
         );
         return;
+      }
+
+      const checkedMapForPdf = selection.checkedMap;
+      const opsForPdf = selection.opsForPdf;
+
+      if (selection.selectedOps.length) {
+        setCheckedMap(checkedMapForPdf);
       }
 
       const draftFinishMs = Date.now();
@@ -2701,13 +2834,11 @@ export default function DetalleOrden() {
         );
         return;
       }
-      const opsAll = Array.isArray(orden?.operaciones) ? orden.operaciones : [];
-
       const html = await buildMantenimientoHtml({
         tipo,
         orden,
-        operaciones: opsAll,
-        checkedMap,
+        operaciones: opsForPdf,
+        checkedMap: checkedMapForPdf,
         signatureData,
         clienteEmail: String(clienteEmail || "").trim(),
         clienteNombre: String(clienteNombre || "").trim(),
@@ -2754,8 +2885,20 @@ export default function DetalleOrden() {
     const orderId = String(orden?.Orderid || id || "").trim();
     if (!orderId) return;
 
-    const selectedIds = Object.keys(checkedMap || {});
-    if (!selectedIds.length) {
+    const pendingAnterior = await loadPendingSign(orderId);
+    const opsCurrent = Array.isArray(orden?.operaciones)
+      ? orden.operaciones
+      : [];
+
+    const selection = resolveOperationSelection({
+      orderId,
+      opsAll: opsCurrent,
+      checkedMap,
+      pending: pendingAnterior,
+      allowFinishedFallback: isPending0400,
+    });
+
+    if (!selection.selectedOps.length && !isPending0400) {
       Alert.alert(
         "Sin selección",
         "Marca al menos una operación realizada antes de solicitar firma.",
@@ -2763,7 +2906,9 @@ export default function DetalleOrden() {
       return;
     }
 
-    
+    if (selection.selectedOps.length) {
+      setCheckedMap(selection.checkedMap);
+    }
 
     if (orderStartedAtMs) {
       const elapsed = Math.max(0, Date.now() - orderStartedAtMs);
@@ -2785,8 +2930,21 @@ export default function DetalleOrden() {
       return;
     }
 
+    const selectedActivities = selection.selectedOps
+      .map((op) => normalizeOperationActivity(op))
+      .filter(Boolean);
+
     await savePendingSign(orderId, {
-      checkedMap,
+      ...(pendingAnterior || {}),
+      checkedMap: selection.selectedOps.length
+        ? selection.checkedMap
+        : pendingAnterior?.checkedMap || checkedMap || {},
+      selectedActivities: selectedActivities.length
+        ? selectedActivities
+        : pendingAnterior?.selectedActivities || [],
+      selectedOperationsSnapshot: selection.selectedOps.length
+        ? buildSelectedOperationsSnapshot(selection.selectedOps)
+        : pendingAnterior?.selectedOperationsSnapshot || [],
       savedAt: Date.now(),
       consumibles: Array.isArray(consumibles) ? consumibles : [],
       notaTecnico: String(notaTecnico || "").trim(),
@@ -2801,7 +2959,7 @@ export default function DetalleOrden() {
 
       orderStartedAtMs: Number.isFinite(orderStartedAtMs)
         ? orderStartedAtMs
-        : null,
+        : pendingAnterior?.orderStartedAtMs ?? null,
       orderFinishedAtMs: draftFinishMs,
       orderElapsedMs: draftElapsedMs,
     });
@@ -2852,19 +3010,41 @@ export default function DetalleOrden() {
       return;
     }
 
-    const selectedIds = Object.keys(checkedMap || {});
-    if (!selectedIds.length) {
-      Alert.alert(
-        "Sin selección",
-        "Marca al menos una operación realizada antes de finalizar.",
-      );
-      return;
-    }
-
     try {
       setSavingSignature(true);
 
       const pendingDraft = await loadPendingSign(orderId);
+      const isPending0400Now =
+        pickCurrentStatusCode(orden) === "0400" || isPending0400;
+
+      const opsCurrent = Array.isArray(orden?.operaciones)
+        ? orden.operaciones
+        : [];
+
+      const selection = resolveOperationSelection({
+        orderId,
+        opsAll: opsCurrent,
+        checkedMap,
+        pending: pendingDraft,
+        allowFinishedFallback: isPending0400Now,
+      });
+
+      if (!selection.selectedOps.length && !isPending0400Now) {
+        Alert.alert(
+          "Sin selección",
+          "Marca al menos una operación realizada antes de finalizar.",
+        );
+        return;
+      }
+
+      const selectedOps = selection.selectedOps;
+      const selectedIds = selection.selectedIds;
+      const checkedMapForPdf = selection.checkedMap;
+      const opsForPdf = selection.opsForPdf;
+
+      if (selectedOps.length) {
+        setCheckedMap(checkedMapForPdf);
+      }
 
       const effectiveStartMs = Number.isFinite(pendingDraft?.orderStartedAtMs)
         ? pendingDraft.orderStartedAtMs
@@ -2900,34 +3080,6 @@ export default function DetalleOrden() {
       const totalMs = elapsedNow;
       const totalMin = msToMinutesRounded(totalMs);
 
-      const opsAll = Array.isArray(orden?.operaciones) ? orden.operaciones : [];
-      const selectedOpsRaw = selectedIds
-        .map((idKey) => opsAll.find((op) => String(op.id) === String(idKey)))
-        .filter(Boolean);
-
-      const uniqByOp = (ops) => {
-        const map = new Map();
-        for (const op of ops) {
-          const act = String(op.activity || op.Activity || "").trim();
-          const key = `${act}`;
-          if (!map.has(key)) map.set(key, op);
-        }
-        return Array.from(map.values());
-      };
-
-      const selectedOps = uniqByOp(selectedOpsRaw);
-      if (!selectedOps.length) {
-        Alert.alert(
-          "Error",
-          "No se encontraron las operaciones seleccionadas en la orden.",
-        );
-        return;
-      }
-
-      const n = selectedOps.length;
-      const minsArr = prorateMinutes(totalMin, n);
-      const windows = buildSequentialWindows(effectiveStartMs, minsArr);
-
       const currentCode = pickCurrentStatusCode(orden);
       const statusPayload0300 = buildStatus0300Payload({
         orderId,
@@ -2935,40 +3087,48 @@ export default function DetalleOrden() {
         currentCode,
       });
 
-      const plantFallback = String(
-        orden?.Plant || orden?.plant || orden?.centro || "",
-      ).trim();
-      const ConfirmationMaterialSet = normalizeConsumiblesToMaterialSet(
-        consumibles,
-        plantFallback,
-      );
+      let confirmationPayload = null;
 
-      const confirmationPayload = {
-        Order: "S1",
-        Mail: String(userEmail || "").trim(), // 👈 AQUI
-        ConfirmationOrderSet: selectedOps.map((op, idx) => {
-          const actRaw = String(op.activity || op.Activity || "").trim();
-          const Operation = actRaw.padStart(4, "0");
-          const w = windows[idx];
+      // Si ya está 0400, las operaciones se confirmaron al crear el
+      // Pendiente de firma. Aquí solo corresponde PDF + 0300.
+      if (!isPending0400Now) {
+        const n = selectedOps.length;
+        const minsArr = prorateMinutes(totalMin, n);
+        const windows = buildSequentialWindows(effectiveStartMs, minsArr);
 
-          const row = {
-            ConfNo: "",
-            Orderid: orderId,
-            Operation,
-            PostgDate: sapDateFromMs(finishMs),
-            ActWork: String(minsArr[idx]),
-            UnWork: "min",
-            ExecStartDate: sapDateFromMs(w.start),
-            ExecFinDate: sapDateFromMs(w.end),
-            ExecStartTime: sapTimePTFromMs(w.start),
-            ExecFinTime: sapTimePTFromMs(w.end),
-            FinConf: "X",
-          };
-          return row;
-        }),
-        ConfirmationMaterialSet,
-        Return: [],
-      };
+        const plantFallback = String(
+          orden?.Plant || orden?.plant || orden?.centro || "",
+        ).trim();
+        const ConfirmationMaterialSet = normalizeConsumiblesToMaterialSet(
+          consumibles,
+          plantFallback,
+        );
+
+        confirmationPayload = {
+          Order: "S1",
+          Mail: String(userEmail || "").trim(),
+          ConfirmationOrderSet: selectedOps.map((op, idx) => {
+            const Operation = normalizeOperationActivity(op);
+            const w = windows[idx];
+
+            return {
+              ConfNo: "",
+              Orderid: orderId,
+              Operation,
+              PostgDate: sapDateFromMs(finishMs),
+              ActWork: String(minsArr[idx]),
+              UnWork: "min",
+              ExecStartDate: sapDateFromMs(w.start),
+              ExecFinDate: sapDateFromMs(w.end),
+              ExecStartTime: sapTimePTFromMs(w.start),
+              ExecFinTime: sapTimePTFromMs(w.end),
+              FinConf: "X",
+            };
+          }),
+          ConfirmationMaterialSet,
+          Return: [],
+        };
+      }
 
       const tipo = await resolveEquipmentTypeForCurrentOrder(pendingDraft);
       if (!tipo) {
@@ -2982,8 +3142,8 @@ export default function DetalleOrden() {
       const html = await buildMantenimientoHtml({
         tipo,
         orden,
-        operaciones: opsAll,
-        checkedMap,
+        operaciones: opsForPdf,
+        checkedMap: checkedMapForPdf,
         signatureData,
         clienteEmail: email,
         clienteNombre: String(clienteNombre || "").trim(),
@@ -3054,6 +3214,8 @@ export default function DetalleOrden() {
         selectedIds,
         change0300WithPdfPayload,
         confirmationPayload,
+        confirmationsAlreadyHandled:
+          isPending0400Now || !!pendingDraft?.confirmationsSent,
         clienteNombre: String(clienteNombre || "").trim(),
         clienteCargo: String(clienteCargo || "").trim(),
         avisoCliente: String(avisoCliente || "").trim(),
@@ -3112,6 +3274,7 @@ export default function DetalleOrden() {
       selectedIds,
       change0300WithPdfPayload,
       confirmationPayload,
+      confirmationsAlreadyHandled,
     } = pendingFinalize;
 
     const workOrderBulkEndpoint =
@@ -3137,10 +3300,13 @@ export default function DetalleOrden() {
         net?.isConnected && net?.isInternetReachable !== false
       );
 
-      let alreadySentConfirmations = false;
+      let alreadySentConfirmations =
+        !!confirmationsAlreadyHandled || statusCode === "0400";
+
       try {
         const pending = await loadPendingSign(orderId);
-        alreadySentConfirmations = !!pending?.confirmationsSent;
+        alreadySentConfirmations =
+          alreadySentConfirmations || !!pending?.confirmationsSent;
       } catch {}
 
       logSapPayload(
@@ -3176,7 +3342,7 @@ export default function DetalleOrden() {
           dedupeKey: `PENDIENTE_FIRMA_BULK_0300:${change0300BulkPayload.BulkId}`,
         });
 
-        if (!alreadySentConfirmations) {
+        if (!alreadySentConfirmations && confirmationPayload) {
           await enqueueSap({
             type: "CONFIRMATIONS",
             orderId,
@@ -3216,73 +3382,6 @@ export default function DetalleOrden() {
 
       /////////////////////////////////////////
 
-      /*
-      try {
-        await api.post(
-          `/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet`,
-          change0300WithPdfPayload,
-          { timeout: 300000 }
-        );
-
-        if (!alreadySentConfirmations) {
-          await api.post(
-            `/api/odata/ZCS_CREATE_CONFIRMATION_SRV/ConfirmationHeaderSet`,
-            confirmationPayload,
-            { timeout: 300000 }
-          );
-        } else {
-          console.log("Saltando POST confirmaciones (ya fueron enviadas en 0400)");
-        }
-      } catch (err) {
-        const networkLike = isNetworkLikeError(err);
-        if (!networkLike) throw err;
-
-        console.warn("[0300][NETWORK FALLBACK]", err?.message || err);
-
-        await updateLocalOpsAsFinalizadas(orderId, selectedIds);
-        await updateLocalOrderAsFinalizada0300(orderId, finishMs);
-
-        await enqueueSap({
-          type: "STATUS",
-          orderId,
-          endpoint: "/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderSet",
-          payload: change0300WithPdfPayload,
-          dedupeKey: `STATUS:${orderId}`,
-        });
-
-        if (!alreadySentConfirmations) {
-          await enqueueSap({
-            type: "CONFIRMATIONS",
-            orderId,
-            endpoint: "/api/odata/ZCS_CREATE_CONFIRMATION_SRV/ConfirmationHeaderSet",
-            payload: confirmationPayload,
-            dedupeKey: `CONFIRMATIONS:${orderId}:0300`,
-          });
-        }
-
-        await clearOrderStart(orderId);
-        setOrderStartedAtMs(null);
-
-        await clearPendingSign(orderId);
-        setCheckedMap({});
-        setConsumibles([]);
-        setNotaTecnico("");
-        setFinalizeMode(false);
-
-        setShowMantPreview(false);
-        setPendingFinalize(null);
-
-        Alert.alert(
-          "Red inestable",
-          alreadySentConfirmations
-            ? "La señal no fue suficiente. La orden quedó finalizada localmente y se sincronizará el estatus 0300 + PDF cuando haya mejor conexión."
-            : "La señal no fue suficiente. La orden quedó finalizada localmente y se sincronizarán el estatus 0300 + PDF y las confirmaciones cuando haya mejor conexión."
-        );
-
-        router.replace("/tecnico/ordenes");
-        return;
-      }
-*/
       let statusResult = { ok: false, queued: false };
       let confirmationsResult = { ok: true, queued: false };
 
@@ -3302,7 +3401,7 @@ export default function DetalleOrden() {
           },
         });
 
-        if (!alreadySentConfirmations) {
+        if (!alreadySentConfirmations && confirmationPayload) {
           confirmationsResult = await postWithBackgroundFallback({
             apiInstance: api,
             endpoint:
@@ -3347,15 +3446,6 @@ export default function DetalleOrden() {
 
       /////////////////////////////
 
-      /*
-      Alert.alert(
-        "Orden finalizada",
-        alreadySentConfirmations
-          ? "Se envió: (Orden FINALIZADA + PDF). Confirmaciones+consumibles ya se habían enviado al guardar como Pendiente de firma."
-          : "Se envió: (Orden FINALIZADA + PDF) y confirmaciones+consumibles."
-      );
-      router.replace("/tecnico/ordenes");
-*/
 
       const algoEnCola = statusResult?.queued || confirmationsResult?.queued;
 
@@ -3523,7 +3613,8 @@ export default function DetalleOrden() {
   const allMaterials = Array.isArray(orden.componentes)
     ? orden.componentes
     : [];
-  const hasSelectedOps = Object.keys(checkedMap || {}).length > 0;
+  const hasSelectedOps =
+    isPending0400 || Object.keys(checkedMap || {}).length > 0;
 
   const ordenParaVista = {
     ...(orden || {}),
@@ -3685,18 +3776,6 @@ export default function DetalleOrden() {
           />
         }
       />
-{/*
-      {!isOpsLocked && (
-        <TouchableOpacity
-          style={styles.fab}
-          activeOpacity={0.9}
-          onPress={(e) => irAAvisoAveria(e)}
-        >
-          <Ionicons name="warning-outline" size={20} color="#000000ff" />
-          <Text style={styles.fabLabel}>Avería</Text>
-        </TouchableOpacity>
-      )}
-*/}
 
       <ModalesDetalleOrden
         styles={styles}
@@ -4080,21 +4159,6 @@ const styles = StyleSheet.create({
 });
 ////////////////////////////////
 
-/*
-function elev(multiplier = 1) {
-  return Platform.select({
-    ios: {
-      shadowColor: "#000",
-      shadowOpacity: 0.08 * multiplier,
-      shadowRadius: 8 * multiplier,
-      shadowOffset: { width: 0, height: 3 * multiplier },
-    },
-    android: { elevation: 2 * multiplier },
-    default: {},
-  });
-}
-
-*/
 function elev(multiplier = 1) {
   return Platform.select({
     ios: {

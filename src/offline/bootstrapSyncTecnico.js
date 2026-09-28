@@ -566,7 +566,7 @@ export async function bootstrapPrefetchOrdenesTecnico(
 
   /*
    * Ventana offline:
-   * 30 días anteriores y 8 días posteriores.
+   * 15 días anteriores y 1 días posteriores.
    */
   const window = buildOfflineWindow(new Date());
 

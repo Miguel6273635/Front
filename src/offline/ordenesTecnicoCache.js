@@ -726,7 +726,7 @@ function sanitizeDetailForCache(detail) {
 /**
  * Decide si conviene guardar el detalle en offline:
  * solo si la orden está dentro de los 15 días anteriores
- * o los 8 días posteriores a la fecha actual.
+ * o los 1 día posterior a la fecha actual.
  */
 export function shouldCacheDetailByOrder(orderLike, baseDate = new Date()) {
   const window = buildOfflineWindow(baseDate);

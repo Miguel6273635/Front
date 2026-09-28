@@ -41,7 +41,9 @@ export default function FormatosOrdenMultiSelect({ FIORI, orderid }) {
     setOpen(false);
     router.push({ pathname: formato.ruta, params: { orderid: orderIdFinal } });
   };
+ return null;
 
+  /*
   return (
     <View style={local.card}>
       <TouchableOpacity
@@ -117,6 +119,7 @@ export default function FormatosOrdenMultiSelect({ FIORI, orderid }) {
       )}
     </View>
   );
+  */
 }
 
 const local = StyleSheet.create({
