@@ -122,25 +122,36 @@ function getStatusFilterLabel(value) {
 
 /* ====================== Parse SAP /Date(…)/ -> ms ====================== */
 function sapDateToMs(value) {
-  if (!value) return null;
+  if (value === null || value === undefined || value === "") return null;
   if (value instanceof Date) return value.getTime();
   if (typeof value === "number") return value;
 
   const s = String(value);
   const m = s.match(/\/Date\((\-?\d+)([+-]\d{4})?\)\//);
-  if (!m) return null;
+  if (m) {
+    /*
+     * En el formato OData /Date(ms+offset)/, los milisegundos ya
+     * representan el instante. El sufijo sólo describe el offset y no se
+     * debe volver a aplicar; hacerlo puede mover una fecha SAP a otro día.
+     */
+    const ms = Number(m[1]);
+    return Number.isFinite(ms) ? ms : null;
+  }
 
-  const ms = Number(m[1]);
-  const off = m[2];
+  const parsed = new Date(s);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.getTime();
+}
 
-  if (!off) return ms;
+function sapMsToUtcYmd(ms) {
+  if (ms === null || ms === undefined) return null;
 
-  const sign = off.startsWith("-") ? -1 : 1;
-  const hh = parseInt(off.slice(1, 3), 10);
-  const mm = parseInt(off.slice(3, 5), 10);
-  const offsetMinutes = sign * (hh * 60 + mm);
+  const d = new Date(ms);
+  if (Number.isNaN(d.getTime())) return null;
 
-  return ms - offsetMinutes * 60 * 1000;
+  const year = d.getUTCFullYear();
+  const month = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(d.getUTCDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 /* ====================== Formato fecha ====================== */
@@ -745,16 +756,23 @@ export default function ListaOrdenesSupervisor() {
       if (startMs === null || startMs === undefined) {
         matchesDate = false;
       } else {
-        const orderStart = new Date(startMs);
-        const orderStartDay = atStartOfDay(orderStart);
+        /*
+         * Las fechas de orden de SAP son días de calendario codificados en
+         * UTC. Convertirlas a medianoche local (por ejemplo, UTC-6 en México)
+         * las desplaza al día anterior y hacía que el supervisor viera las
+         * órdenes del día siguiente. Se compara el YYYY-MM-DD de SAP en UTC
+         * contra el YYYY-MM-DD elegido localmente, igual que en Técnico.
+         */
+        const orderStartYmd = sapMsToUtcYmd(startMs);
 
         if (
           frontendDateFilter.start instanceof Date &&
           frontendDateFilter.end instanceof Date
         ) {
           matchesDate =
-            orderStartDay >= atStartOfDay(frontendDateFilter.start) &&
-            orderStartDay <= atEndOfDay(frontendDateFilter.end);
+            Boolean(orderStartYmd) &&
+            orderStartYmd >= ymd(frontendDateFilter.start) &&
+            orderStartYmd <= ymd(frontendDateFilter.end);
         }
       }
 

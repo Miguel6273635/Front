@@ -14,11 +14,13 @@ function sapDateToMs(value) {
   if (typeof value === "number") return value;
 
   const s = String(value);
-  const m = s.match(/\/Date\((\-?\d+)\)\//);
+  const m = s.match(/\/Date\((\-?\d+)(?:[+-]\d{4})?\)\//);
   if (!m) {
     const d = new Date(s);
     return Number.isNaN(d.getTime()) ? null : d.getTime();
   }
+
+  // Los milisegundos OData ya representan el instante; el offset es metadata.
   return Number(m[1]);
 }
 

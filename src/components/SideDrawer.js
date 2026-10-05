@@ -1,3 +1,4 @@
+// src/components/SideDrawer.js
 import React, { useEffect, useMemo, useRef } from "react";
 import {
   View,
@@ -24,6 +25,7 @@ const FIORI = {
   muted: "#63718B",
   accent: "#0A6ED1",
   danger: "#EB5757",
+  viewer: "#7C3AED",
 };
 
 export default function SideDrawer() {
@@ -38,7 +40,6 @@ export default function SideDrawer() {
       ? "/supervisor"
       : "/tecnico";
 
-  // 👉 Empieza oculto a la derecha
   const slideX = useRef(new Animated.Value(320)).current;
 
   useEffect(() => {
@@ -80,6 +81,13 @@ export default function SideDrawer() {
         onPress: () => router.push(homeRoute),
       },
       {
+        key: "consulta",
+        label: "Consultar órdenes",
+        icon: "search-outline",
+        viewer: true,
+        onPress: () => router.push("/tecnico/consulta"),
+      },
+      {
         key: "perfil",
         label: "Perfil",
         icon: "person-outline",
@@ -108,9 +116,7 @@ export default function SideDrawer() {
     [homeRoute, router]
   );
 
-  const avatarSource = user?.photo
-    ? { uri: user.photo }
-    : null;
+  const avatarSource = user?.photo ? { uri: user.photo } : null;
 
   return (
     <Modal
@@ -120,10 +126,7 @@ export default function SideDrawer() {
       onRequestClose={closeDrawer}
     >
       <View style={styles.root}>
-        <Pressable
-          style={styles.overlay}
-          onPress={closeDrawer}
-        />
+        <Pressable style={styles.overlay} onPress={closeDrawer} />
 
         <Animated.View
           style={[
@@ -155,19 +158,11 @@ export default function SideDrawer() {
             </View>
 
             <View style={{ flex: 1 }}>
-              <Text
-                style={styles.name}
-                numberOfLines={1}
-              >
-                {user?.nombre ||
-                  user?.name ||
-                  "Usuario"}
+              <Text style={styles.name} numberOfLines={1}>
+                {user?.nombre || user?.name || "Usuario"}
               </Text>
 
-              <Text
-                style={styles.role}
-                numberOfLines={1}
-              >
+              <Text style={styles.role} numberOfLines={1}>
                 {user?.rol_id === 1
                   ? "Administrador"
                   : user?.rol_id === 2
@@ -184,6 +179,7 @@ export default function SideDrawer() {
               key={it.key}
               style={[
                 styles.item,
+                it.viewer && styles.itemViewer,
                 it.danger && styles.itemDanger,
               ]}
               activeOpacity={0.75}
@@ -195,6 +191,8 @@ export default function SideDrawer() {
                 color={
                   it.danger
                     ? FIORI.danger
+                    : it.viewer
+                    ? FIORI.viewer
                     : FIORI.ink
                 }
                 style={{ width: 28 }}
@@ -203,8 +201,8 @@ export default function SideDrawer() {
               <Text
                 style={[
                   styles.itemText,
-                  it.danger &&
-                    styles.itemTextDanger,
+                  it.viewer && styles.itemTextViewer,
+                  it.danger && styles.itemTextDanger,
                 ]}
               >
                 {it.label}
@@ -229,23 +227,17 @@ const styles = StyleSheet.create({
 
   panel: {
     position: "absolute",
-
     right: 0,
     top: 0,
     bottom: 0,
-
     width: 300,
-
     backgroundColor: FIORI.panelBg,
-
     borderTopLeftRadius: 24,
     borderBottomLeftRadius: 24,
-
     paddingTop: Platform.select({
       ios: 54,
       android: 40,
     }),
-
     paddingHorizontal: 16,
 
     ...Platform.select({
@@ -275,15 +267,11 @@ const styles = StyleSheet.create({
     width: 54,
     height: 54,
     borderRadius: 18,
-
     alignItems: "center",
     justifyContent: "center",
-
     backgroundColor: "#F3F6FB",
-
     borderWidth: 1,
     borderColor: FIORI.border,
-
     overflow: "hidden",
   },
 
@@ -314,18 +302,25 @@ const styles = StyleSheet.create({
   item: {
     flexDirection: "row",
     alignItems: "center",
-
     paddingVertical: 12,
-
     borderRadius: 14,
-
     paddingHorizontal: 10,
+    marginBottom: 2,
+  },
+
+  itemViewer: {
+    backgroundColor: "#F3EEFF",
   },
 
   itemText: {
     fontSize: 15,
     color: FIORI.ink,
     fontWeight: "600",
+  },
+
+  itemTextViewer: {
+    color: FIORI.viewer,
+    fontWeight: "800",
   },
 
   itemDanger: {
