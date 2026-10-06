@@ -25,7 +25,7 @@ const FIORI = {
   muted: "#63718B",
   accent: "#0A6ED1",
   danger: "#EB5757",
-  viewer: "#7C3AED",
+  //viewer: "#7C3AED",
 };
 
 export default function SideDrawer() {
@@ -80,6 +80,7 @@ export default function SideDrawer() {
         icon: "home-outline",
         onPress: () => router.push(homeRoute),
       },
+      /*
       {
         key: "consulta",
         label: "Consultar órdenes",
@@ -87,6 +88,7 @@ export default function SideDrawer() {
         viewer: true,
         onPress: () => router.push("/tecnico/consulta"),
       },
+      */
       {
         key: "perfil",
         label: "Perfil",
@@ -308,9 +310,9 @@ const styles = StyleSheet.create({
     marginBottom: 2,
   },
 
-  itemViewer: {
+  /*itemViewer: {
     backgroundColor: "#F3EEFF",
-  },
+  },*/
 
   itemText: {
     fontSize: 15,
@@ -318,10 +320,10 @@ const styles = StyleSheet.create({
     fontWeight: "600",
   },
 
-  itemTextViewer: {
+  /*itemTextViewer: {
     color: FIORI.viewer,
     fontWeight: "800",
-  },
+  },*/
 
   itemDanger: {
     backgroundColor: "rgba(235,87,87,0.08)",
