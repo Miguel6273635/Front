@@ -177,7 +177,7 @@ export default function DetallesAveriaSupervisor() {
 
   // ======= Catálogo causas ======= //pro-01 //qas-01
   const CATALOGOS_P_URL =
-    "https://pro-mitsu-ti2dye4u.launchpad.cfapps.us10.hana.ondemand.com/94971020-c396-427a-97c1-57aa50753fd3.comtelluscustomerservice.comtelluscustomerservice/sap/opu/odata/sap/ZSD_CATALOGOS_SRV/CircunstanciaSet?$filter=Catalogo%20eq%20%27P%27";
+    "https://qas-mitsu-ti2dye4u.launchpad.cfapps.us10.hana.ondemand.com/94971020-c396-427a-97c1-57aa50753fd3.comtelluscustomerservice.comtelluscustomerservice/sap/opu/odata/sap/ZSD_CATALOGOS_SRV/CircunstanciaSet?$filter=Catalogo%20eq%20%27P%27";
 
   const fetchCatalogoCausas = async () => {
     try {
