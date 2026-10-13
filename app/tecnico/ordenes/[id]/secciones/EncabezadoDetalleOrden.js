@@ -76,7 +76,7 @@ export default function EncabezadoDetalleOrden({
   const isCartaNoMantto = statusCode === "0600" || !!isNoMant;
   const isPendingFirma0400 = statusCode === "0400";
   const isFinished0300 = statusCode === "0300" || !!isOrderFinished;
-  const canOpenTbmky = statusCode === "0100" || statusCode === "0200";
+  const canOpenTbmky = statusCode === "0100";
   const canOpenNoMantto = statusCode === "0100";
   const showServiceActions = canOpenTbmky || canOpenNoMantto;
 

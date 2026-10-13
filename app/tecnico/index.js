@@ -66,7 +66,7 @@ const TILES = [
     softColor: "#F1EEF5",
     onPress: () => router.push("/tecnico/rutas"),
   },
-  {
+  /*{
     key: "rh",
     title: "Vistas RH",
     description: "Preubas de vistas de RH",
@@ -74,7 +74,7 @@ const TILES = [
     accent: "#727c5a",
     softColor: "#F1EEF5",
     onPress: () => router.push("/tecnico/RH"),
-  },
+  },*/
 
   /*
   {
