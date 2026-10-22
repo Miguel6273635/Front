@@ -3777,6 +3777,34 @@ export default function DetalleOrden() {
         }
       />
 
+      {/* Botón flotante - Crear aviso de avería */}
+      <TouchableOpacity
+        style={styles.fab}
+        activeOpacity={0.85}
+        onPress={() => {
+          const orderId = String(orden?.Orderid || id || "").trim();
+
+          if (!orderId) {
+            Alert.alert("Error", "No se encontró el número de orden.");
+            return;
+          }
+
+          router.push({
+            pathname: "/tecnico/ordenes/[orderid]/aviso-averia",
+            params: { orderid: orderId },
+          });
+        }}
+      >
+        <Ionicons
+          name="warning-outline"
+          size={19}
+          color="#000"
+        />
+        <Text style={styles.fabLabel}>
+          Crear aviso
+        </Text>
+      </TouchableOpacity>
+
       <ModalesDetalleOrden
         styles={styles}
         FIORI={FIORI}
