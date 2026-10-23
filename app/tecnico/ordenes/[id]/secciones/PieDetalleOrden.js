@@ -49,6 +49,7 @@ export default function PieDetalleOrden({
   onGuardarPendiente,
   onAgregarFirma,
   hasSelectedOps = false,
+  timerBlocked = false,
 
   styleOverride,
 }) {
@@ -96,7 +97,11 @@ export default function PieDetalleOrden({
     );
   };
 
-  const disabledBySelection = !hasSelectedOps || !!finishingOrder;
+  // Finalizar no puede iniciar hasta que el detalle confirme un inicio real.
+  // Se aplica igualmente a las acciones de guardar pendiente y pedir firma.
+  const disabledBySelection =
+    !hasSelectedOps || !!finishingOrder || !!timerBlocked;
+  const disabledFinish = !!finishingOrder || !!timerBlocked;
 
   const finishLabel = finishingOrder
     ? "Preparando…"
@@ -145,16 +150,21 @@ export default function PieDetalleOrden({
         </View>
       ) : (
         <ActionButton
-          icon="flag-outline"
+          icon={timerBlocked ? "lock-closed-outline" : "flag-outline"}
           label={finishLabel}
           onPress={onFinalizarOrden}
-          disabled={!!finishingOrder}
+          disabled={disabledFinish}
           style={[
             { backgroundColor: "#0B8457" },
-            finishingOrder && local.disabled,
+            disabledFinish && local.disabled,
           ]}
         />
       )}
+      {timerBlocked ? (
+        <Text style={local.timerHint}>
+          Inicia el cronómetro para habilitar la finalización de esta orden.
+        </Text>
+      ) : null}
     </View>
   );
 }
@@ -165,6 +175,7 @@ function ActionButton({ icon, label, onPress, disabled, style }) {
       activeOpacity={0.9}
       onPress={disabled ? null : onPress}
       disabled={disabled}
+      accessibilityState={{ disabled: !!disabled }}
       style={[local.btn, style]}
     >
       <Ionicons name={icon} size={18} color="#fff" style={{ marginRight: 10 }} />
@@ -211,6 +222,15 @@ const local = StyleSheet.create({
   },
 
   disabled: {
-    opacity: 0.6,
+    opacity: 0.45,
+  },
+
+  timerHint: {
+    textAlign: "center",
+    color: "#855000",
+    fontSize: 12,
+    fontWeight: "600",
+    marginTop: 8,
+    paddingHorizontal: 10,
   },
 });

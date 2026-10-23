@@ -6,7 +6,26 @@ import {
 const WORK_ORDER_BULK_ENDPOINT =
   "/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderBulkSet";
 
-export function buildTbmkyBulkPayload({ orderId, pdfBase64, fileName }) {
+function buildWorkOrderRepSet(trabajadores = []) {
+  if (!Array.isArray(trabajadores)) return [];
+
+  // trabajadores[0] es el tecnico principal: no se envia como auxiliar.
+  // Una nomina precargada (Z2) sin nombre tampoco es un auxiliar capturado.
+  return trabajadores
+    .slice(1)
+    .map((trabajador) => ({
+      NumNomina: String(trabajador?.nomina ?? "").trim(),
+      Nombre: String(trabajador?.nombre ?? "").trim(),
+    }))
+    .filter((trabajador) => trabajador.NumNomina && trabajador.Nombre);
+}
+
+export function buildTbmkyBulkPayload({
+  orderId,
+  pdfBase64,
+  fileName,
+  trabajadores = [],
+}) {
   const cleanOrderId = String(orderId || "").trim();
   const cleanBase64 = String(pdfBase64 || "")
     .replace(/^data:application\/pdf;base64,/, "")
@@ -42,6 +61,7 @@ export function buildTbmkyBulkPayload({ orderId, pdfBase64, fileName }) {
           },
         ],
         Return: [],
+        WorkOrderRepSet: buildWorkOrderRepSet(trabajadores),
       },
     ],
   };
@@ -78,11 +98,13 @@ export async function subirPdfOrden({
   orderId,
   pdfBase64,
   fileName,
+  trabajadores = [],
 }) {
   const bulkPayload = buildTbmkyBulkPayload({
     orderId,
     pdfBase64,
     fileName,
+    trabajadores,
   });
 
   console.log(

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -20,7 +20,7 @@ import api from "../../../../src/services/api";
 import { useAuth } from "../../../../src/context/AuthContext";
 import { useOrdenesTecnico } from "../../../../src/context/OrdenesTecnicoContext";
 import { addPageNumbersToPdfBase64 } from "../../../../src/services/pdf/addPageNumbersToPdf";
-import { useLocalSearchParams, router } from "expo-router";
+import { useLocalSearchParams, router, useFocusEffect } from "expo-router";
 
 import {
   loadOrdenTecnicoDetail,
@@ -86,6 +86,12 @@ const FIORI = {
 
 /* ====================== Orden iniciada (contador) ====================== */
 const ORDER_START_KEY = (orderId) => `orderStart:${orderId}`;
+// Un nuevo ciclo de la orden no debe recuperar tiempos de ciclos anteriores.
+const ORDER_TIMER_RESET_KEY = (orderId) => `orderTimerResetAt:${orderId}`;
+const ORDER_TIMER_STATUS_KEY = (orderId) => `orderTimerSapStatus:${orderId}`;
+// Una marca nueva solo existe despues de guardar o encolar correctamente un TBMK.
+const TBMK_TIMER_RESET_KEY = (orderId) =>
+  `orderTimerPendingNewTbmk:${String(orderId || "").trim()}`;
 const ORDER_FINISH_KEY = (orderId) => `orderFinish:${orderId}`;
 const ORDER_ELAPSED_KEY = (orderId) => `orderElapsed:${orderId}`;
 const PENDING_SIGN_KEY = (orderId) => `pendingSign:${orderId}`;
@@ -118,19 +124,52 @@ function fmtDateTimeLocal(ms) {
   return `${dd}/${mm}/${yyyy} ${hh}:${mi}:${ss}`;
 }
 
+function isValidOrderStartMs(value) {
+  const number = Number(value);
+  return (
+    value != null &&
+    value !== "" &&
+    Number.isFinite(number) &&
+    number > 0 &&
+    number <= Date.now() + 60000
+  );
+}
+
+async function loadOrderTimerResetAt(orderId) {
+  try {
+    const raw = await AsyncStorage.getItem(ORDER_TIMER_RESET_KEY(orderId));
+    const timestamp = Number(raw);
+    return Number.isFinite(timestamp) && timestamp > 0 ? timestamp : 0;
+  } catch {
+    return 0;
+  }
+}
+
 async function loadOrderStart(orderId) {
+  if (!String(orderId || "").trim()) return null;
   try {
     const raw = await AsyncStorage.getItem(ORDER_START_KEY(orderId));
-    const v = raw ? Number(raw) : null;
-    return Number.isFinite(v) ? v : null;
-  } catch {
+    const resetAt = await loadOrderTimerResetAt(orderId);
+    return isValidOrderStartMs(raw) && Number(raw) > resetAt
+      ? Number(raw)
+      : null;
+  } catch (error) {
+    console.warn("[CRONOMETRO] No se pudo leer la hora de inicio:", error?.message || error);
     return null;
   }
 }
+
 async function saveOrderStart(orderId, ms) {
-  try {
-    await AsyncStorage.setItem(ORDER_START_KEY(orderId), String(ms));
-  } catch {}
+  if (!String(orderId || "").trim() || !isValidOrderStartMs(ms)) {
+    throw new Error("Orden u hora de inicio no validas.");
+  }
+  // No ocultar errores: si la escritura falla, el cronometro NO debe
+  // aparecer como iniciado y el tecnico debe poder volver a intentarlo.
+  await AsyncStorage.setItem(ORDER_START_KEY(orderId), String(ms));
+  const confirmed = await loadOrderStart(orderId);
+  if (confirmed !== Number(ms)) {
+    throw new Error("No fue posible confirmar el inicio en almacenamiento local.");
+  }
 }
 async function clearOrderStart(orderId) {
   try {
@@ -1288,6 +1327,11 @@ export default function DetalleOrden() {
 
   const [startingOrder, setStartingOrder] = useState(false);
   const [orderStartedAtMs, setOrderStartedAtMs] = useState(null);
+  const [timerRestoring, setTimerRestoring] = useState(true);
+  const timerStartRef = useRef(null);
+  const timerOrderIdRef = useRef("");
+  const timerResetAtRef = useRef(0);
+  const tbmkResetPromiseRef = useRef(null);
   const [orderFinishedAtMs, setOrderFinishedAtMs] = useState(null);
   const [nowTick, setNowTick] = useState(Date.now());
   const [orderElapsedMs, setOrderElapsedMs] = useState(null);
@@ -1319,6 +1363,267 @@ export default function DetalleOrden() {
       user?.preferred_username ||
       "unknown",
   ).trim();
+
+  // Recupera un inicio REAL guardado para esta orden. No inventa horas.
+  // El cronometro es local y puede seguir aunque React tarde en rehidratarse.
+  const recuperarInicioCronometro = async (requestedOrderId, pendingArg = null) => {
+    const orderId = String(requestedOrderId || id || "").trim();
+    if (!orderId) return null;
+    const resetAt = Math.max(
+      timerResetAtRef.current,
+      await loadOrderTimerResetAt(orderId),
+    );
+    timerResetAtRef.current = resetAt;
+
+    const ids = [
+      orderId,
+      String(id || "").trim(),
+      String(Number(orderId)) !== "NaN" ? String(Number(orderId)) : "",
+    ].filter((value, index, all) => value && all.indexOf(value) === index);
+
+    let savedStart = null;
+    let keyWithStart = "";
+    for (const key of ids) {
+      const found = await loadOrderStart(key);
+      if (isValidOrderStartMs(found) && Number(found) > resetAt) {
+        savedStart = found;
+        keyWithStart = key;
+        break;
+      }
+    }
+
+    // Las ordenes en Pendiente de firma pueden tener la hora guardada
+    // tambien en su respaldo local, incluso si la vista perdio su state.
+    let pending = pendingArg;
+    if (!savedStart && pending == null) {
+      pending = await loadPendingSign(orderId);
+    }
+    if (
+      !savedStart &&
+      isValidOrderStartMs(pending?.orderStartedAtMs) &&
+      Number(pending.orderStartedAtMs) > resetAt
+    ) {
+      savedStart = Number(pending.orderStartedAtMs);
+    }
+
+    // Ultimo respaldo: state de la misma orden en esta ejecucion.
+    if (
+      !savedStart &&
+      timerOrderIdRef.current === orderId &&
+      isValidOrderStartMs(timerStartRef.current) &&
+      timerStartRef.current > resetAt
+    ) {
+      savedStart = timerStartRef.current;
+    }
+
+    if (!isValidOrderStartMs(savedStart)) return null;
+
+    // Una limpieza del TBMK pudo ocurrir mientras se leia otro respaldo:
+    // antes de actualizar React comprobamos OTRA VEZ el ultimo reset.
+    const latestReset = Math.max(
+      timerResetAtRef.current,
+      await loadOrderTimerResetAt(orderId),
+    );
+    if (savedStart <= latestReset) return null;
+
+    // Normalizar la clave si la orden llego con/sin ceros a la izquierda.
+    if (keyWithStart !== orderId) {
+      try {
+        await saveOrderStart(orderId, savedStart);
+      } catch (error) {
+        console.warn(
+          "[CRONOMETRO] El inicio se recupero, pero no pudo replicarse:",
+          error?.message || error,
+        );
+      }
+    }
+
+    timerOrderIdRef.current = orderId;
+    timerStartRef.current = savedStart;
+    setOrderStartedAtMs(savedStart);
+    setNowTick(Date.now());
+    return savedStart;
+  };
+
+  // Borra exclusivamente tiempos de la orden (no materiales, operaciones ni PDF).
+  // También invalida fechas antiguas que pudieran quedar en respaldos locales.
+  const limpiarCronometroPorNuevoCiclo = async (requestedOrderId, motivo = "") => {
+    const orderId = String(requestedOrderId || id || "").trim();
+    if (!orderId) return false;
+
+    setTimerRestoring(true);
+    try {
+      const resetAt = Date.now();
+      // Primero marcar el nuevo ciclo: aun si falla una limpieza parcial,
+      // ningun respaldo de una jornada anterior sera considerado valido.
+      const aliases = [
+        orderId,
+        String(id || "").trim(),
+        Number.isFinite(Number(orderId)) ? String(Number(orderId)) : "",
+      ].filter((value, idx, values) => value && values.indexOf(value) === idx);
+      await AsyncStorage.multiSet(
+        aliases.map((key) => [ORDER_TIMER_RESET_KEY(key), String(resetAt)]),
+      );
+      timerResetAtRef.current = resetAt;
+
+      // Limpiar tambien respaldos bajo los IDs con/sin ceros a la izquierda.
+      for (const alias of aliases) {
+        const pending = await loadPendingSign(alias);
+        if (pending && typeof pending === "object") {
+          await AsyncStorage.setItem(
+            PENDING_SIGN_KEY(alias),
+            JSON.stringify({
+              ...pending,
+              orderStartedAtMs: null,
+              orderFinishedAtMs: null,
+              orderElapsedMs: null,
+            }),
+          );
+        }
+      }
+
+      await AsyncStorage.multiRemove(
+        aliases.flatMap((key) => [
+          ORDER_START_KEY(key), ORDER_FINISH_KEY(key), ORDER_ELAPSED_KEY(key),
+        ]),
+      );
+
+      timerStartRef.current = null;
+      timerOrderIdRef.current = orderId;
+      setOrderStartedAtMs(null);
+      setOrderFinishedAtMs(null);
+      setOrderElapsedMs(null);
+      setPendingFinalize(null);
+      setFinalizeMode(false);
+      setShowSignModal(false);
+      setNowTick(Date.now());
+      console.log("[CRONOMETRO] Tiempo anterior invalidado:", { orderId, motivo });
+      return true;
+    } catch (error) {
+      console.warn("[CRONOMETRO] Error al reiniciar:", error?.message || error);
+      Alert.alert(
+        "No se pudo restablecer",
+        "No se pudieron limpiar completamente los tiempos locales. Vuelve a intentarlo.",
+      );
+      return false;
+    } finally {
+      setTimerRestoring(false);
+    }
+  };
+
+  // Solo un estatus confirmado por el backend puede indicar un nuevo ciclo;
+  // no se usa el cache para borrar tiempos, porque puede estar desactualizado.
+  const reconciliarCronometroConSap = async (orderId, sapOrder) => {
+    if (!sapOrder || typeof sapOrder !== "object") return null;
+    const hasStatus = ["estatus_code", "userstatus", "Userstatus", "UserStatus", "UserStText"]
+      .some((key) => Object.prototype.hasOwnProperty.call(sapOrder, key));
+    if (!hasStatus) return null;
+    const remoteStatus = pickCurrentStatusCode(sapOrder);
+    if (!["0100", "0200", "0300", "0400", "0500", "0600"].includes(remoteStatus)) {
+      return null;
+    }
+
+    const previousStatus = await AsyncStorage.getItem(ORDER_TIMER_STATUS_KEY(orderId));
+    const isNewCycle =
+      remoteStatus === "0100" ||
+      (remoteStatus === "0200" &&
+        ["0100", "0300", "0400", "0500", "0600"].includes(previousStatus));
+    const isClosedCycle = ["0300", "0500", "0600"].includes(remoteStatus);
+
+    let didReset = false;
+    if (isNewCycle || isClosedCycle) {
+      const oldStart = await recuperarInicioCronometro(orderId);
+      if (oldStart) {
+        didReset = await limpiarCronometroPorNuevoCiclo(
+          orderId,
+          `SAP ${previousStatus || "?"} -> ${remoteStatus}`,
+        );
+      }
+    }
+    await AsyncStorage.setItem(ORDER_TIMER_STATUS_KEY(orderId), remoteStatus);
+    return { status: remoteStatus, didReset };
+  };
+
+  // El propio TBMK deja un evento por orden. Solo ese evento permite borrar
+  // automaticamente el tiempo antiguo cuando el tecnico regresa a Detalles.
+  // El evento se consume una sola vez, aunque cierre la app antes de entrar.
+  const aplicarReinicioPendientePorTbmk = async (requestedOrderId) => {
+    const orderId = String(requestedOrderId || id || "").trim();
+    if (!orderId) return false;
+    if (tbmkResetPromiseRef.current) return tbmkResetPromiseRef.current;
+
+    const task = (async () => {
+      const aliases = [
+        orderId,
+        String(id || "").trim(),
+        Number.isFinite(Number(orderId)) ? String(Number(orderId)) : "",
+      ].filter((value, index, list) => value && list.indexOf(value) === index);
+      const pendingKeys = aliases.map(TBMK_TIMER_RESET_KEY);
+      const pendingValues = await AsyncStorage.multiGet(pendingKeys);
+      const hasNewTbmk = pendingValues.some(([, value]) => !!value);
+      if (!hasNewTbmk) return false;
+
+      // El boton Finalizar permanece inhabilitado hasta concluir la limpieza.
+      const ok = await limpiarCronometroPorNuevoCiclo(orderId, "Nuevo TBMK guardado");
+      if (!ok) return false; // mantener evento pendiente para reintento posterior
+
+      await AsyncStorage.multiRemove(pendingKeys);
+      // La orden queda en Proceso tras TBMK, aun cuando SAP todavia
+      // no haya sincronizado el registro offline.
+      await AsyncStorage.setItem(ORDER_TIMER_STATUS_KEY(orderId), "0200");
+      return true;
+    })();
+
+    tbmkResetPromiseRef.current = task;
+    try {
+      return await task;
+    } finally {
+      if (tbmkResetPromiseRef.current === task) tbmkResetPromiseRef.current = null;
+    }
+  };
+
+  // Antes de mostrar el recordatorio o habilitar Finalizar, recuperar
+  // el valor persistido. Esto evita falsos mensajes de 'sin cronometro'.
+  useEffect(() => {
+    let current = true;
+    const orderId = String(id || "").trim();
+    setTimerRestoring(true);
+    timerOrderIdRef.current = orderId;
+    timerStartRef.current = null;
+    setOrderStartedAtMs(null);
+    (async () => {
+      timerResetAtRef.current = await loadOrderTimerResetAt(orderId);
+      try {
+        await aplicarReinicioPendientePorTbmk(orderId);
+        await recuperarInicioCronometro(orderId);
+      } finally {
+        if (current) setTimerRestoring(false);
+      }
+    })().catch((error) => {
+      console.warn("[CRONOMETRO] Error al recuperar inicio:", error?.message || error);
+      if (current) setTimerRestoring(false);
+    });
+    return () => { current = false; };
+  }, [id]);
+
+  // Si el router reutiliza el detalle en vez de montarlo de nuevo,
+  // comprobar el evento tambien cuando la pantalla recupera el foco.
+  useFocusEffect(
+    useCallback(() => {
+      let active = true;
+      const orderId = String(id || "").trim();
+      (async () => {
+        if (!orderId) return;
+        if (!active) return;
+        // El helper contempla IDs con y sin ceros iniciales.
+        await aplicarReinicioPendientePorTbmk(orderId);
+      })().catch((e) => {
+        console.warn("[CRONOMETRO] No se pudo aplicar el nuevo TBMK al volver:", e?.message || e);
+        if (active) setTimerRestoring(false);
+      });
+      return () => { active = false; };
+    }, [id]),
+  );
 
   const baseStatusCode = pickCurrentStatusCode(orden);
 
@@ -1377,7 +1682,16 @@ export default function DetalleOrden() {
 
   const canStartTimer =
     isOrderEnProceso && !isNoMant && !isOrderFinishedReal && !!checkinDone;
-  const showRunningTimer = isOrderEnProceso && !!orderStartedAtMs;
+  const timerStartConfirmed = isValidOrderStartMs(orderStartedAtMs);
+  const timerBlocked =
+    ["0200", "0400"].includes(statusCode) &&
+    (timerRestoring || !timerStartConfirmed);
+  const showTimerReminder =
+    statusCode === "0200" &&
+    canStartTimer &&
+    !timerRestoring &&
+    !timerStartConfirmed;
+  const showRunningTimer = isOrderEnProceso && timerStartConfirmed && !timerRestoring;
   const showFrozenTimer = isPending0400 && orderElapsedMs != null;
 
   const safeSaveDetailIfWindow = async (orderId, detailObj) => {
@@ -1728,6 +2042,7 @@ export default function DetalleOrden() {
 
     try {
       setLoading(true);
+      await aplicarReinicioPendientePorTbmk(orderIdParam);
 
       const cached = await loadOrdenTecnicoDetail(orderIdParam);
       const cachedDataNormalized = normalizeDetailForView(
@@ -1810,7 +2125,10 @@ export default function DetalleOrden() {
         if (typeof pendingCached?.avisoCliente === "string")
           setAvisoCliente(pendingCached.avisoCliente || "");
 
-        if (Number.isFinite(pendingCached?.orderStartedAtMs)) {
+        if (
+          isValidOrderStartMs(pendingCached?.orderStartedAtMs) &&
+          pendingCached.orderStartedAtMs > await loadOrderTimerResetAt(cachedOrderId)
+        ) {
           setOrderStartedAtMs(pendingCached.orderStartedAtMs);
         }
         if (Number.isFinite(pendingCached?.orderFinishedAtMs)) {
@@ -1858,6 +2176,28 @@ export default function DetalleOrden() {
           orderId: orderIdParam,
           cachedUpdatedAt: cached?.updatedAt || null,
         });
+        // Incluso con detalle vigente, verificar estatus si existe un inicio
+        // previo. Así un reinicio hecho en SAP no conserva horas de una prueba.
+        const stillHasOldTimer = await recuperarInicioCronometro(orderIdParam);
+        if (stillHasOldTimer) {
+          try {
+            const latest = await api.get(`/api/ordenes/sap/${orderIdParam}`);
+            const result = await reconciliarCronometroConSap(
+              String(latest?.data?.Orderid || orderIdParam), latest?.data,
+            );
+            if (result?.didReset && result.status !== "0200") {
+              setOrden((prev) => ({
+                ...(prev || {}),
+                estatus_code: result.status,
+                userstatus: result.status,
+                estatus_label: resolveStatusLabelFromCode(result.status),
+                isFinal: ["0300", "0500", "0600"].includes(result.status),
+              }));
+            }
+          } catch (error) {
+            console.log("[CRONOMETRO] Sin confirmacion SAP para reset:", error?.message || error);
+          }
+        }
         return;
       }
 
@@ -1869,6 +2209,9 @@ export default function DetalleOrden() {
 
       const resOrden = await api.get(`/api/ordenes/sap/${orderIdParam}`);
       const baseOrden = resOrden.data || {};
+      const resetBySap = await reconciliarCronometroConSap(
+        String(baseOrden?.Orderid || orderIdParam), baseOrden,
+      );
 
       let shortTextHeader = "";
       try {
@@ -2022,6 +2365,14 @@ export default function DetalleOrden() {
       // offline. El detalle conserva todos sus datos, pero usa ese mismo
       // estatus para que ambas pantallas nunca se contradigan.
       const data = mergeStatusFromSharedOrder(dataFromSap, sharedOrder);
+      // Si el backend confirmó que la orden se reinició o cerró,
+      // evitar que un listado antiguo vuelva a pintar el estatus 0200.
+      if (resetBySap?.didReset && resetBySap.status !== "0200") {
+        data.estatus_code = resetBySap.status;
+        data.userstatus = resetBySap.status;
+        data.estatus_label = resolveStatusLabelFromCode(resetBySap.status);
+        data.isFinal = ["0300", "0500", "0600"].includes(resetBySap.status);
+      }
 
       setOrden(data);
 
@@ -2101,7 +2452,10 @@ export default function DetalleOrden() {
           if (typeof pending?.avisoCliente === "string")
             setAvisoCliente(pending.avisoCliente || "");
 
-          if (Number.isFinite(pending?.orderStartedAtMs)) {
+          if (
+            isValidOrderStartMs(pending?.orderStartedAtMs) &&
+            pending.orderStartedAtMs > await loadOrderTimerResetAt(orderIdReal)
+          ) {
             setOrderStartedAtMs(pending.orderStartedAtMs);
           }
           if (Number.isFinite(pending?.orderFinishedAtMs)) {
@@ -2146,9 +2500,10 @@ export default function DetalleOrden() {
 
         const savedElapsed = await loadOrderElapsed(orderIdReal);
         if (savedElapsed != null) setOrderElapsedMs(savedElapsed);
-      } else {
+      } else if (isFinalLocal || statusCodeLocal === "0600") {
+        // No borrar el inicio de 0200 solo porque SAP devolvio un 0100
+        // temporal o la precarga aun no termino.
         setOrderStartedAtMs(null);
-        await clearOrderStart(orderIdReal);
       }
 
       if (isFinalLocal) {
@@ -2400,9 +2755,9 @@ export default function DetalleOrden() {
       return;
     }
 
-    if (orderStartedAtMs) return;
-
     const orderId = String(orden.Orderid).trim();
+    const alreadyStarted = await recuperarInicioCronometro(orderId);
+    if (alreadyStarted) return;
 
     Alert.alert("Iniciar orden", "¿Deseas iniciar el cronómetro de la orden?", [
       { text: "Cancelar", style: "cancel" },
@@ -2418,9 +2773,22 @@ export default function DetalleOrden() {
             await clearOrderElapsed(orderId);
             setOrderElapsedMs(null);
 
+            // La escritura debe quedar confirmada ANTES de habilitar Finalizar.
+            const previousStart = await recuperarInicioCronometro(orderId);
+            if (previousStart) return;
             const startMs = Date.now();
             await saveOrderStart(orderId, startMs);
+            // Registrar el ciclo actual, para identificar regresiones
+            // de estatus que lleguen posteriormente desde SAP.
+            try {
+              await AsyncStorage.setItem(ORDER_TIMER_STATUS_KEY(orderId), "0200");
+            } catch (error) {
+              console.warn("[CRONOMETRO] No se pudo registrar estatus local:", error?.message || error);
+            }
+            timerOrderIdRef.current = orderId;
+            timerStartRef.current = startMs;
             setOrderStartedAtMs(startMs);
+            setTimerRestoring(false);
             setNowTick(Date.now());
 
             Alert.alert("Listo", "Cronómetro iniciado.");
@@ -2435,12 +2803,21 @@ export default function DetalleOrden() {
     ]);
   };
 
-  const handleFinalizarOrden = (e) => {
+  const handleFinalizarOrden = async (e) => {
     e?.stopPropagation?.();
 
     const orderid = String(orden?.Orderid ?? id ?? "").trim();
     if (!orderid) {
       Alert.alert("Error", "No se encontró el número de orden.");
+      return;
+    }
+
+    const start = await recuperarInicioCronometro(orderid);
+    if (!start) {
+      Alert.alert(
+        "Cronómetro pendiente",
+        "Primero inicia el cronómetro para registrar el tiempo de las actividades.",
+      );
       return;
     }
 
@@ -2471,10 +2848,11 @@ export default function DetalleOrden() {
       return;
     }
 
-    if (!orderStartedAtMs) {
+    const effectiveStartMs = await recuperarInicioCronometro(orderId);
+    if (!effectiveStartMs) {
       Alert.alert(
-        "Sin cronómetro",
-        "No se detectó el inicio del cronómetro. Inicia la orden para poder prorratear y mandar operaciones.",
+        "Cronómetro pendiente",
+        "Primero inicia el cronómetro para poder guardar las actividades y sus tiempos.",
       );
       return;
     }
@@ -2501,7 +2879,7 @@ export default function DetalleOrden() {
       }
 
       const finishMs = Date.now();
-      const elapsedMs = Math.max(0, finishMs - orderStartedAtMs);
+      const elapsedMs = Math.max(0, finishMs - effectiveStartMs);
 
       await saveOrderElapsed(orderId, elapsedMs);
       setOrderElapsedMs(elapsedMs);
@@ -2536,7 +2914,7 @@ export default function DetalleOrden() {
         orderId,
         opsAll,
         selectedIds,
-        startMs: orderStartedAtMs,
+        startMs: effectiveStartMs,
         finishMs,
         consumiblesRows: consumibles,
         plantFallback,
@@ -2573,9 +2951,7 @@ export default function DetalleOrden() {
         tipo_equipo: tipoEquipo,
         EquipmentType: tipoEquipo,
 
-        orderStartedAtMs: Number.isFinite(orderStartedAtMs)
-          ? orderStartedAtMs
-          : null,
+        orderStartedAtMs: effectiveStartMs,
         orderFinishedAtMs: finishMs,
         orderElapsedMs: elapsedMs,
       };
@@ -2815,10 +3191,13 @@ export default function DetalleOrden() {
         setCheckedMap(checkedMapForPdf);
       }
 
+      const effectiveStartMs = await recuperarInicioCronometro(orderId, pendingDraft);
+      if (!effectiveStartMs) {
+        Alert.alert("Cronómetro pendiente", "Inicia el cronómetro antes de continuar.");
+        return;
+      }
       const draftFinishMs = Date.now();
-      const draftElapsedMs = orderStartedAtMs
-        ? Math.max(0, draftFinishMs - orderStartedAtMs)
-        : null;
+      const draftElapsedMs = Math.max(0, draftFinishMs - effectiveStartMs);
 
       setShowSignModal(false);
       setMantHtmlPreview(null);
@@ -2855,7 +3234,7 @@ export default function DetalleOrden() {
         notaTecnico: String(notaTecnico || "").trim(),
         coberturaTipo: coberturaTipo || orden?.cobertura_tipo || "SIN COBERTURA",
         consumibles,
-        startMs: orderStartedAtMs,
+        startMs: effectiveStartMs,
         finishMs: draftFinishMs,
         elapsedMs: draftElapsedMs,
       });
@@ -2910,16 +3289,15 @@ export default function DetalleOrden() {
       setCheckedMap(selection.checkedMap);
     }
 
-    if (orderStartedAtMs) {
-      const elapsed = Math.max(0, Date.now() - orderStartedAtMs);
-      await saveOrderElapsed(orderId, elapsed);
-      setOrderElapsedMs(elapsed);
+    const effectiveStartMs = await recuperarInicioCronometro(orderId, pendingAnterior);
+    if (!effectiveStartMs) {
+      Alert.alert("Cronómetro pendiente", "Inicia el cronómetro antes de solicitar la firma.");
+      return;
     }
-
     const draftFinishMs = Date.now();
-    const draftElapsedMs = orderStartedAtMs
-      ? Math.max(0, draftFinishMs - orderStartedAtMs)
-      : null;
+    const draftElapsedMs = Math.max(0, draftFinishMs - effectiveStartMs);
+    await saveOrderElapsed(orderId, draftElapsedMs);
+    setOrderElapsedMs(draftElapsedMs);
 
     const tipoEquipo = await resolveEquipmentTypeForCurrentOrder();
     if (!tipoEquipo) {
@@ -2957,9 +3335,7 @@ export default function DetalleOrden() {
       tipo_equipo: tipoEquipo,
       EquipmentType: tipoEquipo,
 
-      orderStartedAtMs: Number.isFinite(orderStartedAtMs)
-        ? orderStartedAtMs
-        : pendingAnterior?.orderStartedAtMs ?? null,
+      orderStartedAtMs: effectiveStartMs,
       orderFinishedAtMs: draftFinishMs,
       orderElapsedMs: draftElapsedMs,
     });
@@ -3046,9 +3422,7 @@ export default function DetalleOrden() {
         setCheckedMap(checkedMapForPdf);
       }
 
-      const effectiveStartMs = Number.isFinite(pendingDraft?.orderStartedAtMs)
-        ? pendingDraft.orderStartedAtMs
-        : orderStartedAtMs;
+      const effectiveStartMs = await recuperarInicioCronometro(orderId, pendingDraft);
 
       const effectiveFinishMs = Number.isFinite(pendingDraft?.orderFinishedAtMs)
         ? pendingDraft.orderFinishedAtMs
@@ -3062,8 +3436,8 @@ export default function DetalleOrden() {
 
       if (!effectiveStartMs) {
         Alert.alert(
-          "Sin cronómetro",
-          "No se detectó el inicio del cronómetro. Inicia la orden para poder prorratear tiempos.",
+          "Cronómetro pendiente",
+          "Primero inicia el cronómetro. Si ya lo iniciaste, vuelve a abrir el detalle para recuperar el tiempo guardado.",
         );
         return;
       }
@@ -3358,6 +3732,7 @@ export default function DetalleOrden() {
         }
 
         await clearOrderStart(orderId);
+        timerStartRef.current = null;
         setOrderStartedAtMs(null);
 
         await clearPendingSign(orderId);
@@ -3433,6 +3808,7 @@ export default function DetalleOrden() {
       await updateLocalOrderAsFinalizada0300(orderId, finishMs);
 
       await clearOrderStart(orderId);
+      timerStartRef.current = null;
       setOrderStartedAtMs(null);
 
       await clearPendingSign(orderId);
@@ -3535,7 +3911,7 @@ export default function DetalleOrden() {
       <View style={styles.container}>
         <Header title={`Orden ${id || ""}`} />
 
-        {canStartTimer && !orderStartedAtMs ? (
+        {canStartTimer && !timerStartConfirmed && !timerRestoring ? (
           <View style={styles.topActionBar}>
             <TouchableOpacity
               activeOpacity={0.9}
@@ -3625,7 +4001,7 @@ export default function DetalleOrden() {
     <View style={styles.container}>
       <Header title={`Orden ${orden?.Orderid || id || ""}`} />
 
-      {canStartTimer && !orderStartedAtMs ? (
+      {canStartTimer && !timerStartConfirmed && !timerRestoring ? (
         <View style={styles.topActionBar}>
           <TouchableOpacity
             activeOpacity={0.9}
@@ -3657,6 +4033,18 @@ export default function DetalleOrden() {
               color={FIORI.text}
             />
             <Text style={styles.timerText}>{msToHMS(orderElapsedMs)}</Text>
+          </View>
+        </View>
+      ) : null}
+
+      {showTimerReminder ? (
+        <View style={styles.timerReminder}>
+          <Ionicons name="time-outline" size={20} color="#9A5B00" />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.timerReminderTitle}>Recuerda iniciar el cronómetro</Text>
+            <Text style={styles.timerReminderText}>
+              Cuando comiences tus actividades, toca «Iniciar orden» para registrar tu tiempo.
+            </Text>
           </View>
         </View>
       ) : null}
@@ -3773,11 +4161,12 @@ export default function DetalleOrden() {
             onAgregarFirma={abrirFirmaCliente}
             onGuardarPendiente={guardarPendienteDeFirma}
             hasSelectedOps={hasSelectedOps}
+            timerBlocked={timerBlocked}
           />
         }
       />
 
-      {/* Botón flotante - Crear aviso de avería */}
+      {/* Botón flotante - Crear aviso de avería 
       <TouchableOpacity
         style={styles.fab}
         activeOpacity={0.85}
@@ -3803,7 +4192,7 @@ export default function DetalleOrden() {
         <Text style={styles.fabLabel}>
           Crear aviso
         </Text>
-      </TouchableOpacity>
+      </TouchableOpacity> */}
 
       <ModalesDetalleOrden
         styles={styles}
@@ -4059,6 +4448,31 @@ const styles = StyleSheet.create({
   },
   fabLabel: { color: "#000000ff", fontWeight: "800", fontSize: 13 },
 
+  timerReminder: {
+    marginHorizontal: 16,
+    marginTop: 4,
+    marginBottom: 6,
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    backgroundColor: "#FFF7E8",
+    borderColor: "#F5D69C",
+    borderWidth: 1,
+    borderRadius: 12,
+  },
+  timerReminderTitle: {
+    color: "#794600",
+    fontWeight: "800",
+    fontSize: 13,
+  },
+  timerReminderText: {
+    color: "#835D25",
+    fontSize: 12,
+    lineHeight: 17,
+    marginTop: 2,
+  },
   topActionBar: { paddingHorizontal: 16, paddingTop: 10, paddingBottom: 6 },
   startOrderBtn: {
     alignSelf: "flex-start",

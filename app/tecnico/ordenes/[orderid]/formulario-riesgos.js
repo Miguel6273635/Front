@@ -88,6 +88,20 @@ const TBMKY_JSON_KEY = (orderId) =>
   `tbmky_json_${String(orderId || "").trim()}`;
 const TBMKY_STATUS_KEY = (orderId) =>
   `tbmky_status_${String(orderId || "").trim()}`;
+// Evento por orden: el siguiente detalle debe iniciar un ciclo de cronometro NUEVO.
+const TBMK_TIMER_RESET_KEY = (orderId) =>
+  `orderTimerPendingNewTbmk:${String(orderId || "").trim()}`;
+
+async function marcarNuevoCicloCronometroTbmk(orderId) {
+  const value = String(orderId || "").trim();
+  if (!value) throw new Error("No se pudo identificar la orden del TBMK.");
+  // Se crea solo al guardar correctamente el TBMK, no al entrar al formulario.
+  // No borra datos aqui: el detalle consumira el evento UNA sola vez.
+  const eventId = `${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  await AsyncStorage.setItem(TBMK_TIMER_RESET_KEY(value), eventId);
+  console.log("[TBMKY] Nuevo ciclo de cronometro pendiente:", value);
+}
+
 
 const MAX_AUXILIARES = 5;
 
@@ -1790,6 +1804,20 @@ export default function FormularioRiesgosScreen() {
           return t.nombre || t.cargo || t.nomina;
         });
 
+      // La nomina Z2 puede venir precargada sin nombre. Solo validamos
+      // los auxiliares en los que se capturo nombre o cargo.
+      const auxiliaresIncompletos = trabajadoresFinal.slice(1).filter(
+        (t) => (t.nombre || t.cargo) && (!t.nombre || !t.nomina),
+      );
+
+      if (auxiliaresIncompletos.length > 0) {
+        Alert.alert(
+          "Auxiliares incompletos",
+          "Cada auxiliar capturado debe tener nombre y numero de nomina antes de enviar el TBMK.",
+        );
+        return;
+      }
+
       const payload = {
         orderid: orden?.Orderid || orden?.orderid || orderid,
         fecha,
@@ -1901,6 +1929,7 @@ export default function FormularioRiesgosScreen() {
           orderId: payload.orderid,
           pdfBase64: String(base64Pdf).trim(),
           fileName,
+          trabajadores: payload.trabajadores,
         });
 
         await upsertSapQueueItem({
@@ -1911,6 +1940,10 @@ export default function FormularioRiesgosScreen() {
           payload: tbmkyBulkPayload,
           dedupeKey: `TBMKY_BULK:${payload.orderid}`,
         });
+
+        // El envio offline ya quedo encolado. Al regresar a Detalles,
+        // el cronometro anterior se invalidara sin pedir confirmacion.
+        await marcarNuevoCicloCronometroTbmk(payload.orderid);
 
         try {
           await AsyncStorage.removeItem(DRAFT_KEY);
@@ -1948,6 +1981,7 @@ export default function FormularioRiesgosScreen() {
           orderId: payload.orderid,
           pdfBase64: String(base64Pdf).trim(),
           fileName,
+          trabajadores: payload.trabajadores,
         });
       } catch (sendErr) {
         console.log(
@@ -1973,6 +2007,10 @@ export default function FormularioRiesgosScreen() {
 
         return;
       }
+
+      // SAP ya confirmo el TBMK. La siguiente entrada a Detalles
+      // borrara el cronometro del ciclo anterior automaticamente.
+      await marcarNuevoCicloCronometroTbmk(payload.orderid);
 
       try {
         const newStatus = "0200";
