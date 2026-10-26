@@ -14,7 +14,6 @@ import { useOrdenesTecnico } from "../../../src/context/OrdenesTecnicoContext";
 import { Ionicons } from "@expo/vector-icons";
 import Signature from "react-native-signature-canvas";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import * as Print from "expo-print";
 import * as FileSystem from "expo-file-system/legacy";
 import * as Sharing from "expo-sharing";
 
@@ -26,7 +25,8 @@ import {
 } from "../../../src/offline/ordenesTecnicoLocalPatch";
 import { upsertSapQueueItem, processSapQueue } from "../../../src/offline/sapQueue";
 import { buildMantenimientoHtml } from "../../../src/services/templates/buildMantenimientoHtml";
-import { addPageNumbersToPdfBase64 } from "../../../src/services/pdf/addPageNumbersToPdf";
+import { generarPdfMantenimiento } from "../../../src/services/pdf/generarPdfMantenimiento";
+import { optimizarFirmaMantenimiento } from "../../../src/services/pdf/optimizarFirmaMantenimiento";
 import {
   fetchEquipmentType,
   getEquipmentTypeFromOrder,
@@ -964,7 +964,27 @@ function maskBase64Deep(value) {
 }
 
 function logSapPayload(label, payload, { stripBase64 = false } = {}) {
-  try { console.log(label); if (payload) { console.log(JSON.stringify(stripBase64 ? maskBase64Deep(payload) : payload, null, 2)); } } catch {}
+  try {
+    if (stripBase64 && Array.isArray(payload?.WorkOrderSet)) {
+      // Nunca clonar los PDF en Base64 únicamente para imprimir logs.
+      console.log(label, {
+        BulkId: payload?.BulkId,
+        ordenes: payload.WorkOrderSet.map((item) => ({
+          OrderId: item?.OrderId,
+          estatus: (item?.WorkOrderUserStatusSet || []).map((x) => x.UserStText),
+          archivos: (item?.Attachments || []).map((archivo) => ({
+            FileName: archivo?.FileName,
+            caracteresBase64: typeof archivo?.Base64 === "string" ? archivo.Base64.length : 0,
+          })),
+        })),
+      });
+      return;
+    }
+    console.log(label);
+    if (payload) console.log(JSON.stringify(payload, null, 2));
+  } catch (error) {
+    console.warn("[PENDIENTE_FIRMA] No se pudo registrar el resumen:", error?.message);
+  }
 }
 
 function isValidEmail(email) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || "").trim().toLowerCase()); }
@@ -1046,13 +1066,9 @@ async function sharePdfItem(item) {
   } catch (e) { Alert.alert("Error al compartir", e?.message || "No se pudo compartir el PDF."); }
 }
 
-async function generateMaintenancePdfFile({ html }) {
-  const result = await Print.printToFileAsync({ html: String(html || ""), base64: true });
-  if (!result?.base64) throw new Error("El PDF se generó vacío. Intenta generar nuevamente la orden.");
-  const pdfBase64Final = await addPageNumbersToPdfBase64(result.base64);
-  if (!pdfBase64Final) throw new Error("No se pudo corregir el PDF final.");
-  await FileSystem.writeAsStringAsync(result.uri, pdfBase64Final, { encoding: FileSystem.EncodingType.Base64 });
-  return { uri: result.uri, base64: pdfBase64Final };
+async function generateMaintenancePdfFile({ html, incluirBase64 = false }) {
+  // Una sola generación y numeración, compartida con Detalles de la orden.
+  return generarPdfMantenimiento({ html, incluirBase64 });
 }
 
 export default function PendienteFirmaIndex() {
@@ -1461,10 +1477,12 @@ export default function PendienteFirmaIndex() {
     }, 150);
   };
 
-  const onSignatureOK = (sig) => { 
-      setFirmaDataUrl(sig); 
-      setShowFirmaModal(false); 
-      Alert.alert("Firma capturada", `Lista para ${firmaForOrderIds.length} orden(es).`); 
+  const onSignatureOK = async (sig) => {
+    // Una sola optimización por firma; se reutiliza para todos los PDFs del lote.
+    const firmaLista = await optimizarFirmaMantenimiento(sig);
+    setFirmaDataUrl(firmaLista);
+    setShowFirmaModal(false);
+    Alert.alert("Firma capturada", `Lista para ${firmaForOrderIds.length} orden(es).`);
   };
   
   const onSignatureEmpty = () => { Alert.alert("Firma vacía", "El cliente no firmó."); };
@@ -1536,12 +1554,25 @@ export default function PendienteFirmaIndex() {
     const comentario = String(comentarioCliente || "").trim();
 
     if (!selectedIds.length) return;
-    if (!selectedAllReady) { Alert.alert("Valida primero", "Valida antes de enviar."); return; }
-    if (!email || !isValidEmail(email)) { setShowPreviewModal(true); Alert.alert("Error", "Correo inválido."); return; }
-    if (!nombre) { setShowPreviewModal(true); Alert.alert("Error", "Falta nombre."); return; }
-    if (!cargo) { setShowPreviewModal(true); Alert.alert("Error", "Falta cargo."); return; }
-    if (!comentario) { setShowPreviewModal(true); Alert.alert("Error", "Falta comentario."); return; }
-    if (!firmaDataUrl) { setShowFirmaModal(true); Alert.alert("Error", "Falta firma."); return; }
+    if (!selectedAllReady) {
+      Alert.alert("Valida primero", "Valida antes de enviar.");
+      return;
+    }
+    if (!email || !isValidEmail(email)) {
+      setShowPreviewModal(true);
+      Alert.alert("Error", "Correo inválido.");
+      return;
+    }
+    if (!nombre || !cargo || !comentario) {
+      setShowPreviewModal(true);
+      Alert.alert("Faltan datos", "Captura nombre, cargo y comentario.");
+      return;
+    }
+    if (!firmaDataUrl) {
+      setShowFirmaModal(true);
+      Alert.alert("Falta firma", "Captura la firma del cliente.");
+      return;
+    }
 
     const net = await NetInfo.fetch();
     const online = !!(net?.isConnected && net?.isInternetReachable !== false);
@@ -1549,144 +1580,303 @@ export default function PendienteFirmaIndex() {
 
     Alert.alert(
       "Confirmar envío",
-      online ? `Se enviará a SAP (${selectedIds.length} orden/es).\n\n¿Continuar?` : `No hay internet. Se guardará localmente (${selectedIds.length} orden/es) y se enviará luego.`,
+      online
+        ? `Se enviará a SAP (${selectedIds.length} orden/es).\n\n¿Continuar?`
+        : `No hay internet. Se guardará localmente (${selectedIds.length} orden/es) y se enviará luego.`,
       [
         { text: "Cancelar", style: "cancel" },
         {
-          text: "Sí, enviar", style: "default",
+          text: "Sí, enviar",
+          style: "default",
           onPress: async () => {
-            setSending(true); setSendResults([]);
+            setSending(true);
+            setSendResults([]);
             setSendProgress({ done: 0, total: selectedIds.length, current: "Iniciando..." });
-            const results = []; const toWorkOrders = []; const tempPdfsByOrder = {};
-            
-            try {
-              for (let i = 0; i < selectedIds.length; i++) {
-                const orderId = String(selectedIds[i] || "").trim();
-                setSendProgress((p) => ({ ...p, current: `PDF #${orderId}` }));
-                await new Promise((r) => setTimeout(r, 10));
-                
-                try {
-                  const pending = await getPendingSignForOrder({ apiClient: api, token, orderId });
-                  const ordenFull = await fetchOrdenFullForPdf({ apiClient: api, token, orderId });
-                  const tipo = await resolveEquipmentTypeForPdf({
-                    orderId,
-                    pending,
-                    ordenFull,
-                  });
-                  const tecnicoNombreFinal = String(user?.nombre || user?.name || user?.fullName || user?.displayName || user?.username || "").trim();
 
-                  const html = await buildMantenimientoHtml({
-                    tipo, orden: ordenFull, operaciones: Array.isArray(ordenFull?.operaciones) ? ordenFull.operaciones : [],
-                    checkedMap: pending.checkedMap, signatureData: firmaDataUrl,
-                    clienteEmail: email, clienteNombre: nombre, clienteCargo: cargo, avisoCliente: comentario,
-                    notaTecnico: String(pending?.notaTecnico || "").trim(), tecnicoNombre: tecnicoNombreFinal,
-                    coberturaTipo: String(ordenFull?.cobertura_tipo || ordenFull?.coberturaTipo || "SIN COBERTURA").trim(),
-                    consumibles: Array.isArray(pending?.consumibles) ? pending.consumibles : [],
-                    startMs: pending?.orderStartedAtMs, finishMs: pending?.orderFinishedAtMs,
-                    elapsedMs: pending?.orderElapsedMs ?? Math.max(0, pending?.orderFinishedAtMs - pending?.orderStartedAtMs),
-                  });
+            // Un solo paquete SAP por acción de envío: un BulkId y un POST.
+            // Los PDF se generan secuencialmente en archivos; su Base64
+            // únicamente se incorpora al paquete al terminar la generación.
+            // Esto reduce la memoria retenida durante el renderizado y evita
+            // dividir el envío en varios paquetes que pudieran disparar correos.
+            const results = [];
+            const ordenesDelLote = [];
+            const tempPdfsByOrder = {};
+            const endpoint = "/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderBulkSet";
+            let hayPdfEnviados = false;
+            let hayPdfFallidos = false;
 
-                  const pdfResult = await generateMaintenancePdfFile({ html });
-                  const fileName = buildShortPdfFileName({ tipo, orderId });
-
-                  tempPdfsByOrder[orderId] = { orderId, tempUri: pdfResult.uri, fileName, clienteEmail: email, clienteNombre: nombre, clienteCargo: cargo, comentarioCliente: comentario };
-                  if (!pdfResult.base64) throw new Error("El PDF se generó vacío.");
-
-                  toWorkOrders.push({
-                    OrderId: orderId, WorkOrderHeader: { Orderid: orderId, Email: email },
-                    WorkOrderUserStatusSet: [{ UserStText: "0300", Langu: "ES", Inactive: "" }, { UserStText: "0400", Langu: "ES", Inactive: "X" }],
-                    Attachments: [{ DocId: orderId, FileName: fileName, MimeType: "application/pdf", Base64: pdfResult.base64 }],
-                  });
-                  setSendProgress((p) => ({ ...p, done: p.done + 1, current: `PDF listo #${orderId}` }));
-                } catch (err) {
-                  results.push({ orderId, ok: false, msg: getSapErrorDetail(err, "Fallo armando orden."), fileName: "", uri: "" });
-                  setSendProgress((p) => ({ ...p, done: p.done + 1 }));
-                }
-              }
-
-              if (!toWorkOrders.length) {
-                setSendResults(results);
-                setLastSendSummary(results);
-                setShowSendSummaryModal(true);
-                return;
-              }
-
-              const firstOrderId = String(
-                toWorkOrders?.[0]?.OrderId || selectedIds?.[0] || "SIN_ORDEN"
-              ).trim();
-
+            const procesarLote = async () => {
+              if (!ordenesDelLote.length) return;
+              const lote = ordenesDelLote.splice(0, ordenesDelLote.length);
+              const firstOrderId = String(lote[0]?.OrderId || "SIN_ORDEN").trim();
               const bulkPayload = {
-                BulkId: buildWorkOrderBulkId({
-                  firstOrderId,
-                }),
-                WorkOrderSet: toWorkOrders,
+                BulkId: buildWorkOrderBulkId({ firstOrderId }),
+                WorkOrderSet: lote,
               };
-
-              const workOrderBulkEndpoint =
-                "/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderBulkSet";
+              setSendProgress((p) => ({
+                ...p,
+                current: `Enviando un solo paquete con ${lote.length} orden(es)`,
+              }));
 
               console.log("[PENDIENTE_FIRMA][BULK_ID]", {
                 BulkId: bulkPayload.BulkId,
                 firstOrderId,
                 deviceModel: getDeviceModelForBulkId(),
-                totalOrders: toWorkOrders.length,
+                totalOrders: lote.length,
+              });
+              logSapPayload("[PENDIENTE_FIRMA][BULK_PAYLOAD_FINAL]", bulkPayload, {
+                stripBase64: true,
               });
 
-              logSapPayload(
-                "[PENDIENTE_FIRMA][BULK_PAYLOAD_FINAL]",
-                bulkPayload,
-                { stripBase64: true }
-              );
-
-              if (!online) {
-                await upsertSapQueueItem({ type: "PENDIENTE_FIRMA_BULK_0300", orderId: bulkPayload.BulkId, endpoint: workOrderBulkEndpoint, method: "POST", dedupeKey: `PENDIENTE_FIRMA_BULK_0300:${bulkPayload.BulkId}`, payload: bulkPayload });
-                for (const item of toWorkOrders) {
-                  const orderId = String(item?.OrderId || "").trim();
-                  await setLocalStatusPatch(userEmail, orderId, "0300");
-                  const tempPdf = tempPdfsByOrder[orderId];
-                  let offlinePdfItem = null;
-                  if (tempPdf?.tempUri) { offlinePdfItem = await saveSentSignaturePdf(tempPdf); await FileSystem.deleteAsync(tempPdf.tempUri, { idempotent: true }).catch(() => {}); }
-                  results.push({ orderId, ok: true, msg: "Guardado offline.", fileName: offlinePdfItem?.fileName || tempPdf?.fileName || "", uri: offlinePdfItem?.uri || "" });
+              let loteGuardado = false;
+              let errorLote = "";
+              try {
+                if (online) {
+                  await api.post(endpoint, bulkPayload, {
+                    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+                  });
+                } else {
+                  // La cola extrae el Base64 a archivos antes de persistir.
+                  // No cambiamos su formato ni borramos los documentos pendientes.
+                  await upsertSapQueueItem({
+                    type: "PENDIENTE_FIRMA_BULK_0300",
+                    orderId: bulkPayload.BulkId,
+                    endpoint,
+                    method: "POST",
+                    dedupeKey: `PENDIENTE_FIRMA_BULK_0300:${bulkPayload.BulkId}`,
+                    payload: bulkPayload,
+                  });
                 }
-                await loadSentPdfs();
-              } else {
+                loteGuardado = true;
+              } catch (error) {
+                errorLote = getSapErrorDetail(error, "No se pudo enviar el paquete a SAP.");
+                console.warn("[PENDIENTE_FIRMA] Error al enviar el paquete único:", errorLote);
+              }
+
+              for (const item of lote) {
+                const orderId = String(item?.OrderId || "").trim();
+                const tempPdf = tempPdfsByOrder[orderId];
+                let pdfGuardado = null;
+                let mensajeExtra = "";
                 try {
-                  await api.post(workOrderBulkEndpoint, bulkPayload, { headers: token ? { Authorization: `Bearer ${token}` } : undefined });
-                  for (const item of toWorkOrders) {
-                    const orderId = String(item?.OrderId || "").trim();
-                    const tempPdf = tempPdfsByOrder[orderId];
-                    let sentPdfItem = null;
-                    if (tempPdf?.tempUri) { sentPdfItem = await saveSentSignaturePdf(tempPdf); await FileSystem.deleteAsync(tempPdf.tempUri, { idempotent: true }).catch(() => {}); }
-                    results.push({ orderId, ok: true, msg: "Enviado a SAP.", fileName: sentPdfItem?.fileName || tempPdf?.fileName || "", uri: sentPdfItem?.uri || "" });
+                  if (loteGuardado && !online) {
+                    // Solo después de persistir correctamente la cola.
+                    await setLocalStatusPatch(userEmail, orderId, "0300");
                   }
-                  await loadSentPdfs();
-                } catch (sendErr) {
-                  const msg = getSapErrorDetail(sendErr, "No se pudo enviar el paquete a SAP.");
-                  for (const item of toWorkOrders) {
-                    const orderId = String(item?.OrderId || "").trim();
-                    const tempPdf = tempPdfsByOrder[orderId];
-                    let failedPdfItem = null;
-                    if (tempPdf?.tempUri) { failedPdfItem = await saveFailedSignaturePdf({ ...tempPdf, reason: msg }); await FileSystem.deleteAsync(tempPdf.tempUri, { idempotent: true }).catch(() => {}); }
-                    results.push({ orderId, ok: false, msg: `Error: ${msg}.`, fileName: failedPdfItem?.fileName || tempPdf?.fileName || "", uri: failedPdfItem?.uri || "" });
+                } catch (error) {
+                  console.warn("[PENDIENTE_FIRMA] No se pudo actualizar el estado local:", orderId, error?.message);
+                }
+
+                if (tempPdf?.tempUri) {
+                  try {
+                    if (loteGuardado) {
+                      pdfGuardado = await saveSentSignaturePdf(tempPdf);
+                      hayPdfEnviados = true;
+                    } else {
+                      pdfGuardado = await saveFailedSignaturePdf({
+                        ...tempPdf,
+                        reason: errorLote,
+                      });
+                      hayPdfFallidos = true;
+                    }
+                    // No borrar el temporal si falló guardar su copia local.
+                    await FileSystem.deleteAsync(tempPdf.tempUri, {
+                      idempotent: true,
+                    }).catch(() => {});
+                  } catch (error) {
+                    mensajeExtra = " El PDF local no pudo archivarse; verifica su respaldo.";
+                    console.warn("[PENDIENTE_FIRMA] Error guardando PDF:", orderId, error?.message);
                   }
-                  await loadFailedPdfs();
+                }
+
+                results.push({
+                  orderId,
+                  ok: loteGuardado,
+                  msg: loteGuardado
+                    ? online ? `Enviado a SAP.${mensajeExtra}` : `Guardado offline.${mensajeExtra}`
+                    : `Error: ${errorLote}.${mensajeExtra}`,
+                  fileName: pdfGuardado?.fileName || tempPdf?.fileName || "",
+                  uri: pdfGuardado?.uri || tempPdf?.tempUri || "",
+                });
+                delete tempPdfsByOrder[orderId];
+              }
+              // Al terminar el único paquete, se liberan las referencias
+              // a los Base64 grandes del arreglo temporal de órdenes.
+            };
+
+            try {
+              for (let i = 0; i < selectedIds.length; i++) {
+                const orderId = String(selectedIds[i] || "").trim();
+                setSendProgress((p) => ({ ...p, current: `PDF #${orderId}` }));
+                await new Promise((resolve) => setTimeout(resolve, 10));
+
+                try {
+                  const pending = await getPendingSignForOrder({ apiClient: api, token, orderId });
+                  const ordenFull = await fetchOrdenFullForPdf({ apiClient: api, token, orderId });
+                  const tipo = await resolveEquipmentTypeForPdf({ orderId, pending, ordenFull });
+                  const tecnicoNombreFinal = String(
+                    user?.nombre || user?.name || user?.fullName ||
+                    user?.displayName || user?.username || "",
+                  ).trim();
+
+                  const html = await buildMantenimientoHtml({
+                    tipo,
+                    orden: ordenFull,
+                    operaciones: Array.isArray(ordenFull?.operaciones) ? ordenFull.operaciones : [],
+                    checkedMap: pending.checkedMap,
+                    signatureData: firmaDataUrl,
+                    clienteEmail: email,
+                    clienteNombre: nombre,
+                    clienteCargo: cargo,
+                    avisoCliente: comentario,
+                    notaTecnico: String(pending?.notaTecnico || "").trim(),
+                    tecnicoNombre: tecnicoNombreFinal,
+                    coberturaTipo: String(
+                      ordenFull?.cobertura_tipo || ordenFull?.coberturaTipo || "SIN COBERTURA",
+                    ).trim(),
+                    consumibles: Array.isArray(pending?.consumibles) ? pending.consumibles : [],
+                    startMs: pending?.orderStartedAtMs,
+                    finishMs: pending?.orderFinishedAtMs,
+                    elapsedMs: pending?.orderElapsedMs ?? Math.max(
+                      0, pending?.orderFinishedAtMs - pending?.orderStartedAtMs,
+                    ),
+                  });
+
+                  // No guardamos Base64 de cada PDF mientras generamos los demás.
+                  // El archivo final ya contiene la numeración de páginas.
+                  const pdfResult = await generateMaintenancePdfFile({
+                    html,
+                    incluirBase64: false,
+                  });
+                  if (!pdfResult?.uri) throw new Error("El PDF se generó vacío.");
+                  const fileName = buildShortPdfFileName({ tipo, orderId });
+                  tempPdfsByOrder[orderId] = {
+                    orderId,
+                    tempUri: pdfResult.uri,
+                    fileName,
+                    clienteEmail: email,
+                    clienteNombre: nombre,
+                    clienteCargo: cargo,
+                    comentarioCliente: comentario,
+                  };
+                  ordenesDelLote.push({
+                    OrderId: orderId,
+                    WorkOrderHeader: { Orderid: orderId, Email: email },
+                    WorkOrderUserStatusSet: [
+                      { UserStText: "0300", Langu: "ES", Inactive: "" },
+                      { UserStText: "0400", Langu: "ES", Inactive: "X" },
+                    ],
+                    Attachments: [{
+                      DocId: orderId,
+                      FileName: fileName,
+                      MimeType: "application/pdf",
+                      // Se completa una sola vez, justo antes del único POST.
+                      Base64: "",
+                    }],
+                  });
+                  setSendProgress((p) => ({ ...p, done: p.done + 1, current: `PDF listo #${orderId}` }));
+
+                } catch (error) {
+                  results.push({
+                    orderId,
+                    ok: false,
+                    msg: getSapErrorDetail(error, "Fallo armando orden."),
+                    fileName: "",
+                    uri: "",
+                  });
+                  setSendProgress((p) => ({ ...p, done: p.done + 1 }));
                 }
               }
+
+              // Al terminar la generación secuencial, leemos de disco el PDF
+              // de cada orden para crear UN SOLO WorkOrderBulkSet. SAP requiere
+              // Base64 dentro del JSON; por eso la suma de archivos estará en
+              // memoria durante el POST, pero no durante el renderizado previo.
+              const ordenesPreparadas = [];
+              for (const item of ordenesDelLote) {
+                const orderId = String(item?.OrderId || "").trim();
+                const tempPdf = tempPdfsByOrder[orderId];
+                try {
+                  if (!tempPdf?.tempUri) {
+                    throw new Error("No se encontró el PDF local de la orden.");
+                  }
+                  const info = await FileSystem.getInfoAsync(tempPdf.tempUri);
+                  if (!info.exists) {
+                    throw new Error("El archivo PDF de la orden ya no existe.");
+                  }
+                  const base64 = await FileSystem.readAsStringAsync(tempPdf.tempUri, {
+                    encoding: FileSystem.EncodingType.Base64,
+                  });
+                  if (!base64 || base64.length < 200) {
+                    throw new Error("El PDF está vacío o no pudo leerse.");
+                  }
+                  item.Attachments[0].Base64 = base64;
+                  ordenesPreparadas.push(item);
+                } catch (error) {
+                  const motivo = getSapErrorDetail(error, "No se pudo preparar el PDF para SAP.");
+                  let pdfGuardado = null;
+                  if (tempPdf?.tempUri) {
+                    try {
+                      pdfGuardado = await saveFailedSignaturePdf({
+                        ...tempPdf,
+                        reason: motivo,
+                      });
+                      hayPdfFallidos = true;
+                      await FileSystem.deleteAsync(tempPdf.tempUri, {
+                        idempotent: true,
+                      }).catch(() => {});
+                    } catch (errorCopia) {
+                      console.warn("[PENDIENTE_FIRMA] No se pudo respaldar PDF inválido:",
+                        orderId, errorCopia?.message || errorCopia);
+                    }
+                  }
+                  results.push({
+                    orderId,
+                    ok: false,
+                    msg: motivo,
+                    fileName: pdfGuardado?.fileName || tempPdf?.fileName || "",
+                    uri: pdfGuardado?.uri || tempPdf?.tempUri || "",
+                  });
+                  delete tempPdfsByOrder[orderId];
+                }
+              }
+              ordenesDelLote.splice(0, ordenesDelLote.length, ...ordenesPreparadas);
+
+              // Solo se invoca una vez, independientemente de la cantidad
+              // de órdenes que lograron preparar correctamente su PDF.
+              await procesarLote();
+              if (hayPdfEnviados) await loadSentPdfs();
+              if (hayPdfFallidos) await loadFailedPdfs();
 
               setSendResults([...results]);
               const okSet = new Set(results.filter((r) => r.ok).map((r) => String(r.orderId)));
               if (okSet.size) {
-                setAllOrdenes((prev) => (prev || []).filter((it) => !okSet.has(String(it?.Orderid || it?.OrderId || ""))));
-                setSelectedMap((prev) => { const next = { ...prev }; for (const id of okSet) delete next[id]; return next; });
+                setAllOrdenes((prev) => (prev || []).filter(
+                  (it) => !okSet.has(String(it?.Orderid || it?.OrderId || "")),
+                ));
+                setSelectedMap((prev) => {
+                  const next = { ...prev };
+                  for (const id of okSet) delete next[id];
+                  return next;
+                });
               }
               setLastSendSummary([...results]);
               setShowSendSummaryModal(true);
-              if (results.filter((r) => !r.ok).length === 0) { setSelectMode(false); clearSelection(); resetFirmaFields(); }
-            } catch (globalErr) { Alert.alert("Error Global", "Ocurrió un fallo general."); }
-            finally { setSending(false); setSendProgress((p) => ({ ...p, current: "" })); }
+              if (results.every((r) => r.ok)) {
+                setSelectMode(false);
+                clearSelection();
+                resetFirmaFields();
+              }
+            } catch (globalErr) {
+              console.error("[PENDIENTE_FIRMA] Error general:", globalErr?.message || globalErr);
+              Alert.alert("Error Global", "Ocurrió un fallo general; revisa el estado de los envíos antes de reintentar.");
+            } finally {
+              setSending(false);
+              setSendProgress((p) => ({ ...p, current: "" }));
+            }
           },
         },
-      ]
+      ],
     );
   };
 

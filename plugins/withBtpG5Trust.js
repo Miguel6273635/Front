@@ -10,7 +10,7 @@ const CERT_NAME = "digicert_tls_rsa4096_root_g5.pem";
 const NETWORK_XML = `<?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
     <domain-config cleartextTrafficPermitted="false">
-        <domain includeSubdomains="false">my-node-api-qas-01.cfapps.us10-001.hana.ondemand.com</domain>
+        <domain includeSubdomains="false">my-node-api-pro-01.cfapps.us10-001.hana.ondemand.com</domain>
         <trust-anchors>
             <certificates src="system" />
             <certificates src="@raw/digicert_tls_rsa4096_root_g5" />

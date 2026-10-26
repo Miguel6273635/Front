@@ -19,7 +19,8 @@ import Header from "../../../../src/components/Header";
 import api from "../../../../src/services/api";
 import { useAuth } from "../../../../src/context/AuthContext";
 import { useOrdenesTecnico } from "../../../../src/context/OrdenesTecnicoContext";
-import { addPageNumbersToPdfBase64 } from "../../../../src/services/pdf/addPageNumbersToPdf";
+import { generarPdfMantenimiento } from "../../../../src/services/pdf/generarPdfMantenimiento";
+import { optimizarFirmaMantenimiento } from "../../../../src/services/pdf/optimizarFirmaMantenimiento";
 import { useLocalSearchParams, router, useFocusEffect } from "expo-router";
 
 import {
@@ -45,7 +46,6 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 
 import * as FileSystem from "expo-file-system/legacy";
 import * as Sharing from "expo-sharing";
-import * as Print from "expo-print";
 
 // ✅ HTML/PDF mantenimiento (plantillas + operaciones)
 import { buildMantenimientoHtml } from "../../../../src/services/templates/buildMantenimientoHtml";
@@ -945,10 +945,22 @@ function logSapPayload(label, payload, { stripBase64 = false } = {}) {
       return;
     }
 
+    if (stripBase64 && Array.isArray(payload?.WorkOrderSet)) {
+      console.log(label, {
+        BulkId: payload.BulkId,
+        ordenes: payload.WorkOrderSet.map((item) => ({
+          OrderId: item?.OrderId,
+          estatus: (item?.WorkOrderUserStatusSet || []).map((x) => x?.UserStText),
+          archivos: (item?.Attachments || []).map((a) => ({
+            FileName: a?.FileName,
+            caracteresBase64: typeof a?.Base64 === "string" ? a.Base64.length : 0,
+          })),
+        })),
+      });
+      return;
+    }
     console.log(label);
-    console.log(
-      JSON.stringify(stripBase64 ? maskBase64Deep(payload) : payload, null, 2),
-    );
+    console.log(JSON.stringify(stripBase64 ? maskBase64Deep(payload) : payload, null, 2));
   } catch {
     console.log(label, payload);
   }
@@ -3218,7 +3230,7 @@ export default function DetalleOrden() {
         orden,
         operaciones: opsForPdf,
         checkedMap: checkedMapForPdf,
-        signatureData,
+        signatureData: await optimizarFirmaMantenimiento(signatureData),
         clienteEmail: String(clienteEmail || "").trim(),
         clienteNombre: String(clienteNombre || "").trim(),
         clienteCargo: String(clienteCargo || "").trim(),
@@ -3242,17 +3254,8 @@ export default function DetalleOrden() {
       const htmlPreview = hacerPreviewConColumnasManuales(html);
       setMantHtmlPreview(htmlPreview);
 
-      const result = await Print.printToFileAsync({
-        html: String(html || ""),
-        base64: true,
-      });
-
-      const pdfBase64ConPaginas = await addPageNumbersToPdfBase64(result.base64);
-
-      await FileSystem.writeAsStringAsync(result.uri, pdfBase64ConPaginas, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
-
+      // Vista previa: conservar solo el archivo. No mantener Base64 en React.
+      const result = await generarPdfMantenimiento({ html });
       setMantPdfUri(result.uri);
     } catch (error) {
       console.log("[PDF PREVIEW] Error:", error);
@@ -3518,7 +3521,7 @@ export default function DetalleOrden() {
         orden,
         operaciones: opsForPdf,
         checkedMap: checkedMapForPdf,
-        signatureData,
+        signatureData: await optimizarFirmaMantenimiento(signatureData),
         clienteEmail: email,
         clienteNombre: String(clienteNombre || "").trim(),
         clienteCargo: String(clienteCargo || "").trim(),
@@ -3542,26 +3545,14 @@ export default function DetalleOrden() {
       const htmlPreview = hacerPreviewConColumnasManuales(html);
       setMantHtmlPreview(htmlPreview);
 
-      let pdfBase64 = "";
       let pdfUri = null;
-
       try {
-        const result = await Print.printToFileAsync({
-        html: String(html || ""),
-        base64: true,
-      });
-
-      const pdfBase64ConPaginas = await addPageNumbersToPdfBase64(result.base64);
-
-      await FileSystem.writeAsStringAsync(result.uri, pdfBase64ConPaginas, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
-
-      pdfUri = result.uri;
-      pdfBase64 = pdfBase64ConPaginas;
-      setMantPdfUri(result.uri);
+        // No guardar Base64 en pendingFinalize mientras el cliente revisa el PDF.
+        const result = await generarPdfMantenimiento({ html });
+        pdfUri = result.uri;
+        setMantPdfUri(pdfUri);
       } catch (e) {
-        console.warn("No se pudo generar PDF (base64):", e?.message || e);
+        console.warn("No se pudo generar PDF de mantenimiento:", e?.message || e);
         setMantPdfUri(null);
       }
 
@@ -3577,7 +3568,7 @@ export default function DetalleOrden() {
             DocId: orderId,
             FileName: fileName,
             MimeType: "pdf",
-            Base64: pdfBase64 || "",
+            Base64: "", // se llena desde pdfUri únicamente al confirmar envío
           },
         ],
       };
@@ -3587,6 +3578,7 @@ export default function DetalleOrden() {
         finishMs,
         selectedIds,
         change0300WithPdfPayload,
+        pdfUri,
         confirmationPayload,
         confirmationsAlreadyHandled:
           isPending0400Now || !!pendingDraft?.confirmationsSent,
@@ -3647,6 +3639,7 @@ export default function DetalleOrden() {
       finishMs,
       selectedIds,
       change0300WithPdfPayload,
+      pdfUri,
       confirmationPayload,
       confirmationsAlreadyHandled,
     } = pendingFinalize;
@@ -3654,9 +3647,34 @@ export default function DetalleOrden() {
     const workOrderBulkEndpoint =
       "/api/odata/ZCS_CHANGE_WORKORDER_SRV/WorkOrderBulkSet";
 
+    // Leer el PDF únicamente cuando el técnico confirma la finalización.
+    // Si el archivo no existe, NO cambiar SAP ni perder el respaldo local.
+    let pdfBase64;
+    try {
+      if (!pdfUri) throw new Error("No hay archivo PDF preparado.");
+      const info = await FileSystem.getInfoAsync(pdfUri);
+      if (!info.exists) throw new Error("El archivo PDF ya no existe.");
+      pdfBase64 = await FileSystem.readAsStringAsync(pdfUri, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+      if (!pdfBase64 || pdfBase64.length < 200) {
+        throw new Error("El archivo PDF está vacío.");
+      }
+    } catch (error) {
+      Alert.alert("No se pudo leer el PDF", error?.message || "Intenta generar el documento nuevamente.");
+      return;
+    }
+
+    const change0300PayloadConPdf = {
+      ...change0300WithPdfPayload,
+      Attachments: (change0300WithPdfPayload.Attachments || []).map((archivo, indice) =>
+        indice === 0 ? { ...archivo, Base64: pdfBase64 } : archivo,
+      ),
+    };
+
     const change0300BulkPayload = buildSingleWorkOrderBulkPayload({
       orderId,
-      workOrderPayload: change0300WithPdfPayload,
+      workOrderPayload: change0300PayloadConPdf,
     });
 
     console.log("[DETALLE_ORDEN][BULK_ID]", {
@@ -3696,7 +3714,7 @@ export default function DetalleOrden() {
       );
       console.log("CONFIRMATIONS alreadySent:", alreadySentConfirmations);
 
-      if (!change0300WithPdfPayload?.Attachments?.[0]?.Base64) {
+      if (!change0300PayloadConPdf?.Attachments?.[0]?.Base64) {
         Alert.alert(
           "No se pudo generar el PDF",
           "No se pudo generar el PDF en este dispositivo. Intenta de nuevo o revisa permisos/almacenamiento.",

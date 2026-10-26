@@ -23,21 +23,33 @@ function buildWorkOrderRepSet(trabajadores = []) {
 export function buildTbmkyBulkPayload({
   orderId,
   pdfBase64,
+  pdfLocalRef = null,
   fileName,
   trabajadores = [],
 }) {
   const cleanOrderId = String(orderId || "").trim();
-  const cleanBase64 = String(pdfBase64 || "")
-    .replace(/^data:application\/pdf;base64,/, "")
-    .replace(/\s/g, "")
-    .trim();
+  // Online: cadena Base64. Offline: marcador de archivo que sapQueue.js
+  // convertira a Base64 UNICAMENTE al sincronizar.
+  const isOfflineFile =
+    pdfLocalRef?.__sapQueueLocalFileV1 === true &&
+    typeof pdfLocalRef?.uri === "string" &&
+    pdfLocalRef.uri.startsWith("file://");
+
+  const originalBase64 = typeof pdfBase64 === "string" ? pdfBase64 : "";
+  const noPrefix = originalBase64.startsWith("data:application/pdf;base64,")
+    ? originalBase64.slice("data:application/pdf;base64,".length)
+    : originalBase64;
+  // Evitar crear otra copia de la cadena si no hay espacios que limpiar.
+  const cleanBase64 = /\s/.test(noPrefix)
+    ? noPrefix.replace(/\s/g, "")
+    : noPrefix;
   const cleanFileName = String(
     fileName || `TBMKY_${cleanOrderId}.pdf`,
   ).trim();
 
   if (!cleanOrderId) throw new Error("subirPdfOrden: falta orderId");
-  if (!cleanBase64 || cleanBase64.length < 200) {
-    throw new Error("subirPdfOrden: pdfBase64 vacío o muy corto");
+  if (!isOfflineFile && (!cleanBase64 || cleanBase64.length < 200)) {
+    throw new Error("subirPdfOrden: PDF Base64 vacio o muy corto");
   }
 
   return {
@@ -57,7 +69,7 @@ export function buildTbmkyBulkPayload({
             DocId: cleanOrderId,
             FileName: cleanFileName,
             MimeType: "application/pdf",
-            Base64: cleanBase64,
+            Base64: isOfflineFile ? pdfLocalRef : cleanBase64,
           },
         ],
         Return: [],
@@ -68,31 +80,29 @@ export function buildTbmkyBulkPayload({
 }
 
 
+// Solo metadatos: NUNCA JSON.stringify del payload entero, ya que el
+// attachment contiene todo el PDF Base64 y una copia eleva el pico de RAM.
 function logBulkPayload(label, payload) {
   try {
-    const payloadParaLog = JSON.parse(
-      JSON.stringify(payload),
-    );
-
-    payloadParaLog.WorkOrderSet?.forEach((order) => {
-      order.Attachments?.forEach((attachment) => {
-        const base64 = String(attachment.Base64 || "");
-
-        attachment.Base64 =
-          `<<BASE64 OMITIDO: ${base64.length} caracteres>>`;
-      });
-    });
-
-    console.log(label);
-    console.log(JSON.stringify(payloadParaLog, null, 2));
+    const ordenes = (payload?.WorkOrderSet || []).map((orden) => ({
+      OrderId: orden?.OrderId,
+      estatus: (orden?.WorkOrderUserStatusSet || [])
+        .map((item) => item.UserStText),
+      cantidadAuxiliares: orden?.WorkOrderRepSet?.length || 0,
+      archivos: (orden?.Attachments || []).map((archivo) => ({
+        FileName: archivo?.FileName,
+        MimeType: archivo?.MimeType,
+        bytesBase64: typeof archivo?.Base64 === "string"
+          ? archivo.Base64.length
+          : null,
+        desdeArchivoLocal: archivo?.Base64?.__sapQueueLocalFileV1 === true,
+      })),
+    }));
+    console.log(label, { BulkId: payload?.BulkId, ordenes });
   } catch (error) {
-    console.log(
-      `${label} No se pudo imprimir el payload:`,
-      error,
-    );
+    console.warn("[TBMKY] No se pudo registrar resumen:", error?.message);
   }
 }
-
 
 export async function subirPdfOrden({
   orderId,
@@ -129,10 +139,11 @@ export async function subirPdfOrden({
       },
     );
 
-    console.log(
-      "[TBMKY][BULK][RESPUESTA SAP]",
-      JSON.stringify(response?.data, null, 2),
-    );
+    console.log("[TBMKY][BULK][RESPUESTA SAP]", {
+      orderId: String(orderId || "").trim(),
+      BulkId: bulkPayload.BulkId,
+      httpStatus: response?.status,
+    });
 
     return {
       ok: true,
@@ -141,17 +152,11 @@ export async function subirPdfOrden({
       sap: response?.data ?? null,
     };
   } catch (error) {
-    console.log(
-      "[TBMKY][BULK][ERROR]",
-      JSON.stringify(
-        error?.response?.data || {
-          message: error?.message,
-          code: error?.code,
-        },
-        null,
-        2,
-      ),
-    );
+    console.warn("[TBMKY][BULK][ERROR]", {
+      message: error?.message,
+      code: error?.code,
+      httpStatus: error?.response?.status,
+    });
 
     throw error;
   }

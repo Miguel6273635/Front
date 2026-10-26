@@ -35,6 +35,7 @@ import { useOrdenesTecnico } from "../../../../src/context/OrdenesTecnicoContext
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
 import * as Print from "expo-print";
+import * as ImageManipulator from "expo-image-manipulator";
 import * as FileSystem from "expo-file-system/legacy";
 import * as Sharing from "expo-sharing";
 import * as IntentLauncher from "expo-intent-launcher";
@@ -102,6 +103,81 @@ async function marcarNuevoCicloCronometroTbmk(orderId) {
   console.log("[TBMKY] Nuevo ciclo de cronometro pendiente:", value);
 }
 
+
+// Optimizacion de la firma: PNG sin perdida de formato/transparencia.
+// Se ejecuta al GUARDAR la firma, no durante la generacion del PDF.
+// Si el dispositivo no admite la conversion o no reduce el peso, se conserva
+// la firma original para no interrumpir el trabajo del tecnico.
+async function optimizarFirmaTecnico(firmaOriginal) {
+  const original = String(firmaOriginal || "").trim();
+  if (!original || original.length < 35000) return original;
+
+  try {
+    const resultado = await ImageManipulator.manipulateAsync(
+      `data:image/png;base64,${original}`,
+      [{ resize: { width: 560 } }],
+      {
+        format: ImageManipulator.SaveFormat.PNG,
+        base64: true,
+        compress: 1,
+      },
+    );
+    const reducido = String(resultado?.base64 || "");
+    if (reducido && reducido.length < original.length) {
+      console.log("[TBMKY][FIRMA] PNG optimizado", {
+        antesKB: Math.round(original.length * 0.75 / 1024),
+        despuesKB: Math.round(reducido.length * 0.75 / 1024),
+      });
+      return reducido;
+    }
+  } catch (error) {
+    console.warn(
+      "[TBMKY][FIRMA] Se conserva PNG original:",
+      error?.message || error,
+    );
+  }
+  return original;
+}
+
+// Compatible con el marcador local que YA soporta src/offline/sapQueue.js.
+// El PDF se copia a un archivo unico para que nunca se sobrescriba mientras
+// haya un envio offline pendiente. La cola elimina esa copia al enviarla.
+const TBMK_QUEUE_FILES_FOLDER = "sap_queue_files/";
+const TBMK_QUEUE_FILE_MARKER = "__sapQueueLocalFileV1";
+
+async function prepararPdfLocalParaCola(uriPdf, orderId) {
+  if (!FileSystem.documentDirectory) {
+    throw new Error("No hay almacenamiento local para encolar el TBMK.");
+  }
+  const infoPdf = await FileSystem.getInfoAsync(uriPdf);
+  if (!infoPdf.exists || (typeof infoPdf.size === "number" && infoPdf.size < 200)) {
+    throw new Error("El archivo PDF del TBMK no existe o esta incompleto.");
+  }
+
+  const carpeta = `${FileSystem.documentDirectory}${TBMK_QUEUE_FILES_FOLDER}`;
+  const infoCarpeta = await FileSystem.getInfoAsync(carpeta);
+  if (!infoCarpeta.exists) {
+    await FileSystem.makeDirectoryAsync(carpeta, { intermediates: true });
+  }
+
+  const orderSafe = String(orderId || "orden")
+    .replace(/[^a-zA-Z0-9_-]/g, "_");
+  const destino = `${carpeta}tbmky_${orderSafe}_${Date.now()}_${Math.random()
+    .toString(16).slice(2)}.pdf`;
+
+  await FileSystem.copyAsync({ from: uriPdf, to: destino });
+  const copiado = await FileSystem.getInfoAsync(destino);
+  if (!copiado.exists || (typeof copiado.size === "number" && copiado.size < 200)) {
+    throw new Error("No se pudo conservar el PDF para sincronizacion offline.");
+  }
+
+  return {
+    [TBMK_QUEUE_FILE_MARKER]: true,
+    uri: destino,
+    dataUrlPrefix: "",
+    createdAt: Date.now(),
+  };
+}
 
 const MAX_AUXILIARES = 5;
 
@@ -1557,41 +1633,47 @@ export default function FormularioRiesgosScreen() {
     return b64;
   };
 
-  const generarPdfLocalYBase64 = async (payload) => {
+  // Genera el PDF sin crear al mismo tiempo otro PDF completo en Base64.
+  // El archivo se lee en Base64 solamente para el envio online a SAP.
+  const generarPdfLocal = async (payload) => {
     const html = buildTbmkyHtml(payload);
-
     const safeFecha = String(payload.fecha || "").replace(/[^0-9-]/g, "");
     const fileName = `TBMKY_${payload.orderid}_${safeFecha}.pdf`;
 
-    const { uri, base64 } = await Print.printToFileAsync({
+    const { uri } = await Print.printToFileAsync({
       html,
-      base64: true,
+      base64: false,
     });
-
-    const dest = `${FileSystem.documentDirectory}${fileName}`;
-
+    const dest = `${FileSystem.documentDirectory || ""}${fileName}`;
     let finalUri = uri;
 
-    try {
-      await FileSystem.copyAsync({
-        from: uri,
-        to: dest,
-      });
-
-      finalUri = dest;
-    } catch {}
-
-    let finalBase64 = base64;
-
-    if (!finalBase64) {
-      finalBase64 = await leerPdfBase64(finalUri);
+    // Copia nativa de archivo (sin transformarlo en un String de JavaScript).
+    // Se mantiene el URI temporal si la copia no se puede completar.
+    if (FileSystem.documentDirectory && uri !== dest) {
+      try {
+        await FileSystem.copyAsync({ from: uri, to: dest });
+        finalUri = dest;
+        // La copia persistente es suficiente: limpiar el temporal.
+        await FileSystem.deleteAsync(uri, { idempotent: true }).catch(() => {});
+      } catch (error) {
+        console.warn(
+          "[TBMKY][PDF] Se conserva archivo temporal:",
+          error?.message || error,
+        );
+      }
     }
 
-    return {
-      uri: finalUri,
-      base64: finalBase64,
-      fileName,
-    };
+    const infoPdf = await FileSystem.getInfoAsync(finalUri);
+    if (!infoPdf.exists || (typeof infoPdf.size === "number" && infoPdf.size < 200)) {
+      throw new Error("No se pudo generar correctamente el PDF del TBMK.");
+    }
+    console.log("[TBMKY][PDF] Archivo generado", {
+      orderId: payload.orderid,
+      sizeKB: typeof infoPdf.size === "number"
+        ? Math.round(infoPdf.size / 1024)
+        : null,
+    });
+    return { uri: finalUri, fileName };
   };
 
   const openPdfModal = () => setShowPdfModal(true);
@@ -1870,18 +1952,9 @@ export default function FormularioRiesgosScreen() {
         order_type: orden?.order_type || orden?.OrderType || "",
       };
 
-      // 1) Generar PDF
-      const {
-        uri: localUri,
-        base64: base64Pdf,
-        fileName,
-      } = await generarPdfLocalYBase64(payload);
-
+      // 1) Crear el PDF como archivo; no retener Base64 durante el render.
+      const { uri: localUri, fileName } = await generarPdfLocal(payload);
       setPdfLocalUri(localUri);
-
-      if (!base64Pdf || String(base64Pdf).trim().length < 200) {
-        throw new Error("Base64 del PDF vacío o demasiado corto.");
-      }
 
       // 2) OFFLINE/ONLINE
       const online = await isOnline();
@@ -1925,9 +1998,15 @@ export default function FormularioRiesgosScreen() {
           console.log("[TBMKY] error patch local offline:", e);
         }
 
+        // La cola ya admite referencias a archivos: no pasamos por Base64
+        // al guardar el PDF. La cola lo leera al sincronizar con SAP.
+        const pdfLocalRef = await prepararPdfLocalParaCola(
+          localUri,
+          payload.orderid,
+        );
         const tbmkyBulkPayload = buildTbmkyBulkPayload({
           orderId: payload.orderid,
-          pdfBase64: String(base64Pdf).trim(),
+          pdfLocalRef,
           fileName,
           trabajadores: payload.trabajadores,
         });
@@ -1977,9 +2056,15 @@ export default function FormularioRiesgosScreen() {
           throw new Error("Token inválido");
         }
 
+        // En online el servicio OData si necesita Base64. Se lee una sola
+        // vez, al momento de enviar; en offline NO se hace esta conversion.
+        const base64Pdf = await leerPdfBase64(localUri);
+        if (!base64Pdf || base64Pdf.length < 200) {
+          throw new Error("No se pudo leer el PDF para enviarlo a SAP.");
+        }
         respSubmit = await subirPdfOrden({
           orderId: payload.orderid,
-          pdfBase64: String(base64Pdf).trim(),
+          pdfBase64: base64Pdf,
           fileName,
           trabajadores: payload.trabajadores,
         });
@@ -3326,9 +3411,11 @@ export default function FormularioRiesgosScreen() {
           <View style={styles.signaturePadWrap}>
             <Signature
               ref={signatureRef}
-              onOK={(val) => {
+              onOK={async (val) => {
                 const cleanB64 = sanitize(toBase64(val));
-                setFirmaTecnico(cleanB64);
+                // Reducir firma PNG grande; conservar original si no conviene.
+                const firmaLista = await optimizarFirmaTecnico(cleanB64);
+                setFirmaTecnico(firmaLista);
                 setModalFirma({ open: false, tipo: null });
               }}
               onEmpty={() => {

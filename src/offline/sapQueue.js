@@ -846,6 +846,7 @@ async function logSapQueueDiagnostics(label) {
             orderId: item?.orderId ?? null,
             tries: item?.tries ?? 0,
             syncState: item?.syncState ?? null,
+            lastError: item?.lastError ?? null,
             approxBytes: item?.approxBytes ?? 0,
             containsInlineBase64:
               !!item?.containsInlineBase64,
@@ -1687,6 +1688,8 @@ export async function getSapQueueDiagnostics() {
         normalizeSyncState(
           item?.syncState,
         ),
+      lastError:
+        safeStr(item?.lastError) || null,
       approxBytes:
         estimateJsonBytes(item),
       containsInlineBase64:
